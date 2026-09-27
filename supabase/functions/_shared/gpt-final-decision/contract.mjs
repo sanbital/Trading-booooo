@@ -164,7 +164,7 @@ export function wireSchema(task,packet=null){
   const cats=risk?categoriesFor(task).filter(k=>['SOFT','HARD'].includes(risk.flags[k]?.level)):categoriesFor(task);
   // ENTRY only: the facts that fail their up-direction now, and whether EV_UNFAVORABLE can be cited.
   const bear=entry?Object.keys(BEARISH).filter(k=>!m||(has(m,k)&&BEARISH[k](m[k])===true)):[];
-  const evSkip=entry&&(!m||bear.length>=1);
+  const evSkip=entry&&(!m||bear.length>=1||packet?.leader20?.version==='LEADER20_DYNAMIC_1');
   const reasonIds=[...cats,...(evSkip?[EV_SKIP]:[]),JUDGMENT];
   // GPT_JUDGMENT may cite any fact present in this snapshot.
   const judgeFacts=citeable(task).filter(k=>!m||has(m,k));
@@ -207,7 +207,9 @@ export function validateDecision(wire,packet){
     }
     if(entry&&x.r===EV_SKIP){
       // Integrity only: every cited fact must actually point down now.
-      ensure(new Set(x.e).size===x.e.length&&x.e.length>=1&&x.e.every(isBear),'FD_EV_SKIP_REQUIRES_BEARISH_FACTS');
+      if(packet?.leader20?.version==='LEADER20_DYNAMIC_1')
+        ensure(new Set(x.e).size===x.e.length&&x.e.length>=1&&x.e.every(k=>citeable(task).includes(k)&&has(m,k)),'FD_EV_DEFER_REQUIRES_OBSERVED_FACTS');
+      else ensure(new Set(x.e).size===x.e.length&&x.e.length>=1&&x.e.every(isBear),'FD_EV_SKIP_REQUIRES_BEARISH_FACTS');
       return {category:EV_SKIP,level:'EV',evidence:x.e.map(cite)};
     }
     const c=CATEGORIES[x.r],flag=risk.flags[x.r];

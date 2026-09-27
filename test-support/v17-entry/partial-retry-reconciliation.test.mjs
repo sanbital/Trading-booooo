@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -80,7 +81,7 @@ function harness(f,{casMiss=false,historyThrows=false}={}){
     N:(x,d=0)=>Number.isFinite(Number(x))?Number(x):d,rec:x=>x&&typeof x==='object'?x:{},classifyFailure:()=>({fatal:false}),
     readOpsPair:async()=>f.pair,verifyExecutionLease:async()=>{},audit:async()=>{},db,
     gw:async cmd=>{commands.push(cmd);if(historyThrows)throw Error('HISTORY_TIMEOUT');return cmd.action==='order_history'?f.orderHistory:cmd.action==='trade_history'?f.trades:f.proof;}};
-  vm.createContext(ctx);vm.runInContext(fn,ctx);return {...ctx,writes,commands};
+  Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);vm.runInContext(fn,ctx);return {...ctx,writes,commands};
 }
 test('adapter resolves only the refused retry, preserves the first FILLED signal and sends no order',async()=>{
   const f=fixture(),h=harness(f),r=await h.settleNeverPlacedPartialRetry(h.db,f.order,f.proof,h.gw);

@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
 // The executor module must EVALUATE, not merely parse.
 //
 // A deploy of a parse-clean, unit-tested executor took production down for three
@@ -52,7 +53,7 @@ function evaluateModule(envVars = {}) {
     // (2026-09-25) the slot cost is computed at load: ENTRY_SLOT_COST_USDT=slotCostUsdt(...)
     ...capacity,
   };
-  vm.createContext(ctx);
+  Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);
   // A top-level `const` is not a property of the vm global, so hand it out explicitly.
   vm.runInContext(body + '\n;this.__nativeStopEnabled=NATIVE_STOP_ENABLED;', ctx,
     { filename: 'index.ts' });

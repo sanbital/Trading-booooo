@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -15,7 +16,7 @@ const make=(stale=false)=>{
   gateway:async c=>{assert.equal(c.action,'p10_quotes');events.push('quote');return [{market:'FORMUSDT',best_bid:96,best_ask:96.1,timing:{received_at_ms:now-(stale?10000:0),requested_at_ms:now-20}}]},
   closePos:async(db,p)=>{events.push('close');assert.ok(p.metadata.exitTelemetry.detectedAtMs);return {closed:true}},
   audit:async()=>{events.push('audit');throw Error('audit unavailable')}};
- Object.assign(ctx,managerBindings);vm.createContext(ctx);vm.runInContext(code+';this.manage=manageLeader;',ctx);
+ Object.assign(ctx,managerBindings);Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);vm.runInContext(code+';this.manage=manageLeader;',ctx);
  return {ctx,events,p:{id:'p',symbol:'FORMUSDT',entry_price:100,original_quantity:1,entry_fee_usdt:.05,
   peak_price:100,hard_stop_price:97.5,entry_at:new Date(now-60000).toISOString(),metadata:{}}};
 };

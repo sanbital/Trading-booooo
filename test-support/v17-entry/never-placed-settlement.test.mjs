@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
 /**
  * An order the gateway never sent must not hold the account forever.
  *
@@ -67,7 +68,7 @@ function harness({ proof, proofThrows = null, fatal = () => ({ fatal: false }) }
     },
     writes, audits, lastCommand: null,
   };
-  vm.createContext(ctx);
+  Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);
   vm.runInContext(FN, ctx);
   return ctx;
 }

@@ -1,4 +1,5 @@
 import {DYNAMIC_VERSION, DYNAMIC_POLICY, HORIZONS, entryCaptureSafety} from './dynamic-flow.mjs';
+import {leaderProperties,validateLeaderDecision} from '../leader20/decision-contract.mjs';
 const obj = properties => ({type:'object',properties,required:Object.keys(properties),additionalProperties:false});
 const prose = {type:'string',minLength:1,maxLength:280};
 const citation = {type:'string',minLength:1,maxLength:160};
@@ -30,7 +31,8 @@ Use multi-axis weakness for entry failure and loss of thesis. A single negative 
 Time elapsed may schedule a review but never supplies an exit reason. Protection can only rise.
 For same-symbol re-entry, use history.new_high_since_prev_exit, price_vs_prev_peak and price_vs_prev_exit together with NEW acceleration,
 volume impulse, buyer participation and OI expansion. Missing history remains unknown. A previous win or higher price alone is not a reason to BUY.
-Use one short clause per prose field, at most twelve words. Cite one path per horizon and at most three paths in other arrays. Return conclusions, not chain-of-thought. Numeric citations are checked against the frozen capture.`;
+Use one short clause per prose field, at most twelve words. Cite one path per horizon and at most three paths in other arrays. Return conclusions, not chain-of-thought. Numeric citations are checked against the frozen capture.
+`;
 export function dynamicWireProperties(task) {
   const common = {structural_strength:prose,current_propulsion:prose,
     propulsion_direction:{type:'string',enum:['ACCELERATING','STABLE','HEALTHY_PULLBACK','DECELERATING','EXHAUSTED','REVERSING']},
@@ -46,12 +48,13 @@ export function dynamicWireProperties(task) {
 export const dynamicEnabled = packet => packet?.dynamic_policy === DYNAMIC_VERSION;
 export function extendDynamicSchema(schema, task, packet) {
   if (!dynamicEnabled(packet)) return schema;
-  const extra=dynamicWireProperties(task);
+  const extra={...dynamicWireProperties(task),...leaderProperties(packet)};
   const capture=packet.facts?.capture_context;
   const keys=HORIZONS.flatMap(s=>DYNAMIC_EVIDENCE_FIELDS.map(k=>'dynamics.horizons.s'+s+'.'+k))
     .filter(k=>valueAt(capture,k)!==null);
   const menu=paths=>paths.length?{...citations,items:{type:'string',enum:paths}}:{...citations,maxItems:0};
   extra.dynamic_evidence=menu(keys);extra.dynamic_risks=menu(keys);
+  if(extra.counter_evidence)extra.counter_evidence=menu(keys);
   if(extra.why_buy_now){
     for(const s of HORIZONS)extra.why_buy_now.properties.horizons.properties['s'+s].properties.evidence=menu(keys.filter(k=>k.startsWith('dynamics.horizons.s'+s+'.')));
     extra.why_buy_now.properties.flow=menu(keys.filter(k=>/\.(net_taker_flow|buy_share|flow_acceleration)$/.test(k)));
@@ -87,7 +90,8 @@ export function validateDynamicWire(wire,packet) {
     require(!compatible||compatible.includes(wire.dynamic_action),'ACTION_MISMATCH');
     if(capture?.status==='AVAILABLE'&&decision!=='ABSTAIN')require(paths.length>0,'POSITION_EVIDENCE_REQUIRED');
   }
-  return Object.fromEntries(Object.keys(dynamicWireProperties(packet.task)).map(k=>[k,wire[k]]));
+  return {...Object.fromEntries(Object.keys(dynamicWireProperties(packet.task)).map(k=>[k,wire[k]])),
+    ...validateLeaderDecision(wire,packet,path=>valueAt(capture,path))};
 }
 
 /** Shorter live output only; historical wire validation retains its original limits. */

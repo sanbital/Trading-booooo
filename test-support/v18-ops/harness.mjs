@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
 import {validCapture} from '../dynamic-fixtures.mjs';
 import * as dynamicFlow from '../../supabase/functions/_shared/gpt-final-decision/dynamic-flow.mjs';
 import * as exitAuthority from '../../supabase/functions/_shared/exit-authority.mjs';
@@ -237,7 +238,7 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
   setTimeout:advanceTimers?(fn,ms)=>{state.now+=Number(ms)||0;return setTimeout(fn,0)}:setTimeout,clearTimeout,
   Deno:{env:{get:k=>k==='V17_NATIVE_STOP'?'true':k==='V23_E1_ENTRY_OVERRIDE'?(e1Enabled?'true':'false'):
     k==='V23_X1_FAST_OBSERVATION'?(x1Enabled?'true':'false'):''}},__gateway:gateway,__db:db};
- vm.createContext(ctx);vm.runInContext(source,ctx);ctx.setLease();
+ Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);vm.runInContext(source,ctx);ctx.setLease();
  // These historical suites exercise execution/reconciliation, not the strategy
  // admission that was introduced later. Model an approved candidate at that boundary;
  // tests/fd1-final-recheck.test.mjs separately runs the real GPT/detector authority.

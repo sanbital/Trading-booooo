@@ -173,6 +173,7 @@ export async function runHoldReview({position,event,timeCandidate,stopStage,exit
         valuation:{basis:'EXECUTABLE_BID',snapshot_at_ms:snapshotAt,quote_at_ms:Number(src.book.T??src.book.E),
           candle_close_at_ms:facts.quality.last_close_at_ms}}});
     packet.dynamic_policy=DYNAMIC_VERSION;packet.dynamic_as_of_ms=snapshotAt;
+    if(f.leader20||position.leader20)packet.leader20=structuredClone(f.leader20??position.leader20);
     packet.position.dynamic_continuity={historical_reference_only:true,
       entry:compactDynamic(position.entryCapture),final_recheck:compactDynamic(position.finalCapture),
       entry_to_current:dynamicDelta(position.entryCapture,facts.capture_context),

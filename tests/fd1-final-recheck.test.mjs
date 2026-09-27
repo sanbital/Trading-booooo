@@ -1,3 +1,6 @@
+import {isLeader20,validEvent,eventExpiry} from '../supabase/functions/_shared/leader20/campaign.mjs';
+import {triggerExpiry} from '../supabase/functions/_shared/gpt-final-review/contract.mjs';
+import * as leader20LegacyBindings from '../test-support/leader20-legacy-bindings.mjs';
 import {dispatchDynamicSafety,DYNAMIC_VERSION} from '../supabase/functions/_shared/gpt-final-decision/dynamic-flow.mjs';
 import {dynamicMarketFixture,validCapture} from '../test-support/dynamic-fixtures.mjs';
 import {finalFields} from '../test-support/arbitration-fixtures.mjs';
@@ -27,7 +30,7 @@ const MIN=60000,MODEL='gpt-5.4-mini-2026-03-17';
 const ENFORCE={mode:'ENFORCE',modeValid:true,approvalRef:'t',apiBudgetUsd:3,maxCalls:300,enforceApproved:true,source:'TEST'};
 const BOOK={bids:[[1.199,2000],[1.198,2000]],asks:[[1.2,2000],[1.201,2000]]};
 const raw=(input,w)=>new Response(JSON.stringify({model:MODEL,status:'completed',usage:{input_tokens:3000,output_tokens:80,input_tokens_details:{cached_tokens:0}},
-  output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({c:input.candidate_id,...w,...(input.independent_reviews?{arbitration:finalFields(input)}:{})})}]}]}),{status:200,headers:{'x-request-id':'req'}});
+  output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({c:input.candidate_id,...w,...(input.leader20?{action:w.d==='BUY'?'ENTER':'DEFER',pressure_state:'MIXED',decision_reason:'Fresh evidence assessed',counter_evidence:[],thesis_invalidation:'Demand weakens',next_review_conditions:'Fresh flow and book change'}:{}),...(input.independent_reviews?{arbitration:finalFields(input)}:{})})}]}]}),{status:200,headers:{'x-request-id':'req'}});
 const RECHECK_WIRE={BUY:{t:'RECHECK',d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'상승 근거 유지'},
   SKIP:{t:'RECHECK',d:'SKIP',reasons:[{r:'TAPE_SELLING',e:['tape_return','tape_buy_share']}],support:[],n:'매도 우위 전환'},
   ABSTAIN:{t:'RECHECK',d:'ABSTAIN',reasons:[],support:[],n:'판단 불가'},
@@ -65,11 +68,14 @@ function v30Candidate(action,id='sig-'+action){
   return s;
 }
 /** INITIAL decision through the real coordinator + FD1 engine; returns the order-time ticket. */
-async function initialDecision({initial='BUY',final='BUY',action='ADMIT',clock,symbol}={}){
+async function initialDecision({initial='BUY',final='BUY',action='ADMIT',clock,symbol,leader=false}={}){
   let now=T+1500;const w=world({initial,final}),store=new MemoryReviewStore();
   const c=new FinalReviewCoordinator({config:ENFORCE,store,apiKey:()=>'k',now:clock??(()=>now),fetchFn:w.fetchFn,engine:FD1_ENTRY_ENGINE,
-    baseline:baselineAllowedLive,schedule:()=>{}});
-  const db={},s=v30Candidate(action);if(symbol)s.symbol=symbol;setTestCoordinator(db,c);
+    baseline:s=>isLeader20(s)?validEvent(s):baselineAllowedLive(s),expiry:s=>isLeader20(s)?eventExpiry(s):triggerExpiry(s),schedule:()=>{}});
+  const db=leader?{from:()=>({select(){return this;},eq(){return this;},async maybeSingle(){return {data:{active_strategy:'LEADER20_DYNAMIC_1'}};}}),rpc:async()=>({data:{allowed:true}})}:{},s=v30Candidate(action);if(symbol)s.symbol=symbol;
+  if(leader){s.features.rank=20;s.features.leader20={version:'LEADER20_DYNAMIC_1',symbol:s.symbol,epoch_id:'epoch',event_id:'event',generation:1,requested_at_ms:T,expires_at_ms:T+120000};
+    for(const k of ['v17Setup','b06133','v30Front','cec0040'])delete s.features[k];}
+  setTestCoordinator(db,c);
   await gptFilterExecutable(db,[s]);await Promise.all([...c.pending.values()]);await gptFilterExecutable(db,[s]);
   const check=gptFinalCheck(db,s),log=[];
   setRecheckTestHooks({capture:async(_s,at)=>validCapture(at),store,config:ENFORCE,apiKey:'k',fetchFn:w.fetchFn,log,schedule:()=>{},
@@ -273,7 +279,7 @@ async function retryLifecycle({fills=[375],final='BUY',changed=false,expired=fal
     },
     protectNewLeaderPosition:async()=>{events.push('protect');return {status:protection,finishedAt:now};},
   };
-  vm.createContext(c);
+  Object.assign(c,leader20LegacyBindings);vm.createContext(c);
   // The real per-attempt evidence builder (pure) runs inside the same context.
   vm.runInContext(source.slice(source.indexOf('function iocAttemptEvidence('),source.indexOf('function retryE1Evidence(')),c);
   const result=await vm.runInContext('(async function(){'+body+ ')()',c);
@@ -351,7 +357,7 @@ test('durable intent latency cannot bypass the last authority check; a third IOC
     update:row=>({eq:async()=>{writes.push(row);return {};}})})};
   const ctx={IOC_RETRY_POLICY,LEV:3,REVISION:'test',PATCH:'test',cid:()=> 'id',Date,
     verifyExecutionLease:async()=>events.push('lease'),classifyFailure:()=>({fatal:false})};
-  vm.createContext(ctx);vm.runInContext(dispatch+'\nthis.dispatch=dispatchEntryIocAttempt;',ctx);
+  Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);vm.runInContext(dispatch+'\nthis.dispatch=dispatchEntryIocAttempt;',ctx);
   const gw=async()=>{events.push('venue');throw Error('MUST_NOT_SEND');};
   const result=await ctx.dispatch(db,{id:'s',symbol:'LTCUSDT'},gw,{attemptNo:2,quantity:1,limitPrice:1,step:1,payload:{},
     authorize:()=>{events.push('authority');return {allowed:false,reason:'IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID'};}});
@@ -404,4 +410,19 @@ test('FINAL RECHECK categories are unchanged; the prompt explains INITIAL_ANSWER
   assert.equal(RECHECK_POLICY.maxRechecksPerCandidate,2);assert.equal(RECHECK_POLICY.answerMaxAgeMs,8000);
   const d=detectChange({facts:{},executionRef:{mid:1.2},snapshotAt:T},{at:T+5000,mid:1.2,tape:null},RECHECK_POLICY,{force:['INITIAL_ANSWER_AGED','NOT_A_REASON']});
   assert.ok(d.reasons.includes('INITIAL_ANSWER_AGED')&&!d.reasons.includes('NOT_A_REASON'),'only the aged reason can be forced');
+});
+
+for(const final of ['BUY','SKIP'])test(`Leader20 without any legacy model reaches real ENTRY and fresh FINAL RECHECK ${final}`,async()=>{
+  const x=await initialDecision({leader:true,final});
+  assert.equal(x.check.allowed,true,JSON.stringify(x.check));
+  assert.equal(x.ticket.initial.leader20.version,'LEADER20_DYNAMIC_1');
+  x.setNow(T+12000);
+  const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+11900),now:()=>T+12000});
+  assert.equal(r.record.recheck_triggered,true);
+  assert.ok(r.record.recheck_reasons.includes('LEADER20_FINAL_RECHECK'));
+  assert.equal(r.proceed,final==='BUY',JSON.stringify(r.record.final));
+  assert.equal(r.record.final.answer.action,final==='BUY'?'ENTER':'DEFER');
+  const input=r.record.final.arbitration.final_input;
+  assert.equal(input.current.capture_context.trajectory.length,24);
+  assert.equal(r.record.final.arbitration.trajectory_hash,r.record.final.arbitration.capture_trajectory_hash);
 });

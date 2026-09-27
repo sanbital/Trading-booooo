@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../test-support/leader20-legacy-bindings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -37,7 +38,7 @@ function harness(original,{old=false,fail=null}={}){
  const ctx={...b,...c,...front,...lifecycle,console,Date:class extends Date{static now(){return at}},Number,String,Error,
   rec:x=>x??{},REVISION:'test',PATCH:'test',verifyExecutionLease:async()=>{},audit:async(...x)=>audits.push(x),
   fetchB06133Inputs:old?async symbol=>{assert.equal(symbol,'WUSDT');throw Error('B06133_MARKET_INPUT')}:((s,t)=>b.fetchB06133Inputs(s,t,fetchFn))};
- vm.createContext(ctx);
+ Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);
  vm.runInContext(source.slice(source.indexOf('async function noteEntryLifecycle('),source.indexOf('/**\n * Terminal accounting')),ctx);
  vm.runInContext(source.slice(source.indexOf('async function applyB06133Selection('),source.indexOf('async function registerCec0040Target(')),ctx);
  return {row,ctx,db,requests,audits};

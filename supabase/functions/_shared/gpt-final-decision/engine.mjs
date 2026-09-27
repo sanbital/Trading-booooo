@@ -1,3 +1,4 @@
+import {LEADER20_PROMPT} from '../leader20/decision-contract.mjs';
 /** FD1 ENTRY engine for the durable FinalReviewCoordinator (journal, budget ledger,
  * async request, ticket, yield). The coordinator's claim/ledger/TTL/ticket machinery is
  * unchanged; this object only replaces WHAT is asked and how the stored answer is
@@ -12,10 +13,12 @@ import {LIVE_CHASE_MODE,chaseContext} from '../leader-live-chase.mjs';
 import {dualEntryDecision,ARBITRATION_PROMPT,DUAL_VERSION,revalidateArbitration} from './dual.mjs';
 import {DYNAMIC_VERSION,entryCaptureSafety} from './dynamic-flow.mjs';
 import {DYNAMIC_PROMPT} from './dynamic-contract.mjs';
+import {isLeader20,leaderIdentity} from '../leader20/campaign.mjs';
 const num=x=>x!==null&&x!==undefined&&Number.isFinite(Number(x))?Number(x):null;
 /** Immutable decision identity: the trigger and the evidence GPT is shown. A LIVE chase
  * trigger also binds its chase classification; an ordinary trigger's identity is unchanged. */
 export function fd1EntryIdentity(s){
+  if(isLeader20(s))return leaderIdentity(s);
   const f=s?.features??{},t=f.v17Setup??{};
   const chase=t.triggerMode===LIVE_CHASE_MODE&&t.chase?JSON.parse(JSON.stringify(t.chase)):null;
   return {signal_id:String(s?.id??''),symbol:String(s?.symbol??'').toUpperCase(),trigger_at_ms:num(t.triggerAt),
@@ -44,7 +47,7 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   timeoutRecovery:true,
   model:MODEL,
   // The binding covers the ENTRY prompt and the dual-AI arbitration addendum.
-  promptText:PROMPTS.ENTRY+'\n['+DUAL_VERSION+']'+ARBITRATION_PROMPT+DYNAMIC_PROMPT,
+  promptText:PROMPTS.ENTRY+'\n['+DUAL_VERSION+']'+ARBITRATION_PROMPT+DYNAMIC_PROMPT+LEADER20_PROMPT,
   schema:wireSchema('ENTRY',{dynamic_policy:DYNAMIC_VERSION}),
   identity:fd1EntryIdentity,
   // Same-symbol trade memory reader (symbol, beforeMs) => closed trades; injected by the
@@ -66,6 +69,7 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
     const ref=src.book?bookReference(src.book,captured):null;
     packet.execution_ref=ref?{bid:ref.bid,ask:ref.ask,mid:ref.mid,at:captured}:null;
     packet.dynamic_policy=DYNAMIC_VERSION;packet.dynamic_as_of_ms=captured;
+    if(identity.leader20)packet.leader20=structuredClone(identity.leader20);
     packet.dynamic_data_state=entryCaptureSafety(facts.capture_context,captured);
     packet.snapshot_hash='';packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
     return {packet,captured};

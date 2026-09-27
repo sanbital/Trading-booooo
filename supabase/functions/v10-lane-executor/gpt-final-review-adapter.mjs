@@ -6,6 +6,9 @@ import {dispatchDynamicSafety,DYNAMIC_VERSION} from '../_shared/gpt-final-decisi
 import {recheckAllows} from '../_shared/gpt-final-decision/recheck.mjs';
 import {resumeReviewTimeouts} from '../_shared/gpt-final-decision/timeout-recovery.mjs';
 import {lifecycleNote,mergeLifecycleNote} from './entry-lifecycle.mjs';
+import {isLeader20,validEvent,eventExpiry} from '../_shared/leader20/campaign.mjs';
+import {requireEntryAuthority} from '../_shared/leader20/runtime.mjs';
+import {triggerExpiry} from '../_shared/gpt-final-review/contract.mjs';
 const contexts=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 /** After lease release, replace only this identity's still-pending lifecycle note.
@@ -47,7 +50,8 @@ export function coordinatorFor(db){
     engine:{...FD1_ENTRY_ENGINE,...(recoverySwitches().agedRecheck?{}:{agedRecheck:false}),history:(symbol,beforeMs)=>readSymbolTrades(db,symbol,beforeMs),
       // FIRST providers run independently; GPT FINAL always reviews both (including unavailable advice).
       deepseekKey:()=>getenv('deepseek api')||null},
-    baseline:baselineAllowedLive,
+    baseline:s=>isLeader20(s)?validEvent(s):baselineAllowedLive(s),
+    expiry:s=>isLeader20(s)?eventExpiry(s):triggerExpiry(s),
     onResolved:(s,review)=>recordAsyncReviewOutcome(db,s,review),
     schedule:promise=>{if(globalThis.EdgeRuntime?.waitUntil)EdgeRuntime.waitUntil(promise);else promise.catch(()=>{});}}));
   return contexts.get(db);
@@ -67,7 +71,12 @@ export async function gptFilterExecutable(db,executable){
     return {candidates:[],reason:'GPT_SHADOW_NO_NEW_ENTRY',reviews:[]};
   }
   const candidates=[],reviews=[];
-  for(const s of executable){const r=await c.consider(s);reviews.push({signalId:s.id,...r});if(r.allowed)candidates.push(s);}
+  for(const s of executable){
+    if(isLeader20(s)){
+      try{await requireEntryAuthority(db,s);}catch(error){reviews.push({signalId:s.id,allowed:false,reason:String(error.message)});continue;}
+    }
+    const r=await c.consider(s);reviews.push({signalId:s.id,...r});if(r.allowed)candidates.push(s);
+  }
   const pending=reviews.some(r=>r.reason==='GPT_REVIEW_PENDING');
   c.yieldArmed=candidates.length===0&&pending;
   return {candidates,reason:pending?'GPT_REVIEW_PENDING':reviews.at(-1)?.reason??'GPT_NO_CANDIDATE',reviews};

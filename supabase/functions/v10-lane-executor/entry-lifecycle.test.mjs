@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../../../test-support/leader20-legacy-bindings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -98,7 +99,7 @@ test('the lifecycle sweep retires only closed triggers and aged-out rows, only N
       return Promise.resolve({error:null}).then(res,rej);}};return b;}};
   const ctx={db,Date,Promise,Error,Number,String,console,...lifecycle,N:(v,d=0)=>Number.isFinite(Number(v))&&v!==null?Number(v):d,
     SIGNAL_MAX:20*MIN,REVISION:'R',STRATEGY:'S',SETUP_STATE:{TRIGGERED:'TRIGGERED'},audit:async(...a)=>{audits.push(a);}};
-  vm.createContext(ctx);vm.runInContext(fn+';this.sweep=sweepEntryLifecycle;',ctx);
+  Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);vm.runInContext(fn+';this.sweep=sweepEntryLifecycle;',ctx);
   const retired=await ctx.sweep(db,now);
   assert.deepEqual(Array.from(retired,r=>r.signalId).sort(),['closed-buy','old-armed','old-legacy','technical']); // main-realm copy of a vm array
   const by=Object.fromEntries(writes.map(w=>[w.id,w]));

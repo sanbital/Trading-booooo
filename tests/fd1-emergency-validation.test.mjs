@@ -47,7 +47,7 @@ async function consume(out,{persisted=false,p=position,at=T,consumed=T+4000,unav
   store.claim=async()=>{throw Error('API_BUDGET_EXHAUSTED');};
   store.get=async()=>({state:'DONE',record:{purpose:'PRODUCTION',identity:{position_id:position.id,generation},...out}});
   const db={from(){orders++;throw Error('Unexpected database/order call');},rpc(){orders++;throw Error('Unexpected order RPC');}};
-  setFd1HoldTestHooks({store,apiKey:unavailable?'':'gpt',deepseekKey:'ds',config,capture:async()=>null,
+  setFd1HoldTestHooks({leader20Control:{active_strategy:'LEGACY'},store,apiKey:unavailable?'':'gpt',deepseekKey:'ds',config,capture:async()=>null,
     now:()=>{clockReads++;assert.equal(reviewCalls,1,'read the consumption clock after provider completion');return consumed;},
     review:async()=>{reviewCalls++;return out;}});
   const meta=persisted?{fd1Hold:{version:FD1_HOLD_POLICY_VERSION,generation,

@@ -1,0 +1,16 @@
+{
+  "baseline_main": "33c9695a56e7866cb8cdb440e0a5e31d47a6520b",
+  "project_ref": "etaajwpernzrcdrifdnw",
+  "expected_versions": {
+    "v10-lane-executor": 130,
+    "v10-lane-signal-generator": 29,
+    "self-evolution-worker": 10
+  },
+  "migration_applied_version": "20260927125415",
+  "release_mode": "DEPLOY_AND_OBSERVE",
+  "activate_strategy": false,
+  "change_budgets": false,
+  "validation_orders": false,
+  "authorization": "User explicitly approved deployment and operational verification on 2026-09-27.",
+  "observer_migration_applied_version": "20260927130630"
+}

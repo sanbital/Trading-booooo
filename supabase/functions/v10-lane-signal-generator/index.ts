@@ -1,6 +1,7 @@
 // @ts-nocheck
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import {scanMarket} from '../_shared/leader-market-v17.mjs';
+import {leaderControl,generateLeader20} from '../_shared/leader20/runtime.mjs';
 import {POLICY,STRATEGY,entryFresh} from '../_shared/leader-momentum-v17.mjs';
 // Existing v11 tables/token/cron remain compatible. BULL is a storage lane only;
 // all trading decisions for features.strategy=STRATEGY are regime-independent.
@@ -8,7 +9,14 @@ const REVISION='V11-LONG-REGIME-1.0.1';
 const PATCH='V17-LEADER-PRODUCTION-INTEGRATION-1';
 const reply=(s,b)=>new Response(JSON.stringify(b),{status:s,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 function equal(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0;}
-export async function generate(db,{diagnostic=false,scan=scanMarket,now=Date.now}={}){
+export async function generate(db,{diagnostic=false,leader20Only=false,scan=scanMarket,now=Date.now}={}){
+  const leader20=await leaderControl(db);
+  if(leader20.observation_enabled){
+    const observed=await generateLeader20(db,leader20,{diagnostic,now});
+    if(diagnostic||leader20Only||leader20.active_strategy!=='LEGACY')return observed;
+  }
+  if(leader20Only)return {ok:true,inserted:0,skipped:'LEADER20_OBSERVATION_DISABLED'};
+  if(leader20.active_strategy!=='LEGACY')return {ok:true,inserted:0,skipped:'STRATEGY_PAUSED'};
   const result=await scan({now:now()});
   if(diagnostic)return {ok:true,diagnostic:true,patch:PATCH,strategy:STRATEGY,...result};
   const stamp=new Date(now()).toISOString();
@@ -70,7 +78,7 @@ Deno.serve(async req=>{
   if(token.error||!supplied||!expected||!equal(supplied,expected))return reply(401,{ok:false,error:'UNAUTHORIZED'});
   let body;try{body=await req.json();}catch{return reply(400,{ok:false,error:'INVALID_JSON'});}
   const mode=String(body?.mode||'run').toLowerCase();
-  if(!['run','preflight','diagnostic'].includes(mode))return reply(400,{ok:false,error:'INVALID_MODE'});
-  try{return reply(200,await generate(db,{diagnostic:mode!=='run'}));}
+  if(!['run','preflight','diagnostic','leader20-observe'].includes(mode))return reply(400,{ok:false,error:'INVALID_MODE'});
+  try{return reply(200,await generate(db,{diagnostic:['preflight','diagnostic'].includes(mode),leader20Only:mode==='leader20-observe'}));}
   catch(e){return reply(503,{ok:false,patch:PATCH,error:e instanceof Error?e.message:String(e)});}
 });

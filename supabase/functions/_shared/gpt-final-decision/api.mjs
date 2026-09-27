@@ -1,3 +1,4 @@
+import {LEADER20_PROMPT,leaderDecision} from '../leader20/decision-contract.mjs';
 /** FD1 packet construction and the single OpenAI request. No exchange client, no DB. */
 import {FACT_DEFS,FACTS_VERSION} from './facts.mjs';
 import {FD_VERSION,DATA_MODES,riskFlags,wireSchema,validateDecision} from './contract.mjs';
@@ -37,8 +38,9 @@ export function modelInput(packet){
     // ENTRY: the same facts regrouped into trend strength / current propulsion / fatigue axes.
     ...(packet.task==='ENTRY'?{entry_assessment:entryAssessment(v)}:{}),
     risk_flags:Object.fromEntries(Object.entries(risk.flags).filter(([,x])=>x.level!=='CLEAR').map(([k,x])=>[k,x.level])),
-    model_judgments:packet.model_judgments,...(packet.facts.capture_context?{capture_context:dynamicEnabled(packet)?compactDynamic(packet.facts.capture_context):contextForModel(packet.facts.capture_context)}:{}),...(packet.position?{position:packet.position}:{}),...(packet.chase?{chase:packet.chase}:{}),
-    ...(dynamicEnabled(packet)?{dynamic_policy:packet.dynamic_policy,dynamic_as_of_ms:packet.dynamic_as_of_ms,dynamic_data_state:packet.dynamic_data_state??null}: {})};
+    model_judgments:packet.model_judgments,...(packet.facts.capture_context?{capture_context:dynamicEnabled(packet)?compactDynamic(packet.facts.capture_context,{fullPath:leaderDecision(packet)}):contextForModel(packet.facts.capture_context)}:{}),...(packet.position?{position:packet.position}:{}),...(packet.chase?{chase:packet.chase}:{}),
+    ...(dynamicEnabled(packet)?{dynamic_policy:packet.dynamic_policy,dynamic_as_of_ms:packet.dynamic_as_of_ms,dynamic_data_state:packet.dynamic_data_state??null}: {}),
+    ...(packet.leader20?{leader20:packet.leader20}:{})};
 }
 /** ENTRY now writes its evidence and expected value before the decision, so it gets more room. */
 export const MAX_OUTPUT_TOKENS=Object.freeze({ENTRY:1000,HOLD:600});
@@ -56,7 +58,7 @@ export function compactWireSchema(schema){
 export function payloadFor(packet){
   return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',
     prompt_cache_key:'boo-fd1-'+packet.task.toLowerCase(),reasoning:{effort:'none'},max_output_tokens:dynamicEnabled(packet)?(packet.task==='HOLD'?1000:1800):MAX_OUTPUT_TOKENS[packet.task],
-    input:[{role:'system',content:PROMPTS[packet.task]+(dynamicEnabled(packet)?DYNAMIC_PROMPT:'')},{role:'user',content:JSON.stringify(modelInput(packet))}],
+    input:[{role:'system',content:PROMPTS[packet.task]+(dynamicEnabled(packet)?DYNAMIC_PROMPT:'')+(leaderDecision(packet)?LEADER20_PROMPT:'')},{role:'user',content:JSON.stringify(modelInput(packet))}],
     text:{verbosity:'low',format:{type:'json_schema',name:'fd1_'+packet.task.toLowerCase(),strict:true,schema:dynamicEnabled(packet)?compactWireSchema(boundedDynamicTransportSchema(wireSchema(packet.task,packet))):wireSchema(packet.task,packet)}}};
 }
 export function costOf(raw){
