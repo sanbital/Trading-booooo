@@ -39,7 +39,7 @@ worsening flow acceleration, bid depth collapse, rising ask pressure, OI/price d
 strength, BTC/market falling, persistent lower highs, momentum exhaustion). If the thesis itself is broken, EXIT.
 The separate catastrophic/R5 maximum-loss floor remains HARD and cannot be overridden.
 PROTECT retains existing HARD/native protection; it cannot widen/cancel stops or independently place an order.
-Your valid decision takes precedence. On failure keep approved protection; existing validated DeepSeek emergency HOLD/EXIT may apply, never ENTRY or raises.
+Your valid decision takes precedence. For dynamic-policy reviews GPT FINAL is the only decision authority. On failure keep approved protection and hard safety, and schedule a fresh review; DeepSeek never independently authorizes an action.
 Copy arbitration paths exactly from the schema: initial. or current. prefixes are snapshot-specific; never rename or alias.
 RECHECK facts are nested, e.g. current.current.facts.trend.return_5m; bare metric names are invalid.
 adopted/rejected use only valid DeepSeek citations prefixed initial.; considered is their union (up to twelve keys).
@@ -197,12 +197,12 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   const initial=await frozenReview(packet,{snapshotAtMs:snapshotAtMs??started,inputPayload,policy});
   // Live advisory responses take about 3-4 s; leave at least 2.5 s for refresh + FINAL.
   const fast=reviewTier==='FAST'&&packet.task==='HOLD'&&dynamicEnabled(packet);
-  const firstMs=Math.max(1,Math.min(fast?750:dynamicEnabled(packet)?4000:6000,deadline-now()-2500,Math.floor((deadline-now()-1500)*.65)));
+  const firstMs=Math.max(1,Math.min(fast?1500:dynamicEnabled(packet)?4000:6000,deadline-now()-2500,Math.floor((deadline-now()-1500)*.65)));
   // FIRST is short; retain DeepSeek's existing full-review allowance independently.
-  const advisoryMs=fast?firstMs:Math.max(1,Math.min(6000,deadline-now()-2500,Math.floor((deadline-now()-1500)*.65)));
+  const advisoryMs=Math.max(1,Math.min(fast?2500:6000,deadline-now()-2500,Math.floor((deadline-now()-1500)*.65)));
   const safe=async fn=>{try{return await fn();}catch{return invalid('FD_PROVIDER_ERROR');}};
   const [first0,ds0]=await Promise.all([
-    fast?Promise.resolve(invalid('FAST_REVIEW_FIRST_OMITTED')):safe(()=>gptCall(initial.packet,{apiKey,fetchFn,now,timeoutMs:firstMs,payloadFn:()=>firstPayload(initial),validate:dynamicEnabled(packet)?wire=>validateFirstWire(wire,initial):validate})),
+    safe(()=>gptCall(initial.packet,{apiKey,fetchFn,now,timeoutMs:firstMs,payloadFn:()=>firstPayload(initial),validate:dynamicEnabled(packet)?wire=>validateFirstWire(wire,initial):validate})),
     safe(()=>counterCall(initial,{apiKey:deepseekKey,fetchFn,now,timeoutMs:advisoryMs}))]);
   const first={...first0,snapshot_hash:initial.snapshot_hash};let ds={...ds0};
   if(ds.valid===true){try{

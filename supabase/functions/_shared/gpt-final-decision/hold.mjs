@@ -7,7 +7,7 @@ import {readSources} from './market.mjs';
 import {buildDecisionPacket,callDecision,hash,MODEL} from './api.mjs';
 import {FD_VERSION} from './contract.mjs';
 import {dualEntryDecision,DUAL_VERSION} from './dual.mjs';
-import {DYNAMIC_VERSION,DYNAMIC_POLICY,positionDynamicState} from './dynamic-flow.mjs';
+import {DYNAMIC_VERSION,DYNAMIC_POLICY,positionDynamicState,compactDynamic,dynamicDelta} from './dynamic-flow.mjs';
 import {emergencyDynamicPacket} from './capture-context.mjs';
 export const FD1_HOLD_POLICY_VERSION='FD1_HOLD_EXIT_AUTHORITY_2';
 export const TIME_REASONS=Object.freeze(['V17_MOMENTUM_STALE','V17_MAX_HOLD']);
@@ -166,6 +166,10 @@ export async function runHoldReview({position,event,timeCandidate,stopStage,exit
         valuation:{basis:'EXECUTABLE_BID',snapshot_at_ms:snapshotAt,quote_at_ms:Number(src.book.T??src.book.E),
           candle_close_at_ms:facts.quality.last_close_at_ms}}});
     packet.dynamic_policy=DYNAMIC_VERSION;packet.dynamic_as_of_ms=snapshotAt;
+    packet.position.dynamic_continuity={historical_reference_only:true,
+      entry:compactDynamic(position.entryCapture),final_recheck:compactDynamic(position.finalCapture),
+      entry_to_current:dynamicDelta(position.entryCapture,facts.capture_context),
+      final_to_current:dynamicDelta(position.finalCapture,facts.capture_context)};
     let tracker=positionDynamicState(dynamicState,facts.capture_context,{at:snapshotAt,bid:Number(src.book?.bids?.[0]?.[0]),
       entry:position.entryPrice,generation:position.generation,positionId:position.id,emergency:dynamicState?.emergency_packet});
     if(tracker.status==='DATA_DEGRADED')tracker={...tracker,emergency_packet:await emergencyDynamicPacket(position.symbol,{fetchFn,now})};

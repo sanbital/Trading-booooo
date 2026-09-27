@@ -89,6 +89,7 @@ export function dispatchDynamicSafety({reviewed, latest, at, btc, btcRequired = 
 export function compactDynamic(c) {
   if (c?.status !== 'AVAILABLE') return c ?? {status: 'UNAVAILABLE', reason: 'MISSING'};
   const p = c.trajectory ?? [], indices = new Set([0, p.length - 1]);
+  for(let i=Math.max(0,p.length-6);i<p.length;i++)indices.add(i);
   const largest = key => p.reduce((best, x, i) => finite(x[key]) && (!finite(p[best]?.[key]) || x[key] > p[best][key]) ? i : best, 0);
   indices.add(largest('aggressive_buy')); indices.add(largest('aggressive_sell'));
   const inflections = [];

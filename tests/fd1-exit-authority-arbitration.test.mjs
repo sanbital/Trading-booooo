@@ -7,7 +7,7 @@ import {validateCapture120,CAPTURE_VERSION} from '../supabase/functions/_shared/
 import {holdStep,initialHoldState} from '../supabase/functions/_shared/gpt-final-decision/hold.mjs';
 import {src} from '../development/gpt-final-decision/tests/fixtures.mjs';
 import {finalFields,advisoryWire} from '../test-support/arbitration-fixtures.mjs';
-const now=Date.now(),end=Math.floor((now-6000)/5000)*5000,positionId='actual-fixture',generation=positionId+':entry';
+const now=Date.now(),end=Math.floor((now-2000)/5000)*5000,positionId='actual-fixture',generation=positionId+':entry';
 const trajectory=Array.from({length:24},(_,i)=>{
  const t=end-(23-i)*5000;
  return {flow_event_ms:t-200,flow_received_at_ms:t-100,bucket_ms:t,start_ms:t-5000,end_ms:t,received_at_ms:t+1000,exchange_event_ms:t-200,book_received_at_ms:t-100,

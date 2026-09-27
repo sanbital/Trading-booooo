@@ -8,6 +8,7 @@ import {DYNAMIC_VERSION,compactDynamic} from '../supabase/functions/_shared/gpt-
 import {dualEntryDecision} from '../supabase/functions/_shared/gpt-final-decision/dual.mjs';
 import {detectChange,buildRecheckPacket,recheckModelInput} from '../supabase/functions/_shared/gpt-final-decision/recheck.mjs';
 import {nextEvent,initialHoldState,holdStep} from '../supabase/functions/_shared/gpt-final-decision/hold.mjs';
+import {prepareStoredReplay} from '../supabase/functions/_shared/gpt-final-decision/stored-replay.mjs';
 const T=1800000000200;
 async function packet(){const p=await buildDecisionPacket({task:'ENTRY',subjectId:'continuity',symbol:'ABCUSDT',dataMode:'LIVE',
  facts:computeFacts({...src(T),captureContext:validCapture(T)},{asOf:T,referenceClose:1})});
@@ -24,6 +25,18 @@ test('all ordered bucket information is represented and latest six are explicitl
  const c=validCapture(T),small=compactDynamic(c);assert.deepEqual(small.latest_six_range,[18,23]);
  for(let i=0;i<24;i++)assert.deepEqual(small.ordered_path[i],small.ordered_path_columns.map(k=>c.trajectory[i][k]));
  assert.equal(c.trajectory.length,24);
+ for(let i=18;i<24;i++)assert.ok(small.critical_segments.some(x=>x.index===i));
+});
+
+test('stored replay keeps the historical clock and missing data, excluding realized outcomes',async()=>{
+ const p=await packet(),record={packet:p,snapshot_at_ms:T,result:{decision:'BUY'},realized_pnl:999};
+ const r=await prepareStoredReplay(record);assert.equal(r.at,T);assert.equal(r.safety.ok,true);
+ assert.equal(r.packet.realized_pnl,undefined);assert.equal(r.packet.result,undefined);
+ p.task='HOLD';p.facts.capture_context={status:'TIMEOUT'};
+ const missing=await prepareStoredReplay(record);
+ assert.equal(missing.packet.dynamic_data_state.status,'DATA_DEGRADED');
+ assert.equal(missing.packet.facts.capture_context.status,'TIMEOUT');
+ assert.equal(missing.packet.dynamic_data_state.emergency_packet.status,'UNAVAILABLE');
 });
 test('dynamic FINAL and DeepSeek share exactly one snapshot; inference aging prevents BUY',async()=>{
  const p=await packet();let at=T,calls=0,refreshes=0,adviceHash;

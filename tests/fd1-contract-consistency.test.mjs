@@ -75,7 +75,7 @@ test('the stated single-model confidence boundary matches the unchanged server g
   if(ok)assert.equal(validate().decision,'BUY');else assert.throws(validate,/SINGLE_MODEL_BUY_UNSUPPORTED/);
  }
 });
-test('actual HOLD orchestration binds refreshed protection flags in FIRST and FINAL snapshots',async()=>{
+test('actual HOLD orchestration binds the same fresh protection flags in FIRST and FINAL snapshots',async()=>{
  const market=src(T);let books=0,calls=0;
  const fetchFn=dynamicMarketFixture(async(url,init)=>{
   const u=new URL(url);
@@ -94,12 +94,12 @@ test('actual HOLD orchestration binds refreshed protection flags in FIRST and FI
  const exitContext={...context,entry_price:1.1,peak:1.3,hard_floor:1,
   soft_trigger:{level:1.201,crossed:false},protection:{approved_soft_stop:1.2,candidate_soft_stop:1.201,approved_crossed:false,candidate_crossed:false}};
  const r=await runHoldReview({position:{id:'test-position',symbol:'ABCUSDT',entryPrice:1.1,peakPrice:1.3,stopPrice:1,entryAt:T-60000,lastHighAt:T-30000},
-  event:'REVIEW',apiKey:'fixture',now:()=>T,fetchFn,exitContext});
- assert.equal(r.result.valid,true,r.result.error);assert.equal(r.result.decision,'HOLD');assert.equal(calls,2);assert.equal(books,2);
+  event:'DYNAMIC_PERIODIC_REVIEW',apiKey:'fixture',now:()=>T,fetchFn,exitContext});
+ assert.equal(r.result.valid,true,r.result.error);assert.equal(r.result.decision,'HOLD');assert.equal(calls,2);assert.equal(books,1);
  const audit=r.result.arbitration;
- for(const [input,crossed] of [[audit.initial_input,true],[audit.final_input,false]]){
+ for(const [input,crossed] of [[audit.initial_input,true],[audit.final_input,true]]){
   const p=input.position.exit_context.protection;assert.equal(p.approved_crossed,crossed);assert.equal(p.candidate_crossed,crossed);
   assert.equal(p.approved_soft_stop,1.2);assert.equal(p.candidate_soft_stop,1.201);
  }
- assert.equal(r.packet.position.exit_context.protection.candidate_crossed,false);
+ assert.equal(r.packet.position.exit_context.protection.candidate_crossed,true);
 });
