@@ -260,7 +260,7 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
      baselineAllowedV30:()=>true,V30_FRONT_LIVE_VERSION:'TEST',entryBranchOf:()=> 'TEST',
      gptFilterExecutable:async(_db,candidates)=>({candidates}),gptFinalCheck:()=>({allowed:true,review:{decision:'BUY',initial:{capture_context:validCapture(state.now)}}}),
      gptBeginExecution:()=>({}),gptConfirmFirstFinality:()=>true,gptConsumeRetry:()=>true,
-     ...dynamicFlow,readCaptureWithRecovery:async()=>validCapture(state.now),finalRecheckStep:async()=>({proceed:true,record:{recheck_triggered:false,initial_context:{capture_context:validCapture(state.now)}}}),withOrderTiming:x=>x,
+     ...dynamicFlow,readCaptureWithRecovery:async()=>validCapture(state.now),markRecheckOutcome:()=>{},finalRecheckStep:async()=>({proceed:true,record:{recheck_triggered:false,final:{capture_context:validCapture(state.now)},initial_context:{capture_context:validCapture(state.now)}}}),withOrderTiming:x=>x,
      fetchE1AggTrades:e1Tape??(async()=>({available:false,reason:'TEST_NO_TAPE'}))});
  }
  return{state,db,ctx,gateway,advance(ms=60000){state.now+=ms;state.tables.trading_account_snapshots[0].captured_at=new Clock().toISOString();}};

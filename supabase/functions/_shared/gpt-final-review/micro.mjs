@@ -61,7 +61,8 @@ export function computeMicro({book,premium,oi,oiHist},asOf){
 }
 /** Four bounded public reads in parallel; a failure only blanks that source. */
 export async function readMicro(symbol,{fetchFn=fetch,now=Date.now,ms=2000,signal}={}){
-  ensure(/^[A-Z0-9]{2,60}USDT$/.test(symbol),'SYMBOL_INVALID');
+  // Canonical uppercase input; absolute end also rejects a trailing newline.
+  ensure(typeof symbol==='string'&&/^[A-Z0-9]{1,60}USDT$(?![\s\S])/.test(symbol),'SYMBOL_INVALID');
   const get=async path=>{
     const requestedAt=now();
     try{

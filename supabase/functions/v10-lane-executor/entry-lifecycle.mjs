@@ -50,7 +50,30 @@ export function lifecycleNote({at,stage,reason,gptDecision=null}){
 }
 /** Only rewrite when the recorded outcome changes (bounded writes per candidate). */
 export function noteChanged(prev,next){
-  return !prev||prev.stage!==next.stage||prev.reason!==next.reason||prev.gptDecision!==next.gptDecision;
+  return !prev||prev.stage!==next.stage||prev.reason!==next.reason||prev.gptDecision!==next.gptDecision||
+    JSON.stringify(prev.technicalFailure??null)!==JSON.stringify(next.technicalFailure??null);
+}
+/** Bounded failure summary, not a market-data snapshot. First evidence and first blocking
+ * cause survive retries, subsequent queue notes and terminalization. Null means unknown. */
+export function mergeLifecycleNote(previous,next){
+  return {...next,...(previous?.technicalFailure&&!next.technicalFailure?{technicalFailure:previous.technicalFailure}:{})};
+}
+export function technicalFailureNote({row,at,stage,error,blocking=true,gptAttempted=false,orderDispatched=false}){
+  const previous=row?.features?.entryLifecycle,setup=row?.features?.v17Setup??{},reason=clip(error?.message??error).slice(0,200);
+  const code=(reason.match(/CEC0040_DECISION:([A-Z0-9_]+)/)?.[1]??reason.split(':')[0]).slice(0,100);
+  const time=x=>Number.isSafeInteger(x)&&x>0?x:null;
+  const triggerAt=time(setup.triggerAt),triggerExpiresAt=time(setup.triggerExpiresAt);
+  const event={signalId:row?.id??null,symbol:row?.symbol??null,stage,code,reason,at:time(at),
+    triggerAt,triggerExpiresAt,remainingMs:triggerExpiresAt!==null&&time(at)!==null?Math.max(0,triggerExpiresAt-at):null,
+    gptAttempted,orderDispatched};
+  const old=previous?.technicalFailure;
+  return {...lifecycleNote({at,stage,reason}),technicalFailure:{
+    first:old?.first??event,latest:event,root:old?.root??(blocking?event:null)}};
+}
+/** Only proven candidate input/identity failures may skip this symbol. Account, lease,
+ * controller identity, storage and unknown failures must reach the existing safe stop. */
+export function isSymbolLocalSelectionError(error){
+  return /^(B06133_MARKET_INPUT|CEC0040_INPUT_INVALID|CEC0040_DECISION:CEC0040_DECISION_(INPUT_INVALID|IDEMPOTENCY_CONFLICT))$/.test(String(error?.message??error));
 }
 /** Terminal reason for a GPT review that can never become an entry for this trigger: a
  * valid SKIP or ABSTAIN, or a failed answer (the coordinator never re-asks one identity).
@@ -70,6 +93,7 @@ export function gptTerminalReason(review){
  * last recorded outcome decides the class; with none, the window simply ran out. */
 export function expiredTriggerReason(note){
   const n=note&&typeof note==='object'?note:null,last=String(n?.reason??'');
+  if(n?.technicalFailure)return 'STALE:TRIGGER_WINDOW_CLOSED';
   if(!last)return 'STALE:TRIGGER_WINDOW_CLOSED';
   const cls=terminalClassOf(last);
   const buy=n?.gptDecision==='BUY'?'GPT_BUY_NOT_EXECUTED:':'';

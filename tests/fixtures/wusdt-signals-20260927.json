@@ -1,0 +1,451 @@
+{
+  "provenance": "Read-only production signals copied 2026-09-27. Terminal rows are never written back. Market candles in tests are synthetic control-flow fixtures, not historical profitability evidence.",
+  "signals": [
+    {
+      "id": "563fe245-cf0d-41c4-895e-e9ce98380641",
+      "lane": "BULL",
+      "side": "LONG",
+      "status": "REJECTED",
+      "symbol": "WUSDT",
+      "features": {
+        "atr": 0.00023007142857142858,
+        "qv24": 8337309.689409001,
+        "rank": 7,
+        "bbPos": 0,
+        "b06133": {
+          "r62": null,
+          "error": "B06133_MARKET_INPUT",
+          "branch": null,
+          "reason": "B06133_MARKET_UNAVAILABLE",
+          "rescue": null,
+          "result": null,
+          "source": {
+            "btc": {
+              "known": false,
+              "return2h": null,
+              "return30m": null,
+              "freshnessMs": null
+            },
+            "btcBars": null,
+            "prebars": null,
+            "decisionAt": 1790478420000,
+            "featureValues": {
+              "return5m": 0.006101595236345014,
+              "return15m": 0.0037632821723732057,
+              "return30m": 0.015907393577296425,
+              "return60m": 0.025403286597316388,
+              "volumeRatio": 1.2846607222576287
+            }
+          },
+          "allowed": false,
+          "version": "B06133_ENTRY_SELECTION_1",
+          "evaluatedAt": 1790478429180
+        },
+        "method": "KST_TOP10_15M_THEN_CLOSED_5M_ACCELERATION",
+        "symbol": "WUSDT",
+        "stopAtr": 1.4871468488047193,
+        "stopPct": 0.025,
+        "dayStart": 1790434800000,
+        "leverage": 3,
+        "maxSlots": 10,
+        "return5m": 0.006101595236345014,
+        "strategy": "LEADER_MOMENTUM_V17",
+        "v17Setup": {
+          "state": "TRIGGERED",
+          "symbol": "WUSDT",
+          "armedAt": 1790478300000,
+          "identity": "V17_GPT_CONTINUATION_ENTRY_2:WUSDT:563fe245-cf0d-41c4-895e-e9ce98380641:1790478300000",
+          "signalId": "563fe245-cf0d-41c4-895e-e9ce98380641",
+          "expiresAt": 1790479200000,
+          "lastClose": 0.013727,
+          "triggerAt": 1790478420000,
+          "pullbackLow": 0.013642,
+          "transitions": [
+            {
+              "at": 1790478300000,
+              "to": "ARMED",
+              "reason": "V17_SETUP_ARMED"
+            },
+            {
+              "at": 1790478367631,
+              "to": "PULLBACK_OBSERVED",
+              "reason": "V17_PULLBACK_CONFIRMED"
+            },
+            {
+              "at": 1790478429043,
+              "to": "TRIGGERED",
+              "reason": "V17_REACCEL_TRIGGERED"
+            }
+          ],
+          "signal5Close": 1790478300000,
+          "triggerClose": 0.013727,
+          "policyVersion": "V17_GPT_CONTINUATION_ENTRY_2",
+          "referencePrice": 0.013686,
+          "terminalReason": null,
+          "pullbackObserved": true,
+          "triggerExpiresAt": 1790478480000,
+          "lastCandleOpenTime": 1790478360000
+        },
+        "v30Front": {
+          "b06133": {
+            "branch": null,
+            "reason": "B06133_MARKET_UNAVAILABLE",
+            "result": null,
+            "allowed": false,
+            "version": "B06133_ENTRY_SELECTION_1"
+          },
+          "failed": [],
+          "factors": {
+            "btcAnyUp": null,
+            "absorption": null,
+            "volumeTails": null,
+            "fresh5over15": null,
+            "fresh15over30": null,
+            "buyerShareRise": null,
+            "recentHourLead": null
+          },
+          "unknown": [
+            "volumeTails"
+          ],
+          "version": "V30_FRONT_SCORE_2_FRESH_EVIDENCE",
+          "admitted": false,
+          "required": {
+            "volumeTails": false
+          },
+          "negativeEvidence": []
+        },
+        "dayReturn": 0.06473074514715105,
+        "rankBasis": "KST_DAY_CLOSED_15M",
+        "return15m": 0.0037632821723732057,
+        "return30m": 0.015907393577296425,
+        "return60m": 0.025403286597316388,
+        "exitPolicy": {
+          "staleMs": 2700000,
+          "stopPct": 0.025,
+          "maxHoldMs": 21600000,
+          "trailArmPct": 0.03,
+          "trailGapPct": 0.015
+        },
+        "signal5Open": 1790478000000,
+        "volumeRatio": 1.2846607222576287,
+        "maxHoldHours": 6,
+        "signal5Close": 1790478300000,
+        "signal15Close": 1790478000000,
+        "marketCoverage": 1,
+        "marketExpected": 525,
+        "referenceClose": 0.013686,
+        "routeAuthority": "LEADER_MOMENTUM_V17",
+        "marketEvaluated": 525,
+        "storageLaneOnly": "BULL",
+        "reference15Close": 0.013603,
+        "targetMarginUsdt": 150,
+        "confirmationReturn15m": 0.002343635564669766,
+        "sizingContractVersion": "V17_SLOT_SIZING_4_MARGIN150",
+        "parametersValidatedByBacktest": false
+      },
+      "revision": "V11-LONG-REGIME-1.0.1",
+      "created_at": "2026-09-27T03:05:06.275123+00:00",
+      "updated_at": "2026-09-27T03:08:08.94+00:00",
+      "position_id": null,
+      "entry_bar_at": "2026-09-27T03:05:00+00:00",
+      "reject_reason": "STALE:TRIGGER_WINDOW_CLOSED",
+      "signal_bar_at": "2026-09-27T03:00:00+00:00"
+    },
+    {
+      "id": "6f628aa1-9a05-4493-adda-692575601a8b",
+      "lane": "BULL",
+      "side": "LONG",
+      "status": "REJECTED",
+      "symbol": "WUSDT",
+      "features": {
+        "atr": 0.00023007142857142858,
+        "qv24": 8337309.689409001,
+        "rank": 7,
+        "bbPos": 0,
+        "b06133": {
+          "r62": null,
+          "error": "B06133_MARKET_INPUT",
+          "branch": null,
+          "reason": "B06133_MARKET_UNAVAILABLE",
+          "rescue": null,
+          "result": null,
+          "source": {
+            "btc": {
+              "known": false,
+              "return2h": null,
+              "return30m": null,
+              "freshnessMs": null
+            },
+            "btcBars": null,
+            "prebars": null,
+            "decisionAt": 1790478660000,
+            "featureValues": {
+              "return5m": 0.005260850504164694,
+              "return15m": 0.0037632821723732057,
+              "return30m": 0.015907393577296425,
+              "return60m": 0.025403286597316388,
+              "volumeRatio": 1.2846607222576287
+            }
+          },
+          "allowed": false,
+          "version": "B06133_ENTRY_SELECTION_1",
+          "evaluatedAt": 1790478666711
+        },
+        "method": "KST_TOP10_15M_THEN_CLOSED_5M_ACCELERATION",
+        "symbol": "WUSDT",
+        "stopAtr": 1.4949705060540204,
+        "stopPct": 0.025,
+        "dayStart": 1790434800000,
+        "leverage": 3,
+        "maxSlots": 10,
+        "return5m": 0.005260850504164694,
+        "strategy": "LEADER_MOMENTUM_V17",
+        "v17Setup": {
+          "state": "TRIGGERED",
+          "symbol": "WUSDT",
+          "armedAt": 1790478600000,
+          "identity": "V17_GPT_CONTINUATION_ENTRY_2:WUSDT:6f628aa1-9a05-4493-adda-692575601a8b:1790478600000",
+          "signalId": "6f628aa1-9a05-4493-adda-692575601a8b",
+          "expiresAt": 1790479500000,
+          "lastClose": 0.013803,
+          "triggerAt": 1790478660000,
+          "pullbackLow": null,
+          "transitions": [
+            {
+              "at": 1790478600000,
+              "to": "ARMED",
+              "reason": "V17_SETUP_ARMED"
+            },
+            {
+              "at": 1790478666535,
+              "to": "TRIGGERED",
+              "reason": "V17_CONTINUATION_TRIGGERED"
+            }
+          ],
+          "triggerMode": "CONTINUATION_NO_PULLBACK",
+          "signal5Close": 1790478600000,
+          "triggerClose": 0.013803,
+          "policyVersion": "V17_GPT_CONTINUATION_ENTRY_2",
+          "referencePrice": 0.013758,
+          "terminalReason": null,
+          "pullbackObserved": false,
+          "triggerExpiresAt": 1790478720000,
+          "lastCandleOpenTime": 1790478600000
+        },
+        "v30Front": {
+          "b06133": {
+            "branch": null,
+            "reason": "B06133_MARKET_UNAVAILABLE",
+            "result": null,
+            "allowed": false,
+            "version": "B06133_ENTRY_SELECTION_1"
+          },
+          "failed": [],
+          "factors": {
+            "btcAnyUp": null,
+            "absorption": null,
+            "volumeTails": null,
+            "fresh5over15": null,
+            "fresh15over30": null,
+            "buyerShareRise": null,
+            "recentHourLead": null
+          },
+          "unknown": [
+            "volumeTails"
+          ],
+          "version": "V30_FRONT_SCORE_2_FRESH_EVIDENCE",
+          "admitted": false,
+          "required": {
+            "volumeTails": false
+          },
+          "negativeEvidence": []
+        },
+        "dayReturn": 0.06473074514715105,
+        "rankBasis": "KST_DAY_CLOSED_15M",
+        "return15m": 0.0037632821723732057,
+        "return30m": 0.015907393577296425,
+        "return60m": 0.025403286597316388,
+        "exitPolicy": {
+          "staleMs": 2700000,
+          "stopPct": 0.025,
+          "maxHoldMs": 21600000,
+          "trailArmPct": 0.03,
+          "trailGapPct": 0.015
+        },
+        "signal5Open": 1790478300000,
+        "volumeRatio": 1.2846607222576287,
+        "maxHoldHours": 6,
+        "signal5Close": 1790478600000,
+        "signal15Close": 1790478000000,
+        "marketCoverage": 1,
+        "marketExpected": 525,
+        "referenceClose": 0.013758,
+        "routeAuthority": "LEADER_MOMENTUM_V17",
+        "marketEvaluated": 525,
+        "storageLaneOnly": "BULL",
+        "reference15Close": 0.013603,
+        "targetMarginUsdt": 150,
+        "confirmationReturn15m": 0.012064145946741212,
+        "sizingContractVersion": "V17_SLOT_SIZING_4_MARGIN150",
+        "parametersValidatedByBacktest": false
+      },
+      "revision": "V11-LONG-REGIME-1.0.1",
+      "created_at": "2026-09-27T03:10:07.216626+00:00",
+      "updated_at": "2026-09-27T03:12:10.188+00:00",
+      "position_id": null,
+      "entry_bar_at": "2026-09-27T03:10:00+00:00",
+      "reject_reason": "STALE:TRIGGER_WINDOW_CLOSED",
+      "signal_bar_at": "2026-09-27T03:05:00+00:00"
+    },
+    {
+      "id": "7e54d435-91e7-4639-ae78-04de88afca0a",
+      "lane": "BULL",
+      "side": "LONG",
+      "status": "REJECTED",
+      "symbol": "WUSDT",
+      "features": {
+        "atr": 0.0002421428571428572,
+        "qv24": 8601199.190286601,
+        "rank": 6,
+        "bbPos": 0,
+        "b06133": {
+          "r62": null,
+          "error": "B06133_MARKET_INPUT",
+          "branch": null,
+          "reason": "B06133_MARKET_UNAVAILABLE",
+          "rescue": null,
+          "result": null,
+          "source": {
+            "btc": {
+              "known": false,
+              "return2h": null,
+              "return30m": null,
+              "freshnessMs": null
+            },
+            "btcBars": null,
+            "prebars": null,
+            "decisionAt": 1790479020000,
+            "featureValues": {
+              "return5m": 0.0021078645151912934,
+              "return15m": 0.013526427993824974,
+              "return30m": 0.017340613931523086,
+              "return60m": 0.02482717609455154,
+              "volumeRatio": 1.755646452222899
+            }
+          },
+          "allowed": false,
+          "version": "B06133_ENTRY_SELECTION_1",
+          "evaluatedAt": 1790479028509
+        },
+        "method": "KST_TOP10_15M_THEN_CLOSED_5M_ACCELERATION",
+        "symbol": "WUSDT",
+        "stopAtr": 1.4234365781710911,
+        "stopPct": 0.025,
+        "dayStart": 1790434800000,
+        "leverage": 3,
+        "maxSlots": 10,
+        "return5m": 0.0021078645151912934,
+        "strategy": "LEADER_MOMENTUM_V17",
+        "v17Setup": {
+          "state": "TRIGGERED",
+          "symbol": "WUSDT",
+          "armedAt": 1790478900000,
+          "identity": "V17_GPT_CONTINUATION_ENTRY_2:WUSDT:7e54d435-91e7-4639-ae78-04de88afca0a:1790478900000",
+          "signalId": "7e54d435-91e7-4639-ae78-04de88afca0a",
+          "expiresAt": 1790479800000,
+          "lastClose": 0.01384,
+          "triggerAt": 1790479020000,
+          "pullbackLow": 0.013726,
+          "transitions": [
+            {
+              "at": 1790478900000,
+              "to": "ARMED",
+              "reason": "V17_SETUP_ARMED"
+            },
+            {
+              "at": 1790478971303,
+              "to": "PULLBACK_OBSERVED",
+              "reason": "V17_PULLBACK_CONFIRMED"
+            },
+            {
+              "at": 1790479028346,
+              "to": "TRIGGERED",
+              "reason": "V17_REACCEL_TRIGGERED"
+            }
+          ],
+          "signal5Close": 1790478900000,
+          "triggerClose": 0.01384,
+          "policyVersion": "V17_GPT_CONTINUATION_ENTRY_2",
+          "referencePrice": 0.013787,
+          "terminalReason": null,
+          "pullbackObserved": true,
+          "triggerExpiresAt": 1790479080000,
+          "lastCandleOpenTime": 1790478960000
+        },
+        "v30Front": {
+          "b06133": {
+            "branch": null,
+            "reason": "B06133_MARKET_UNAVAILABLE",
+            "result": null,
+            "allowed": false,
+            "version": "B06133_ENTRY_SELECTION_1"
+          },
+          "failed": [],
+          "factors": {
+            "btcAnyUp": null,
+            "absorption": null,
+            "volumeTails": null,
+            "fresh5over15": null,
+            "fresh15over30": null,
+            "buyerShareRise": null,
+            "recentHourLead": null
+          },
+          "unknown": [
+            "volumeTails"
+          ],
+          "version": "V30_FRONT_SCORE_2_FRESH_EVIDENCE",
+          "admitted": false,
+          "required": {
+            "volumeTails": false
+          },
+          "negativeEvidence": []
+        },
+        "dayReturn": 0.07913274890419553,
+        "rankBasis": "KST_DAY_CLOSED_15M",
+        "return15m": 0.013526427993824974,
+        "return30m": 0.017340613931523086,
+        "return60m": 0.02482717609455154,
+        "exitPolicy": {
+          "staleMs": 2700000,
+          "stopPct": 0.025,
+          "maxHoldMs": 21600000,
+          "trailArmPct": 0.03,
+          "trailGapPct": 0.015
+        },
+        "signal5Open": 1790478600000,
+        "volumeRatio": 1.755646452222899,
+        "maxHoldHours": 6,
+        "signal5Close": 1790478900000,
+        "signal15Close": 1790478900000,
+        "marketCoverage": 1,
+        "marketExpected": 525,
+        "referenceClose": 0.013787,
+        "routeAuthority": "LEADER_MOMENTUM_V17",
+        "marketEvaluated": 525,
+        "storageLaneOnly": "BULL",
+        "reference15Close": 0.013787,
+        "targetMarginUsdt": 150,
+        "confirmationReturn15m": 0.013526427993824974,
+        "sizingContractVersion": "V17_SLOT_SIZING_4_MARGIN150",
+        "parametersValidatedByBacktest": false
+      },
+      "revision": "V11-LONG-REGIME-1.0.1",
+      "created_at": "2026-09-27T03:15:13.545672+00:00",
+      "updated_at": "2026-09-27T03:18:08.887+00:00",
+      "position_id": null,
+      "entry_bar_at": "2026-09-27T03:15:00+00:00",
+      "reject_reason": "STALE:TRIGGER_WINDOW_CLOSED",
+      "signal_bar_at": "2026-09-27T03:10:00+00:00"
+    }
+  ]
+}

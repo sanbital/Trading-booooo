@@ -3,11 +3,12 @@ export const TABLES=new Set(['evolution_market_frames','evolution_portfolios','e
 export class EvolutionStore{
  constructor(db){this.db=db;}
  table(name){if(!TABLES.has(name))throw Error('EVOLUTION_TABLE_DENIED');return this.db.from(name);}
- async rpc(name,args={}){if(!/^evolution_(register_candidate|market_sensor|capture_context|ingest|claim_job|finish_job|reserve_api|worker_heartbeat|report|active_policy|bootstrap|promote|policy_health|rollback)$/.test(name))throw Error('EVOLUTION_RPC_DENIED');const r=await this.db.rpc(name,args);if(r.error)throw Error('EVOLUTION_DB:'+r.error.message);return r.data;}
+ async rpc(name,args={}){if(!/^evolution_(register_candidate|market_sensor|capture_context|ingest|claim_job|finish_job|reserve_api|reserve_api_v2|settle_api|worker_heartbeat|report|active_policy|bootstrap|promote|policy_health|rollback)$/.test(name))throw Error('EVOLUTION_RPC_DENIED');const r=await this.db.rpc(name,args);if(r.error)throw Error('EVOLUTION_DB:'+r.error.message);return r.data;}
  async read(query){const r=await query;if(r.error)throw Error('EVOLUTION_READ:'+r.error.message);return r.data;}
  async write(name,value,{upsert=false,onConflict}={}){const table=this.table(name),q=upsert?table.upsert(value,{onConflict}):table.insert(value),r=await q;if(r.error&&r.error.code!=='23505')throw Error('EVOLUTION_WRITE:'+r.error.message);return !r.error;}
  async enqueue(key,kind,payload={},priority=100,availableAt=null){return this.write('evolution_jobs',{dedupe_key:key,kind,payload,priority,...(availableAt?{available_at:availableAt}:{})});}
- async reserve(calls,usd){if(!await this.rpc('evolution_reserve_api',{p_calls:calls,p_usd:usd}))throw Error('RESEARCH_BUDGET_EXHAUSTED');}
+ async reserve(provider,kind,usd){const id=await this.rpc('evolution_reserve_api_v2',{p_provider:provider,p_kind:kind,p_usd:usd});if(!id)throw Error('RESEARCH_BUDGET_EXHAUSTED');return id;}
+ async settle(id,usd,success){return this.rpc('evolution_settle_api',{p_reservation:id,p_actual_usd:usd,p_success:success});}
  async cached(key,fn){const row=await this.read(this.table('evolution_provider_cache').select('result').eq('cache_key',key).maybeSingle());if(row)return row.result;const result=await fn();await this.write('evolution_provider_cache',{cache_key:key,result});return result;}
  // Read-only access to actual execution. No method accepts a mutation or model-generated query.
  async trade(id){return this.read(this.db.from('v11_long_regime_positions').select('*').eq('id',id).single());}
