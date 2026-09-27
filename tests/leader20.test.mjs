@@ -112,3 +112,10 @@ test('quiet contracts with older closeTime do not veto a freshly retrieved marke
  assert.equal(e.members[1].symbol,'C01USDT');
  assert.equal(e.source_freshest_close_ms,T);
 });
+
+test('actual Binance Unicode COIN contracts participate in the complete numeric Top20',async()=>{
+ const x=sources();const names=['龙虾USDT','哈基米USDT','牛来USDT','币安人生USDT','我踏马来了USDT'];
+ for(const [i,name]of names.entries()){x.exchangeInfo.symbols[i].symbol=name;x.tickers[i].symbol=name;x.tickers[i].priceChangePercent=String(100+i);}
+ const e=await selectEpoch(x);assert.equal(e.expected_count,25);assert.equal(e.covered_count,25);
+ assert.deepEqual(e.members.slice(0,5).map(m=>m.symbol),[...names].reverse());
+});

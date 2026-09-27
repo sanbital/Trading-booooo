@@ -3,6 +3,8 @@ import {readFileSync,writeFileSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {validateMarketSensor} from '../../supabase/functions/_shared/gpt-final-decision/market-sensor.mjs';
+const expectedTradeHash=process.env.LEADER20_TRADE_VALIDATOR_MD5??'16c234ccede07d0eaf698a02ee98b08d';
+if(!/^[a-f0-9]{32}$/.test(expectedTradeHash))throw Error('INVALID_TRADE_VALIDATOR_HASH');
 const app='sanbital-doa-capture-20260925',project='etaajwpernzrcdrifdnw';
 if(process.env.GITHUB_REF!=='refs/heads/main'||!/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA??''))throw Error('RELEASE_REF');
 const sha=process.env.GITHUB_SHA,image='registry.fly.io/'+app+':'+sha;
@@ -15,7 +17,7 @@ async function machine(path='',method='GET',body,nonce){const r=await fetch('htt
  ...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(60000)});if(!r.ok)throw Error('MACHINE_HTTP_'+r.status);return r.json();}
 const safe=m=>({id:m.id,state:m.state,region:m.region,instance_id:m.instance_id,image:m.image_ref,guest:m.config.guest});
 const ready=(await query("select enabled,production_enabled,protocol_sha256,to_regprocedure('public.doa_market_sensor_context_v1(text,timestamptz)') is not null sensor_ready, (select md5(pg_get_functiondef(oid)) from pg_proc where proname='doa_gpt_capture_context_v3') trade_hash from doa_capture.control where id=1"))[0];
-if(!ready?.enabled||!ready.production_enabled||ready.protocol_sha256!==protocol||!ready.sensor_ready||ready.trade_hash!=='16c234ccede07d0eaf698a02ee98b08d')throw Error('DATABASE_CONTRACT_NOT_READY');
+if(!ready?.enabled||!ready.production_enabled||ready.protocol_sha256!==protocol||!ready.sensor_ready||ready.trade_hash!==expectedTradeHash)throw Error('DATABASE_CONTRACT_NOT_READY');
 const list=await machine();if(list.length!==1)throw Error('EXPECTED_ONE_COLLECTOR');const before=await machine('/'+list[0].id),cfg=before.config;
 if(cfg.env?.CAPTURE_ENDPOINT!=='https://'+project+'.supabase.co/functions/v1/doa-capture-ingest'||cfg.env?.PROTOCOL_SHA256!==protocol||cfg.services?.length||cfg.mounts?.length||cfg.auto_destroy===true||
  !String(cfg.image).startsWith('registry.fly.io/'+app+':'))throw Error('UNEXPECTED_CAPTURE_CONFIG');
@@ -43,7 +45,7 @@ for(let i=0;i<100;i++){
  const sensor=validateMarketSensor(row.sensor,Math.floor(Number(row.as_of_ms))),last=sensor.market_sensor_trajectory?.at(-1);
  const sample={at:new Date(Number(row.as_of_ms)).toISOString(),metrics:row.metrics,heartbeat_age_s:row.heartbeat_age_s,
  sensor:{...sensor,market_sensor_trajectory:undefined},last_point:last,trade_contexts:row.trade_contexts,open_positions:row.open_positions,btc_trade:row.btc_trade};
- evidence.samples.push(sample);console.log(JSON.stringify({at:sample.at,status:sensor.status,reason:sensor.reason,watched:row.metrics.watched,synced:row.metrics.synced,return_1m:sensor.btc_return_1m,latency_ms:sensor.max_event_latency_ms,coverage:sensor.depth_coverage_bps,trade_unavailable:row.trade_contexts?.filter(x=>x.status!=='AVAILABLE'),open:row.open_positions}));
+ evidence.samples.push(sample);console.log(JSON.stringify({at:sample.at,status:sensor.status,reason:sensor.reason,watched:row.metrics.watched,synced:row.metrics.synced,return_1m:sensor.btc_return_1m,latency_ms:sensor.max_event_latency_ms,coverage:sensor.depth_coverage_bps,trade_unavailable:row.trade_contexts?.filter(x=>x.status!=='AVAILABLE'),open_count:row.open_positions?.length??0}));
  const good=sensor.status==='AVAILABLE'&&row.metrics.version==='DOA-CAPTURE-6-MARKET-SENSOR'&&row.metrics.source_commit===sha&&row.metrics.watched===row.metrics.synced&&row.heartbeat_age_s<25;
  if(good){stableSince??=Number(row.as_of_ms);if(Number(row.as_of_ms)-stableSince>=600000){verified=true;save();break;}}else stableSince=null;
  save();

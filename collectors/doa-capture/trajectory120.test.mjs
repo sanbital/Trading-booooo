@@ -11,6 +11,7 @@ test('T15-T22: production 120s RPC, exact bucket sequence, causality, gaps and l
  await db.exec("create table public.v11_long_regime_signals(id uuid,symbol text,created_at timestamptz,status text,features jsonb);create table public.v11_long_regime_positions(id uuid,signal_id uuid,symbol text,entry_at timestamptz,entry_price numeric,state text,metadata jsonb);create table public.v17_market_scan_runs(captured_at timestamptz,details jsonb);grant select on public.v11_long_regime_signals,public.v11_long_regime_positions,public.v17_market_scan_runs to service_role;");
  for(const n of ['20260925131209_doa_capture_live','20260925135156_doa_gpt_capture_context','20260926125702_continuous_capture_arbitration','20260926144820_exit_authority_120s_context','20260926145639_exit_capture_flow_causality'])
   await db.exec(await readFile(new URL('../../supabase/migrations/'+n+'.sql',import.meta.url),'utf8'));
+ await db.exec(await readFile(new URL('../../supabase/migrations/20260927131311_leader20_unicode_symbols.sql',import.meta.url),'utf8'));
  await db.exec("insert into doa_capture.control(id,enabled,gpt_context_enabled,production_enabled,protocol_sha256,starts_at,ends_at,heartbeat_at) values(1,true,true,true,repeat('a',64),now()-interval '1 day',now()+interval '1 day',clock_timestamp());");
  const anchor=Math.floor(Date.now()/5000)*5000-5000,iso=t=>new Date(t).toISOString(),id='00000000-0000-0000-0000-000000000001',newId='00000000-0000-0000-0000-000000000002';
  for(let i=0;i<25;i++){
@@ -30,6 +31,15 @@ test('T15-T22: production 120s RPC, exact bucket sequence, causality, gaps and l
   assert.equal(c.trajectory.length,24);assert.ok(c.dynamics.return_120s>0);
   assert.deepEqual(Object.keys(c.dynamics.horizons),['s5','s15','s30','s60','s120']);
   assert.equal((await db.query("select public.doa_gpt_capture_context('QUSDT',clock_timestamp()) r")).rows[0].r.buckets,12);
+ });
+ await t.test('Unicode symbols preserve all 24 production capture buckets',async()=>{
+  await db.exec('begin');
+  try{
+   await db.exec("insert into doa_capture.live_micro(kind,symbol,at,payload,received_at) select kind,'哈基米USDT',at,payload,received_at from doa_capture.live_micro where symbol='QUSDT'");
+   const raw=(await db.query("select public.doa_gpt_capture_context_v3('哈基米USDT',clock_timestamp(),null) r")).rows[0].r;
+   const c=validateCapture120(raw,Date.now());assert.equal(c.status,'AVAILABLE',JSON.stringify(c));assert.equal(c.buckets,24);
+   await assert.rejects(db.exec("insert into doa_capture.live_micro(kind,symbol,at,payload,received_at) values('micro','牛来/USDT',now(),'{}',now())"),/check constraint/);
+  }finally{await db.exec('rollback');}
  });
  await t.test('T16 contiguous sequence rejects an internal gap despite 24 points',async()=>{
   await db.exec('begin');await db.query("update doa_capture.live_micro set at=at-interval '1 second' where at=$1",[iso(anchor-50000)]);

@@ -1,7 +1,7 @@
 /** Public market data ONLY. No signed Binance endpoint or API credential accepted. */
 const PATHS=new Set(['/fapi/v1/exchangeInfo','/fapi/v1/ticker/24hr','/fapi/v1/klines','/fapi/v1/aggTrades','/fapi/v1/fundingRate']);
 export async function publicMarket(path,params={},fetchFn=fetch){if(!PATHS.has(path)||Object.keys(params).some(k=>/signature|secret|key/i.test(k)))throw Error('MARKET_ENDPOINT_DENIED');
- if(params.symbol&&!/^[A-Z0-9]{1,24}USDT$/.test(params.symbol))throw Error('MARKET_SYMBOL');
+ if(params.symbol&&!/^[\p{L}\p{N}]{1,24}USDT$/u.test(params.symbol))throw Error('MARKET_SYMBOL');
  const r=await fetchFn('https://fapi.binance.com'+path+'?'+new URLSearchParams(params),{method:'GET',redirect:'error',signal:AbortSignal.timeout(10000)});
  if(!r.ok)throw Error('BINANCE_PUBLIC_'+r.status);const raw=await r.text();if(raw.length>8000000)throw Error('MARKET_BODY_LIMIT');return JSON.parse(raw);
 }

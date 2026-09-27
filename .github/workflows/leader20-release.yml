@@ -55,9 +55,10 @@ jobs:
           supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-before.json
           node --input-type=module -e 'import fs from "node:fs";let x=JSON.parse(fs.readFileSync("release-evidence/functions-before.json"));x=x.functions??x;const r=JSON.parse(fs.readFileSync("deployment-evidence/leader20-release-request.json"));for(const [slug,version]of Object.entries(r.expected_versions)){const f=x.find(x=>x.slug===slug);if(f?.version!==version||f.verify_jwt!==false||f.status!=="ACTIVE")throw Error("CONCURRENT_DEPLOY_OR_AUTH_CHANGE:"+slug);}'
           test "$(psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select count(*) from supabase_migrations.schema_migrations where version='20260927125415' and name='leader20_campaigns'")" = 1
-          test "$(psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.leader20_control where singleton and not observation_enabled and active_strategy='LEGACY' and archive_max_bytes=0 and generation=1")" = 1
+          test "$(psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.leader20_control where singleton and observation_enabled and active_strategy='LEGACY' and archive_max_bytes=0 and generation=1")" = 1
           test "$(psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select count(*) from cron.job where jobname='leader20-observer-tick' and schedule='20 seconds' and active")" = 1
           test "$(psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select count(*) from supabase_migrations.schema_migrations where version='20260927130630' and name='leader20_observer_tick'")" = 1
+          test "$(psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select count(*) from supabase_migrations.schema_migrations where version='20260927131840' and name='leader20_unicode_symbols'")" = 1
           psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -f ops/leader20/protected-settings.sql > release-evidence/settings-before.json
           psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c 'select public.leader20_status()' > release-evidence/leader20-before.json
           for slug in v10-lane-executor v10-lane-signal-generator self-evolution-worker; do
@@ -79,6 +80,21 @@ jobs:
           done
           supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-after.json
           echo "$GITHUB_SHA" > release-evidence/source-sha.txt
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: 0.4.108
+      - name: Update existing collector image and verify ten continuous minutes
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          LEADER20_TRADE_VALIDATOR_MD5="$(node -p 'require("./deployment-evidence/leader20-release-request.json").collector_trade_validator_md5')"
+          export LEADER20_TRADE_VALIDATOR_MD5
+          docker build --build-arg "SOURCE_COMMIT=$GITHUB_SHA" -t "registry.fly.io/sanbital-doa-capture-20260925:$GITHUB_SHA" collectors/doa-capture
+          node collectors/doa-capture/release-market-sensor.mjs
+          node --input-type=module -e 'import fs from "node:fs";const r=JSON.parse(fs.readFileSync("market-sensor-release.json"));const {samples,...summary}=r;summary.sample_count=samples.length;summary.last_sample={at:samples.at(-1).at,heartbeat_age_s:samples.at(-1).heartbeat_age_s,watched:samples.at(-1).metrics.watched,synced:samples.at(-1).metrics.synced,order_calls:samples.at(-1).metrics.order_calls,llm_calls:samples.at(-1).metrics.llm_calls,sensor_status:samples.at(-1).sensor.status};fs.writeFileSync("release-evidence/collector-release.json",JSON.stringify(summary,null,2));'
       - name: Verify runtime and start observation
         shell: bash
         env:
