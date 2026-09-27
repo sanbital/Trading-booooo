@@ -1,4 +1,5 @@
 import {LEADER20_PROMPT,leaderDecision} from '../leader20/decision-contract.mjs';
+import {economyPrompt,ECONOMY_VERSION} from './economy-prompt.mjs';
 /** GPT FINAL RECHECK (FD1-RC1): the pre-dispatch confirmation of an INITIAL GPT BUY.
  *
  * GPT stays the only strategy decision maker. This module adds no strategy gate:
@@ -310,9 +311,12 @@ export function recheckModelInput(packet){
     initial:{decision:packet.initial.decision,summary:packet.initial.summary,support:packet.initial.support,
       facts:Object.fromEntries(Object.entries(packet.initial.facts).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)])),
       assessment:entryAssessment(packet.initial.facts??{}),capture_context:compactDynamic(packet.initial.capture_context,{fullPath:leaderDecision(packet)})},
-    current:{facts:sections,unavailable:FACT_OK.filter(k=>v[k]===null),assessment:entryAssessment(v),...(packet.facts.capture_context?{capture_context:packet.facts.capture_context}:{})},
+    current:{facts:sections,unavailable:FACT_OK.filter(k=>v[k]===null),assessment:entryAssessment(v),...(packet.facts.capture_context?{capture_context:dynamicEnabled(packet)?compactDynamic(packet.facts.capture_context,{fullPath:true}):packet.facts.capture_context}:{})},
     dynamic_change:packet.dynamic_change??null,
-    fast_recheck:packet.pre_dispatch??null,
+    fast_recheck:packet.pre_dispatch?{...packet.pre_dispatch,...(packet.pre_dispatch.capture_context?{capture_context:
+      JSON.stringify(packet.pre_dispatch.capture_context)===JSON.stringify(packet.facts.capture_context)?
+        {reference:'current.capture_context',meaning:'Exact same complete capture; supplied once'}:
+        compactDynamic(packet.pre_dispatch.capture_context,{fullPath:true})}:{})}:null,
     change:Object.fromEntries(Object.entries(packet.change.values).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)])),
     trigger_reasons:packet.trigger_reasons,
     risk_flags:Object.fromEntries(Object.entries(risk.flags).filter(([,x])=>x.level!=='CLEAR').map(([k,x])=>[k,x.level])),
@@ -321,7 +325,7 @@ export function recheckModelInput(packet){
 export function recheckPayload(packet){
   return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',prompt_cache_key:'boo-fd1-recheck',
     reasoning:{effort:'none'},max_output_tokens:dynamicEnabled(packet)?1800:600,
-    input:[{role:'system',content:RECHECK_PROMPT+(dynamicEnabled(packet)?DYNAMIC_PROMPT:'')+(leaderDecision(packet)?LEADER20_PROMPT:'')},{role:'user',content:JSON.stringify(recheckModelInput(packet))}],
+    input:[{role:'system',content:(dynamicEnabled(packet)?economyPrompt(packet)+'\nFINAL RECHECK: initial is the previously approved entry, current is the fresh observation. Compare change, current flow, book, execution costs and risk. The initial BUY grants no authority now; only a fresh final BUY plus executor safety can dispatch. reasons may cite valid current facts or supplied change facts. Decision BUY/SKIP/WAIT/ABSTAIN.\n'+DYNAMIC_PROMPT:RECHECK_PROMPT)+(leaderDecision(packet)?LEADER20_PROMPT:'')},{role:'user',content:JSON.stringify(recheckModelInput(packet))}],
     text:{verbosity:'low',format:{type:'json_schema',name:'fd1_recheck',strict:true,schema:recheckSchema(packet)}}};
 }
 /** Change values carried in the packet (the ones GPT may cite). */
@@ -368,7 +372,7 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
       recheck_sequence:sequence,initial_snapshot_hash:String(ticket?.snapshotHash??''),trigger_at_ms:num(f.v17Setup?.triggerAt)};
     key=await hash({version:RECHECK_VERSION,identity,purpose});
     record={version:RECHECK_VERSION,kind:'FD1_FINAL_RECHECK',purpose,recheck_sequence:sequence,api_approval_ref:config.approvalRef,identity,reserved_usd:0.10,
-      source_commit:RECHECK_VERSION,prompt_hash:await hash(RECHECK_PROMPT+ARBITRATION_PROMPT),detection,packet:null,result:null};
+      source_commit:RECHECK_VERSION+':'+ECONOMY_VERSION,prompt_hash:await hash(RECHECK_PROMPT+ARBITRATION_PROMPT+economyPrompt.toString()),detection,packet:null,result:null};
     let claimed,attempt=1;
     try{
       // A sequence with a final answer remains single-use. Only a completed timeout

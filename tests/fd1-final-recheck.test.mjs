@@ -423,6 +423,6 @@ for(const final of ['BUY','SKIP'])test(`Leader20 without any legacy model reache
   assert.equal(r.proceed,final==='BUY',JSON.stringify(r.record.final));
   assert.equal(r.record.final.answer.action,final==='BUY'?'ENTER':'DEFER');
   const input=r.record.final.arbitration.final_input;
-  assert.equal(input.current.capture_context.trajectory.length,24);
+  assert.equal(input.current.capture_context.ordered_path.length,24);
   assert.equal(r.record.final.arbitration.trajectory_hash,r.record.final.arbitration.capture_trajectory_hash);
 });

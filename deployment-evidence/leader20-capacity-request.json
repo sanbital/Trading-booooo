@@ -1,0 +1,15 @@
+{
+  "release": "MONTHLY50_TOP10_20260927",
+  "monthly_ai_usd": 40,
+  "daily_ai_usd": 1.25,
+  "incremental_storage_allowance_usd": 10,
+  "watch_limit": 10,
+  "activate_strategy": false,
+  "validation_orders": false,
+  "expected_versions": {
+    "doa-capture-ingest": 1,
+    "v10-lane-executor": 132,
+    "v10-lane-signal-generator": 31,
+    "self-evolution-worker": 12
+  }
+}

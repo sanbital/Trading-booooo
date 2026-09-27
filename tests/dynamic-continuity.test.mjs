@@ -19,7 +19,7 @@ test('fresh unchanged final recheck still runs and includes all raw buckets, tap
   pre={at:T,mid:1.2,capture_context:c,tape:{return:.001,buyShare:.6,tradeCount:100}},detection=detectChange(initial,pre);
  assert.ok(detection.reasons.includes('MANDATORY_PREORDER_DYNAMIC_REVIEW'));
  const p=await buildRecheckPacket({signalId:'x',symbol:'ABCUSDT',facts:(await packet()).facts,initial,detection,preDispatch:pre}),input=recheckModelInput(p);
- assert.equal(input.current.capture_context.trajectory.length,24);assert.deepEqual(input.fast_recheck.tape,pre.tape);
+ assert.equal(input.current.capture_context.ordered_path.length,24);assert.deepEqual(input.fast_recheck.tape,pre.tape);
  assert.equal(input.dynamic_change.changes.s120.return,0);assert.equal(input.initial.capture_context.ordered_path.length,24);
 });
 test('all ordered bucket information is represented and latest six are explicitly indexed',()=>{

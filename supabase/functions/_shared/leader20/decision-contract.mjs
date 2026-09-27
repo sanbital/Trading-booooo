@@ -2,7 +2,7 @@ export const LEADER20_DECISION_VERSION = 'LEADER20_DECISION_1';
 export const leaderDecision = packet => packet?.leader20?.version === 'LEADER20_DYNAMIC_1';
 const text = {type:'string',minLength:1,maxLength:160};
 export const LEADER20_PROMPT = `
-LEADER20_DECISION_1: all twenty rolling-24h leaders are observation candidates, never automatic BUYs.
+LEADER20_DECISION_1: the configured rolling-24h watch leaders are observation candidates, never automatic BUYs.
 V17, B06133, V30 and CEC0040 are optional advisory evidence only. Missing or rejecting old models cannot veto this strategy.
 Read every row of the ordered twenty-four-bucket path. A price rise without confirming price response to flow and book may be absorption.
 Use action ENTER for d=BUY, DEFER for d=WAIT/SKIP/ABSTAIN; HOLD/PROTECT/EXIT retain their meaning.

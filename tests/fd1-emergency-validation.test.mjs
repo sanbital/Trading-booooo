@@ -41,10 +41,11 @@ async function rehash(out){
   snapshot.snapshot_hash=arb.snapshot_hash=arb.deepseek_snapshot_hash=arb.gpt_first_snapshot_hash=
     arb.deepseek.snapshot_hash=arb.deepseek.answer.snapshot_hash=digest;
 }
-async function consume(out,{persisted=false,p=position,at=T,consumed=T+4000,unavailable=false}={}){
+async function consume(out,{persisted=false,p=position,at=T,consumed=T+4000,unavailable=false,budgetDenied=false}={}){
   let reviewCalls=0,orders=0,clockReads=0;
   const store=new MemoryReviewStore();
-  store.claim=async()=>{throw Error('API_BUDGET_EXHAUSTED');};
+  const claim=store.claim.bind(store);let claims=0;
+  store.claim=async(...a)=>{claims++;if(budgetDenied||!unavailable&&claims===1)throw Error('API_BUDGET_EXHAUSTED');return claim(...a);};
   store.get=async()=>({state:'DONE',record:{purpose:'PRODUCTION',identity:{position_id:position.id,generation},...out}});
   const db={from(){orders++;throw Error('Unexpected database/order call');},rpc(){orders++;throw Error('Unexpected order RPC');}};
   setFd1HoldTestHooks({leader20Control:{active_strategy:'LEGACY'},store,apiKey:unavailable?'':'gpt',deepseekKey:'ds',config,capture:async()=>null,
@@ -65,7 +66,7 @@ function denied({result,orders}){
 }
 
 for(const persisted of [false,true])for(const decision of ['HOLD','PROTECT','EXIT'])
-test(`${persisted?'persisted':'budget exhausted'} validated ${decision} retains exit-only authority`,async()=>{
+test(`${persisted?'persisted':'separately budgeted'} validated ${decision} retains exit-only authority`,async()=>{
   const out=await advice(decision);
   // A forged outer valid flag is neither required nor sufficient for emergency authority.
   if(persisted)out.result.valid=true;
@@ -82,6 +83,11 @@ test(`${persisted?'persisted':'budget exhausted'} validated ${decision} retains 
   if(decision==='HOLD'&&persisted){assert.equal(r.state.holdUntil,null);assert.equal(r.reason,'FD1_DATA_DEGRADED_REVIEWED');}
   else if(decision==='HOLD')assert.ok(r.state.holdUntil>T);
   assert.equal(orders,0);
+});
+
+test('exhausted shared budget cannot call an unpaid DeepSeek fallback',async()=>{
+ const r=await consume(await advice(),{budgetDenied:true});
+ assert.equal(r.reviewCalls,0);assert.equal(r.orders,0);assert.equal(r.result.close,false);
 });
 
 const mutations=[

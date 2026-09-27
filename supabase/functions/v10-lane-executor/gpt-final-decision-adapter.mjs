@@ -4,7 +4,7 @@ import {readCaptureWithRecovery,emergencyDynamicPacket} from '../_shared/gpt-fin
 import {DYNAMIC_POLICY,positionDynamicState,entryFailureEvidence,entryCaptureSafety} from '../_shared/gpt-final-decision/dynamic-flow.mjs';
 import {dynamicsEvent} from '../_shared/gpt-final-decision/trajectory.mjs';
 /** Strategic closes require fresh validated GPT FINAL. Existing hard safety executes first. */
-import {holdStep,initialHoldState,runHoldReview,TIME_REASONS,FD1_HOLD_POLICY_VERSION,HOLD_POLICY} from '../_shared/gpt-final-decision/hold.mjs';
+import {holdStep,initialHoldState,runHoldReview,TIME_REASONS,FD1_HOLD_POLICY_VERSION,HOLD_POLICY,MONTHLY_HOLD_POLICY} from '../_shared/gpt-final-decision/hold.mjs';
 import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
 import {configFromControl} from '../_shared/gpt-final-review/coordinator.mjs';
 import {recordHoldShadow,shadowJobKey,holdShadowEnabled,HOLD_RELEASE} from '../_shared/gpt-final-decision/hold-shadow.mjs';
@@ -141,7 +141,7 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
     return {state:row.state,decision:r.decision,valid:false,error:r.error,authority:null,completed_at_ms:r.completed_at_ms,
       snapshot_at_ms:r.final_snapshot_at_ms,snapshot_hash:null,refresh_error:r.arbitration?.refresh_error??null};};
   let step;
-  try{step=await holdStep(prior,{now,price:bid,peak:state.peakPrice,timeCandidate,softTrigger,dynamics,positionId:p.id,generation,answerOf,clock:testHooks?()=>now:Date.now});}
+  try{step=await holdStep(prior,{now,price:bid,peak:state.peakPrice,timeCandidate,softTrigger,dynamics,positionId:p.id,generation,answerOf,clock:testHooks?()=>now:Date.now},MONTHLY_HOLD_POLICY);}
   catch{return {close:false,reason:'FD1_FINAL_UNAVAILABLE',state:prior};}
   if(!step.start)return step;
   // A review is starting: claim it in the shared journal/ledger, then ask in the background.
@@ -159,8 +159,16 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
         peakPrice:state.peakPrice,entryAt:Date.parse(p.entry_at),lastHighAt:state.lastHighAt,stopPrice:state.stopPrice,entryFeatures:f},
       emergencyReview=async why=>{
         if(!emergencyEligible(config,deepseekKey))return null;
+        // Every paid fallback shares the same atomic daily/monthly ledger.
+        const key=await hash({kind:'FD1_BUDGETED_EMERGENCY',parent:step.start.key});
+        const record={version:FD1_HOLD_POLICY_VERSION,kind:'FD1_HOLD_EMERGENCY',purpose:'PRODUCTION',api_approval_ref:config.approvalRef,
+          identity:{symbol:String(p.symbol).toUpperCase(),position_id:String(p.id),generation,event:step.start.event},
+          reserved_usd:.10,packet:null,result:null};
+        let claim;try{claim=await store.claim(key,record,config);}catch{return null;}
+        if(!claim.created)return null;
         const out=await (testHooks?.review??runHoldReview)({apiKey:'',deepseekKey,exitContext,position,dynamicState:prior.dynamicTracker,
           event:step.start.event,timeCandidate,stopStage:state.protectionStage??null});
+        await store.complete(key,claim.row.owner,{...record,packet:out.packet,result:{...out.result,final_packet:undefined},snapshot_at_ms:now});
         // Provider completion occurs after the observation that started this tick.
         const consumedAt=(testHooks?.now??Date.now)();
         const e=await deepseekEmergency(out.result,{p,packet:out.packet,generation,now:consumedAt});
@@ -257,10 +265,14 @@ export async function fd1Probe(db,{symbol,apiKey,runId,fetchFn=fetch,engine,stor
     timeoutRecovery:row?.record?.timeout_recovery??null,valid:res?.valid===true,
     wouldOrder:second.allowed===true?'NEXT_STEP_IS_EXISTING_ORDER_GUARDS (not executed: probe)':'NO_ORDER'};
   if(simulateEntryTimeout)return {entry,timeoutFixture:true,injected,hold:null};
-  const h0=Date.now(),hold=await runHoldReview({apiKey,deepseekKey:getenv('deepseek api'),fetchFn,position:{id:'fd1-probe-position-'+trigger,symbol,entryPrice:last*.99,peakPrice:last*1.01,
-    entryAt:Date.now()-50*MIN,lastHighAt:Date.now()-46*MIN,stopPrice:last*.99*.99,entryFeatures:{referenceClose:last*.99}},
-    event:'TIME_EXIT_CANDIDATE:V17_MOMENTUM_STALE',timeCandidate:'V17_MOMENTUM_STALE',stopStage:'RISK_CUT'});
-  return {entry,hold:{fixture:true,decision:hold.result.decision,valid:hold.result.valid===true,latencyMs:hold.result.latency_ms??null,
-    arbitration:hold.result.arbitration??null,costUsd:hold.result.api_cost_usd??null,error:hold.result.error??null,answer:hold.result.answer??null,elapsedMs:Date.now()-h0,
-    facts_quality:hold.packet?.facts?.quality??null,consequence:hold.result.decision==='HOLD'&&hold.result.valid?'TIME_EXIT_DEFERRED_15M':hold.result.valid&&hold.result.decision==='EXIT'?'FINAL_STRATEGIC_EXIT':'PROTECTION_RETAINED'}};
+  // Diagnostics use the same ledger-backed HOLD probe as standalone exit verification.
+  // An exhausted budget must not fall through to an unclaimed provider request.
+  const h0=Date.now();let hold;
+  try{hold=await fd1ExitProbe(db,{symbol,apiKey,fetchFn,runId:'entry-hold:'+String(runId)});}
+  catch(e){return {entry,hold:{fixture:true,valid:false,error:String(e?.message??e).slice(0,100),orderCalls:0}};}
+  const hr=hold.gpt??{};
+  return {entry,hold:{fixture:true,decision:hr.decision??null,valid:hr.valid===true,latencyMs:hr.latency_ms??null,
+    arbitration:hr.arbitration??null,costUsd:hr.api_cost_usd??null,error:hr.error??hold.error??null,answer:hr.answer??null,
+    jobKey:hold.jobKey??null,elapsedMs:Date.now()-h0,orderCalls:0,
+    consequence:hr.valid&&hr.decision==='EXIT'?'FINAL_STRATEGIC_EXIT':'PROTECTION_RETAINED'}};
 }

@@ -1,4 +1,5 @@
 import {LEADER20_PROMPT} from '../leader20/decision-contract.mjs';
+import {ECONOMY_VERSION,economyPrompt} from './economy-prompt.mjs';
 /** FD1 ENTRY engine for the durable FinalReviewCoordinator (journal, budget ledger,
  * async request, ticket, yield). The coordinator's claim/ledger/TTL/ticket machinery is
  * unchanged; this object only replaces WHAT is asked and how the stored answer is
@@ -38,7 +39,7 @@ export async function readHistory(reader,identity,timeoutMs=1500){
   finally{clearTimeout(timer);}
 }
 export const FD1_ENTRY_ENGINE=Object.freeze({
-  id:FD_VERSION+':ENTRY:'+DUAL_VERSION+':'+DYNAMIC_VERSION,
+  id:FD_VERSION+':ENTRY:'+DUAL_VERSION+':'+DYNAMIC_VERSION+':'+ECONOMY_VERSION,
   allow:'BUY',
   // An initial BUY that aged past its answer validity while its trigger is still live is
   // not dropped: it may enter the order path only to be re-decided by a forced GPT FINAL
@@ -47,7 +48,7 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   timeoutRecovery:true,
   model:MODEL,
   // The binding covers the ENTRY prompt and the dual-AI arbitration addendum.
-  promptText:PROMPTS.ENTRY+'\n['+DUAL_VERSION+']'+ARBITRATION_PROMPT+DYNAMIC_PROMPT+LEADER20_PROMPT,
+  promptText:PROMPTS.ENTRY+'\n['+DUAL_VERSION+']'+ARBITRATION_PROMPT+DYNAMIC_PROMPT+LEADER20_PROMPT+ECONOMY_VERSION+economyPrompt.toString(),
   schema:wireSchema('ENTRY',{dynamic_policy:DYNAMIC_VERSION}),
   identity:fd1EntryIdentity,
   // Same-symbol trade memory reader (symbol, beforeMs) => closed trades; injected by the

@@ -105,7 +105,8 @@ export function withOrderTiming(record,at=Date.now()){
  *    dispatch instant (REPLAY: history published before it, no historical book). */
 export async function finalRecheckProbe(db,{symbol='BTCUSDT',fixture='LIVE',apiKey,runId,fetchFn=fetch,store=new SupabaseReviewStore(db),config=null,simulateFinalTimeout=false}){
   const cfg0=config??configFromControl(await readReviewControl(db).catch(()=>null),getenv);
-  const cfg={...cfg0,approvalRef:'FD1_RECHECK_PROBE:'+String(runId).slice(0,40)};
+  // The run ID already isolates the synthetic signal; authorization stays bound to the live control.
+  const cfg={...cfg0};
   const t0=Date.now();
   let s,ticket,e1,rawQuote,dataMode='LIVE',asOf=null;
   if(fixture==='NIL'){

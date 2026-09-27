@@ -1,6 +1,6 @@
 import {LEADER20} from './universe.mjs';
 import {entryCaptureSafety, dynamicDelta} from '../gpt-final-decision/dynamic-flow.mjs';
-export const CAMPAIGN_POLICY = Object.freeze({version: LEADER20, fairReviewMs: 120000, minReviewMs: 15000, eventTtlMs: 120000});
+export const CAMPAIGN_POLICY = Object.freeze({version: LEADER20, fairReviewMs: 21600000, minReviewMs: 1800000, eventTtlMs: 120000});
 export const isLeader20 = row => row?.features?.leader20?.version === LEADER20;
 export const eventExpiry = row => row?.features?.leader20?.expires_at_ms;
 export function validEvent(row) {
