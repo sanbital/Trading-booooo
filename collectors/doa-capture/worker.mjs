@@ -120,16 +120,17 @@ process.on('SIGTERM',()=>{stop=true;});process.on('SIGINT',()=>{stop=true;});
 // A rolling release waits for the previous worker's DB lease; it never steals it.
 for(let i=0;i<24&&!stop&&!deadline;i++){await watch();if(!deadline&&!stop)await new Promise(r=>setTimeout(r,5000));}
 if(!deadline&&!stop)throw Error('LEASE_START_TIMEOUT');
-let previousBucket=Math.floor(Date.now()/5000),watchTask=null,flushTask=null;
+let previousBucket=Math.floor(Date.now()/5000),watchTask=null,flushTask=null,bucketFlushDue=false;
 log('STARTED',{worker_id,protocol_sha256:expected,deadline:iso(deadline)});
 const timer=setInterval(()=>{
   const now=Date.now();
   if(stop || now>=deadline || now-lastControl>90000 || (!production&&now-boot>14*86400000) || process.memoryUsage().rss>230000000){clearInterval(timer);for(const s of states.values()){s.socket?.close();s.marketSocket?.close();}log('STOPPED',{reason:stop?'CONTROL_OR_SIGNAL':now>=deadline?'DEADLINE':now-lastControl>90000?'CONTROL_STALE':'RESOURCE_CAP'});setTimeout(()=>process.exit(stop?0:1),1000);return;}
   try{
-    const b=Math.floor(now/5000);if(b!==previousBucket){bucket(now);previousBucket=b;}
+    const b=Math.floor(now/5000);if(b!==previousBucket){bucket(now);previousBucket=b;bucketFlushDue=true;}
     for(const s of states.values())if((!s.socket||s.socket.readyState===WebSocket.CLOSED) && now>=s.reconnectAt)openSocket(s);
     void recover();
     if(!watchTask&&now-lastWatch>=15000){lastWatch=now;watchTask=watch().catch(e=>log('CONTROL_ERROR',{reason:e.message})).finally(()=>{watchTask=null;});}
-    if(!flushTask&&now-lastFlush>=(production?5000:15000)){lastFlush=now;flushTask=flush().catch(e=>log('CONTROL_ERROR',{reason:e.message})).finally(()=>{flushTask=null;});}
+    // Keep one in-flight ingest; a newly closed bucket must not wait for an unrelated timer phase.
+    if(!flushTask&&((production&&bucketFlushDue)||now-lastFlush>=(production?5000:15000))){bucketFlushDue=false;lastFlush=now;flushTask=flush().catch(e=>log('CONTROL_ERROR',{reason:e.message})).finally(()=>{flushTask=null;});}
   }catch(e){log('FATAL',{reason:e.message});stop=true;}
 },200);

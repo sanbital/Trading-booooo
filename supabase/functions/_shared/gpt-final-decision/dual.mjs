@@ -179,7 +179,10 @@ export function arbitrationPayload(current,initial,reviews){
   return {...base,max_output_tokens:Math.max(1400,base.max_output_tokens),prompt_cache_key:'boo-fd1-final-'+current.packet.task.toLowerCase(),
     input:[{role:'system',content:base.input[0].content+ARBITRATION_PROMPT},{role:'user',content:JSON.stringify({
       ...current.market_input,advisor_status:reviews.deepseek.status,advisor_available:reviews.deepseek.available,
-      advisor_valid:reviews.deepseek.valid,advisor_error:reviews.deepseek.error,initial_snapshot:initial.market_input,snapshot_delta:changes,independent_reviews:reviews,
+      advisor_valid:reviews.deepseek.valid,advisor_error:reviews.deepseek.error,
+      ...(current.snapshot_hash===initial.snapshot_hash?{initial_snapshot_reference:{snapshot_hash:initial.snapshot_hash,
+        meaning:'initial.* and current.* cite the SAME frozen snapshot supplied at the top level; no data omitted'}}:{initial_snapshot:initial.market_input}),
+      snapshot_delta:changes,independent_reviews:reviews,
       disagreement:disagreement(reviews.gpt,{valid:reviews.deepseek.valid,answer:reviews.deepseek.answer})})}]};
 }
 /** First calls overlap; FINAL always runs. FIRST/advice never become an executable fallback. */
@@ -199,7 +202,7 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   const fast=reviewTier==='FAST'&&packet.task==='HOLD'&&dynamicEnabled(packet);
   const firstMs=Math.max(1,Math.min(fast?1500:dynamicEnabled(packet)?4000:6000,deadline-now()-2500,Math.floor((deadline-now()-1500)*.65)));
   // FIRST is short; retain DeepSeek's existing full-review allowance independently.
-  const advisoryMs=Math.max(1,Math.min(fast?2500:6000,deadline-now()-2500,Math.floor((deadline-now()-1500)*.65)));
+  const advisoryMs=Math.max(1,Math.min(fast?3500:6000,deadline-now()-2200,Math.floor((deadline-now()-1200)*.75)));
   const safe=async fn=>{try{return await fn();}catch{return invalid('FD_PROVIDER_ERROR');}};
   const [first0,ds0]=await Promise.all([
     safe(()=>gptCall(initial.packet,{apiKey,fetchFn,now,timeoutMs:firstMs,payloadFn:()=>firstPayload(initial),validate:dynamicEnabled(packet)?wire=>validateFirstWire(wire,initial):validate})),

@@ -1,9 +1,9 @@
 {
-  "version": "DYNAMIC_FLOW_LIFECYCLE_1",
+  "version": "DYNAMIC_CONTINUITY_2",
   "project": "etaajwpernzrcdrifdnw",
-  "baseline_main": "6e3e4fd9e971f789508fb5d8fb1c982ae33afb5e",
-  "expected_executor_version_before": 110,
-  "authorization": "User explicitly superseded the historical winner replay deployment gate and instructed main merge and live deployment on 2026-09-27.",
+  "baseline_main": "277aec673c0fe67b751af9ae2f4fc7a298d193f7",
+  "expected_executor_version_before": 118,
+  "authorization": "User requested production dynamic continuity changes and deployment; resumed 2026-09-27. Completion still requires live decision evidence and winner preservation proof.",
   "historical_limit": "LTC, ARK and PROM required winner windows lack continuous archived microstructure. Winner preservation is not proven.",
   "migrations": [],
   "settings_changes": [],

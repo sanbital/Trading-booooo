@@ -5,7 +5,7 @@ import {src,entryWire} from '../development/gpt-final-decision/tests/fixtures.mj
 import {computeFacts} from '../supabase/functions/_shared/gpt-final-decision/facts.mjs';
 import {buildDecisionPacket,hash,modelInput} from '../supabase/functions/_shared/gpt-final-decision/api.mjs';
 import {DYNAMIC_VERSION,compactDynamic} from '../supabase/functions/_shared/gpt-final-decision/dynamic-flow.mjs';
-import {dualEntryDecision} from '../supabase/functions/_shared/gpt-final-decision/dual.mjs';
+import {dualEntryDecision,frozenReview,arbitrationPayload,reviewsFor} from '../supabase/functions/_shared/gpt-final-decision/dual.mjs';
 import {detectChange,buildRecheckPacket,recheckModelInput} from '../supabase/functions/_shared/gpt-final-decision/recheck.mjs';
 import {nextEvent,initialHoldState,holdStep} from '../supabase/functions/_shared/gpt-final-decision/hold.mjs';
 import {prepareStoredReplay} from '../supabase/functions/_shared/gpt-final-decision/stored-replay.mjs';
@@ -26,6 +26,16 @@ test('all ordered bucket information is represented and latest six are explicitl
  for(let i=0;i<24;i++)assert.deepEqual(small.ordered_path[i],small.ordered_path_columns.map(k=>c.trajectory[i][k]));
  assert.equal(c.trajectory.length,24);
  for(let i=18;i<24;i++)assert.ok(small.critical_segments.some(x=>x.index===i));
+});
+
+test('same-snapshot FINAL sends every ordered bucket once and explicitly binds both citation prefixes',async()=>{
+ const p=await packet(),f=await frozenReview(p,{snapshotAtMs:T});
+ const payload=arbitrationPayload(f,f,reviewsFor({valid:false},{valid:false}));
+ const input=JSON.parse(payload.input[1].content);
+ assert.equal(input.capture_context.ordered_path.length,24);
+ assert.equal(input.initial_snapshot,undefined);
+ assert.equal(input.initial_snapshot_reference.snapshot_hash,f.snapshot_hash);
+ assert.match(input.initial_snapshot_reference.meaning,/initial\.\* and current\.\*/);
 });
 
 test('stored replay keeps the historical clock and missing data, excluding realized outcomes',async()=>{
