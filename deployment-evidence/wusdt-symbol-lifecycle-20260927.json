@@ -1,0 +1,124 @@
+{
+  "status": {
+    "codeAndDatabaseVerified": true,
+    "productionArtifactVerified": true,
+    "naturalWEntryPathVerified": false,
+    "naturalWReason": "No new WUSDT candidate as of 2026-09-27T04:24:44.475742+00:00"
+  },
+  "repository": "sanbital/Trading-booooo",
+  "project": "etaajwpernzrcdrifdnw",
+  "pullRequest": "https://github.com/sanbital/Trading-booooo/pull/203",
+  "implementationCommit": "1014e0e8404adb55fa11c47134f027e2d91b1819",
+  "productionSourceMain": "6c0df42c50fd999af353bd1a8644df788ef4a782",
+  "testedTree": "2bb46df93bf18672ec34c311b094156b94b2cc07",
+  "migration": {
+    "cliGeneratedVersion": "20260927035950",
+    "appliedVersion": "20260927042150",
+    "name": "wusdt_symbol_lifecycle",
+    "bodyIdentical": true,
+    "definitionDiff": "base minimum 2 -> 1; explicit null symbol/branch input refusal only",
+    "ownerAclSecuritySignatureSearchPathPreserved": true
+  },
+  "deployment": {
+    "function": "v10-lane-executor",
+    "version": 110,
+    "artifactSha256": "101980d4335f191b46b72a0abb2f124bf627c8553092ffe21913ac5870839e88",
+    "deployedAtUtc": "2026-09-27T04:22:17.354Z",
+    "deployedAtKst": "2026-09-27T13:22:17.354+09:00",
+    "sourceFilesVerified": 67,
+    "mismatches": [],
+    "configurationNote": "Repository deno.json is included; only test assertion import mapping, no trading configuration. Existing custom-token authentication and verify_jwt=false preserved.",
+    "naturalRuntimeHttp200": {
+      "atUtc": "2026-09-27T04:24:08.924Z",
+      "version": 110
+    }
+  },
+  "tests": {
+    "red": {
+      "js": {
+        "tests": 25,
+        "pass": 19,
+        "fail": 6
+      },
+      "postgres": {
+        "tests": 23,
+        "pass": 18,
+        "fail": 5
+      }
+    },
+    "fullNode": {
+      "tests": 1228,
+      "pass": 1228,
+      "fail": 0
+    },
+    "finalRelatedNode": {
+      "tests": 576,
+      "pass": 576,
+      "fail": 0,
+      "overlapsFull": true
+    },
+    "deno": {
+      "passed": 1055,
+      "steps": 13,
+      "failed": 0
+    },
+    "denoCheck": true,
+    "diffCheck": true,
+    "githubCI": [
+      "validate:success",
+      "verify-v714-only:success",
+      "entry-evidence:success",
+      "research:success"
+    ],
+    "productionReadOnlySymbolChecks": {
+      "count": 22,
+      "allMatch": true,
+      "nullByte": "rejected at PostgreSQL text transport in isolated tests"
+    }
+  },
+  "preservation": {
+    "settings": true,
+    "operatorControls": true,
+    "financialSettings": true,
+    "historicalSignalsUnchanged": true,
+    "aiProtectionArbitration": "AI_PROTECTION_ARBITRATION_1",
+    "margin": 150,
+    "leverage": 3,
+    "slots": 10,
+    "gptDailyUsd": 50,
+    "gptDailyCalls": 300,
+    "withdrawalMode": false,
+    "triggerTtlMs": 60000,
+    "protectedFunctionsUnchanged": [
+      "manageLeader",
+      "openBull",
+      "verifyExecutionLease"
+    ],
+    "worker": {
+      "version": 8,
+      "sourceFilesVerified": 36,
+      "redeployed": false,
+      "reason": "No changed module in deployed import graph"
+    },
+    "newSecurityFindings": 0
+  },
+  "productionObservation": {
+    "runtime": {
+      "last_error": null,
+      "circuit_open": false,
+      "live_enabled": true,
+      "protection_health": "PROTECTED",
+      "entry_block_reason": "NO_FRESH_BULL_SIGNAL",
+      "last_cycle_started_at": "2026-09-27T04:24:10.74+00:00",
+      "last_cycle_completed_at": "2026-09-27T04:24:08.824+00:00"
+    },
+    "checked_at": "2026-09-27T04:24:44.475742+00:00",
+    "new_w_candidates": []
+  },
+  "limitations": [
+    "Historical candles and isolated CEC learning state in regression are synthetic, not profit reconstruction.",
+    "No new natural WUSDT entry/recheck/order/protection cycle confirmed.",
+    "No forced order, forced exit, signal revival, old-record repair or production test CEC RPC was executed.",
+    "Existing SOONUSDT position was entered naturally before deployment; its protected management is runtime health evidence only."
+  ]
+}

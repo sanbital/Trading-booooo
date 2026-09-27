@@ -87,11 +87,20 @@ passed, 13 steps, zero failures. Final release receipts record deployment.
 ## Release and preserved settings
 
 CLI `supabase migration new wusdt_symbol_lifecycle` generated
-`20260927035950_wusdt_symbol_lifecycle.sql`. Merge the tested patch into current
-main, apply this exact function body through the migration API, then deploy only
-`v10-lane-executor` and compare every returned source file against the commit.
-The API may timestamp its migration receipt at application time; record the
-applied version explicitly and preserve SQL-body identity. Do not replay the
+`20260927035950_wusdt_symbol_lifecycle.sql`. The migration API applied the exact
+SQL at version `20260927042150`; the file is renamed to that applied version to
+keep the repository and migration ledger aligned. PR #203 merged into main
+`6c0df42c50fd999af353bd1a8644df788ef4a782` before migration and deployment.
+Executor v110 was deployed at 2026-09-27 13:22:17.354 KST with artifact hash
+`101980d4335f191b46b72a0abb2f124bf627c8553092ffe21913ac5870839e88`.
+All 67 downloaded files match the committed sources, including repository deno.json.
+A naturally scheduled v110 invocation returned HTTP 200 at 13:24:08.924 KST.
+Settings, controls, financial settings, function permissions and the three old
+signals were unchanged. No new security advisor finding was introduced.
+No new WUSDT candidate existed at 13:24:44 KST: code/DB and deployment are
+verified; the natural W entry path remains unconfirmed. The existing SOONUSDT
+position predates deployment and is not counted as W entry verification.
+See `deployment-evidence/wusdt-symbol-lifecycle-20260927.json`. Do not replay the
 legacy all-migration bootstrap workflow; it is manual and changes old settings.
 
 Baseline live settings: 150 USDT target margin, 3x leverage, 10 slots,
