@@ -16,7 +16,8 @@ import {FinalReviewCoordinator,MemoryReviewStore} from '../supabase/functions/_s
 import {baselineAllowedLive,v30FrontDecision,V30_FRONT_LIVE_VERSION} from '../supabase/functions/_shared/gpt-final-review/contract.mjs';
 import {FD1_ENTRY_ENGINE} from '../supabase/functions/_shared/gpt-final-decision/engine.mjs';
 import {detectChange,preDispatchSnapshot,validateRecheck,recheckFlags,buildRecheckPacket,recheckAllows,postRecheckSafety,
-  RECHECK_POLICY,RECHECK_PROMPT,recheckPayload} from '../supabase/functions/_shared/gpt-final-decision/recheck.mjs';
+  RECHECK_POLICY,RECHECK_PROMPT,recheckPayload,economyRecheckPrompt,CHANGE_CATEGORIES,CHANGE_DEFS} from '../supabase/functions/_shared/gpt-final-decision/recheck.mjs';
+import {CATEGORIES} from '../supabase/functions/_shared/gpt-final-decision/contract.mjs';
 import {computeFacts} from '../supabase/functions/_shared/gpt-final-decision/facts.mjs';
 import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,setTestCoordinator} from '../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {IOC_RETRY_POLICY,planAggressiveIocRetry,floorStep} from '../supabase/functions/v10-lane-executor/entry-ioc-retry.mjs';
@@ -221,6 +222,31 @@ test('production RC2: GPT may weigh price risk; BUY needs current support and pr
   assert.match(RECHECK_PROMPT,/조금 전 이 후보를 BUY했다/);assert.match(RECHECK_PROMPT,/지금 이 순간에도 신규 LONG 진입 근거가 충분한가/);
   assert.match(RECHECK_PROMPT,/자동 승인하는 절차가 아니다/);assert.match(RECHECK_PROMPT,/CEC0040 REJECT를 따를 의무도/);
 });
+test('compact RECHECK publishes exact current and delta category bindings; mixed citations still fail closed',async()=>{
+  const init={snapshotAt:T,executionRef:{mid:1.21},facts:{taker_buy_ratio_5m:.6},support:['return_5m']};
+  const detection=detectChange(init,{at:T+10000,mid:1.1995,book:null,tape:{return:-.003,buyShare:.3,tradeCount:100}});
+  const facts=computeFacts(srcFixture(T),{asOf:T,referenceClose:1.3,dayReturn:.1,rank:1});
+  const p=await buildRecheckPacket({signalId:'category-bindings',symbol:'TESTUSDT',facts,initial:init,detection,judgments:null});
+  const prompt=economyRecheckPrompt(p),map=JSON.parse(prompt.match(/Category fact keys: (.+)/)[1]);
+  for(const [category,keys] of Object.entries(map)){
+    if(category==='GPT_JUDGMENT')continue;
+    assert.ok(['SOFT','HARD'].includes(recheckFlags(p).flags[category].level));
+    assert.deepEqual(keys,(CATEGORIES[category]??CHANGE_CATEGORIES[category]).facts.filter(k=>Number.isFinite(p.change.values[k]??p.facts.values[k])));
+  }
+  assert.deepEqual(map.PRICE_SLIPPED,['price_change_since_initial','tape_return']);
+  assert.deepEqual(map.BUYER_RETREAT,['tape_buy_share','buy_share_change_since_initial','tape_trade_count']);
+  const defs=JSON.parse(prompt.match(/Change definitions \[source, unit, meaning\]: (.+)/)[1]);
+  for(const [key,definition] of Object.entries(defs))assert.deepEqual(definition,CHANGE_DEFS[key]);
+  assert.ok(!Object.hasOwn(map,'EV_UNFAVORABLE'));assert.ok(!Object.hasOwn(map,'CHASE_EXTENDED'));
+  for(const [r,e] of [['SIGNAL_INVALIDATED','tape_return'],['PRICE_SLIPPED','distance_high_60m'],['BUYER_RETREAT','taker_buy_ratio_5m']]){
+    assert.ok(map[r],r);
+    assert.throws(()=>validateRecheck({t:'RECHECK',c:p.candidate_id,d:'SKIP',reasons:[{r,e:[e]}],support:[],n:'새 흐름 검토'},p),new RegExp('FD_REASON_EVIDENCE_OUTSIDE:'+r));
+  }
+  assert.equal(validateRecheck({c:p.candidate_id,...RECHECK_WIRE.SKIP},p).decision,'SKIP');
+  const dynamic={...p,dynamic_policy:DYNAMIC_VERSION,dynamic_as_of_ms:T};
+  assert.ok(recheckPayload(dynamic).input[0].content.startsWith(prompt));
+});
+
 test('14. release invariants: GPT remains before IOC, sizing is 150x3, retry is bounded and protection/lease stay in path',()=>{
   const src=readFileSync(new URL('../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
   for(const k of ['const MAX_SLOTS=10','const SETUP_MAX_CONCURRENT=MAX_SLOTS;','PATCH="FD1-MULTISLOT-CAPACITY-1"',
