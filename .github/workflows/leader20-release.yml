@@ -90,7 +90,7 @@ jobs:
           node -e 'const r=require("./release-evidence/ops-readiness.json");if(!r.ok||!r.binance?.positionsComplete||!r.binance?.openOrdersComplete||r.dynamicLifecycle?.version!=="DYNAMIC_FLOW_LIFECYCLE_1")throw Error("READINESS_FAILED");'
           psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 -c "update public.leader20_control set observation_enabled=true,updated_at=now() where singleton and active_strategy='LEGACY' and generation=1 and archive_max_bytes=0 and not observation_enabled"
           # Existing cron publishes epochs; verification never invokes a run/order endpoint.
-          for attempt in $(seq 1 24); do
+          for _attempt in $(seq 1 24); do
             psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c 'select public.leader20_schedule()' > release-evidence/scheduler.json
             psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -f ops/leader20/observation-status.sql > release-evidence/observation.json
             if node -e 'const r=require("./release-evidence/observation.json");if(r.members!==20||r.fresh_full_members!==20||r.heartbeat_age_seconds>20||r.active_strategy!=="LEGACY"||r.archive_max_bytes!==0)process.exit(1)'; then break; fi
