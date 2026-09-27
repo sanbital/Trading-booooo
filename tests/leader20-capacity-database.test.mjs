@@ -26,6 +26,10 @@ test('monthly budget and bounded private archive PostgreSQL transitions',async t
  await db.exec(await sql('supabase/migrations/20260927121708_leader20_campaigns.sql'));
  await db.exec(await sql('supabase/migrations/20260927131311_leader20_unicode_symbols.sql'));
  await db.exec(await sql('supabase/migrations/20260927140218_leader20_capacity_and_retention.sql'));
+ await db.exec(`create schema evolution_private; create table evolution_private.budget(day date primary key,spent numeric default 0,reserved numeric default 0);
+  create table evolution_control(singleton boolean,daily_api_cap_usd numeric,max_daily_api_calls integer); insert into evolution_control values(true,10,600);
+  create schema cron; create table cron.job(jobid bigint,jobname text); create function cron.alter_job(bigint,schedule text) returns void language sql as 'select';`);
+ await db.exec(await sql('supabase/migrations/20260927145129_leader20_all_ai_monthly_budget.sql'));
  const q=async(s,a=[])=>(await db.query(s,a)).rows;
  const rpc=async(n,a)=>(await q(`select public.${n}(${a.map((_,i)=>'$'+(i+1)).join(',')}) r`,a))[0].r;
  const owner=crypto.randomUUID(),ref='USER-APPROVED-2026-09-27-MONTHLY50-AI40-STORAGE10';
@@ -47,6 +51,13 @@ test('monthly budget and bounded private archive PostgreSQL transitions',async t
   await db.exec("insert into gpt_final_review_daily_budget(utc_day,cap_usd,max_calls,reserved_usd,calls) values(case when extract(day from current_date)>1 then current_date-1 else current_date+1 end,40,100,39.9,1)");
   await assert.rejects(claim({identity:{position_id:'held'}}),/API_BUDGET_EXHAUSTED/);
   await db.exec('delete from gpt_final_review_daily_budget where utc_day<>current_date');
+ });
+ await t.test('historical research charges and uncertain reservations share the same monthly ceiling',async()=>{
+  await db.exec('insert into evolution_private.budget values(current_date,30,9.9)');
+  await assert.rejects(claim({identity:{position_id:'held'}}),/API_BUDGET_EXHAUSTED/);
+  assert.equal(Number((await q('select public.ai_monthly_spend_used(current_date) used'))[0].used),39.9);
+  await assert.rejects(db.exec('update evolution_control set daily_api_cap_usd=10'),/evolution_paid_research_monthly50_disabled/);
+  await db.exec('delete from evolution_private.budget');
  });
  await t.test('the production service role can reserve without permission to edit controls',async()=>{
   await db.exec('set role service_role');
