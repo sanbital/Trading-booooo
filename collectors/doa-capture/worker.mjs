@@ -1,4 +1,4 @@
-import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields} from './core.mjs';
+import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval} from './core.mjs';
 import {randomUUID} from 'node:crypto';
 import {summarizeCapture} from './context.mjs';
 const endpoint=process.env.CAPTURE_ENDPOINT;
@@ -24,30 +24,44 @@ async function publicGet(path,weight){
 }
 function enqueue(row){const key=row.kind+':'+row.symbol+':'+row.at;if(seen.has(key))return;seen.set(key,Date.now());queue.set(key,row);if(queue.size>1200)throw Error('PERSIST_QUEUE_CAP');}
 function connect(symbol,candles){
-  const s={symbol,candles,book:new Book(),flow:new Flow(),ring:[],socket:null,marketSocket:null,started:Date.now(),lastBucket:Date.now(),lastTradeAt:0,lastCandle:null,needBackfill:candles,reconnectAt:0};
+  const s={symbol,candles,book:new Book(),flow:new Flow(),ring:[],socket:null,marketSocket:null,started:Date.now(),lastBucket:Date.now(),marketResetAt:Date.now(),marketSequenceVerified:true,bookGeneration:0,lastTradeAt:0,lastCandle:null,needBackfill:candles,bookReconnectAt:0,marketReconnectAt:0};
   states.set(symbol,s);openSocket(s);return s;
 }
 function openSocket(s){
-  s.book.reset();s.flow=new Flow();s.started=Date.now();s.lastBucket=Date.now();
   const urls=streamURLs(s.symbol);
-  const ws=new WebSocket(urls.book),marketWs=new WebSocket(urls.market);
-  s.socket=ws;
-  s.marketSocket=marketWs;
-  const retire=()=>{if(s.socket!==ws)return;s.socket=null;s.marketSocket=null;s.book.reset();s.flow.complete=false;s.reconnectAt=Date.now()+5000;ws.close();marketWs.close();};
-  const message=msg=>{try{
-    if(s.socket!==ws)return;
+  if(!s.socket){
+    s.book.reset();s.bookGeneration++;s.started=Date.now();
+    const ws=new WebSocket(urls.book);s.socket=ws;
+    const retire=()=>{if(s.socket!==ws)return;s.socket=null;retireBookCapture(s,Date.now());ws.close();};
+    ws.addEventListener('message',msg=>{let eventIds;try{
+      if(s.socket!==ws)return;
+      const e=JSON.parse(msg.data).data,now=Date.now();
+      if(!e || (e.st!==undefined && +e.st!==1) || e.s && e.s!==s.symbol)return;
+      eventIds={U:e.U,u:e.u,pu:e.pu,previous_u:s.book.last,event_ms:e.E,received_ms:now};
+      if(!transportFresh(e,now))throw Error('TRANSPORT_EVENT_STALE_OR_FUTURE');
+      if(e.e==='depthUpdate')s.book.event(e,now);
+    }catch(e){wsGaps++;retire();log('STREAM_GAP',{symbol:s.symbol,stream:'book',reason:e.message,event_ids:eventIds});}});
+    ws.addEventListener('error',retire);ws.addEventListener('close',retire);
+  }
+  if(!s.marketSocket){
+    const marketWs=new WebSocket(urls.market);s.marketSocket=marketWs;
+    const retire=()=>{if(s.marketSocket!==marketWs)return;s.marketSocket=null;retireMarketCapture(s,Date.now());marketWs.close();};
+    marketWs.addEventListener('message',msg=>{let eventIds;try{
+    if(s.marketSocket!==marketWs)return;
     const e=JSON.parse(msg.data).data;const now=Date.now();
     if(!e || (e.st!==undefined && +e.st!==1) || e.s && e.s!==s.symbol)return;
+    eventIds={aggregate_id:e.a,previous_aggregate_id:s.flow.last,event_ms:e.E,trade_ms:e.T,received_ms:now};
     if(!transportFresh(e,now))throw Error('TRANSPORT_EVENT_STALE_OR_FUTURE');
-    if(e.e==='depthUpdate')s.book.event(e,now);
-    if(e.e==='aggTrade'){s.flow.event(e,now);s.lastTradeAt=now;}
+    if(e.e==='aggTrade'){
+      const previous=s.flow.last;
+      s.flow.event(e,now);
+      if(!s.marketSequenceVerified && previous!==null && +e.a===previous+1)s.marketSequenceVerified=true;
+      s.lastTradeAt=now;
+    }
     if(e.e==='forceOrder')s.flow.liquidation+=Number(e.o.ap||e.o.p)*Number(e.o.z);
     if(e.e==='kline' && e.k.x){const k=e.k;s.lastCandle=closedCandle(e,now);if(s.candles)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k.t),payload:{open:+k.o,high:+k.h,low:+k.l,close:+k.c,quote_volume:+k.q,taker_buy_quote:+k.Q,exchange_at:iso(+e.E),available_at:iso(now),source:'WS_CLOSED',complete:true}});}
-  }catch(e){wsGaps++;retire();log('STREAM_GAP',{symbol:s.symbol,reason:e.message});}};
-  for(const socket of [ws,marketWs]){
-    socket.addEventListener('message',message);
-    socket.addEventListener('error',retire);
-    socket.addEventListener('close',retire);
+    }catch(e){wsGaps++;retire();log('STREAM_GAP',{symbol:s.symbol,stream:'market',reason:e.message,event_ids:eventIds});}});
+    marketWs.addEventListener('error',retire);marketWs.addEventListener('close',retire);
   }
 }
 async function watch(){
@@ -79,9 +93,11 @@ async function recover(){
     for(const s of [...states.values()].sort((a,b)=>Number(!a.roles?.includes('OPEN_POSITION'))-Number(!b.roles?.includes('OPEN_POSITION')))){
       if(s.socket?.readyState!==WebSocket.OPEN)continue;
       if(s.book.needsCoverageRefresh(Date.now())){
-        s.book.reset();coverageRefreshes++;log('COVERAGE_BOUNDARY_RESYNC',{symbol:s.symbol});
+        s.book.reset();s.bookGeneration++;coverageRefreshes++;log('COVERAGE_BOUNDARY_RESYNC',{symbol:s.symbol});
       }
-      if(s.book.last===null){const snap=await publicGet('/fapi/v1/depth?symbol='+s.symbol+'&limit=1000',20);if(snap){try{s.book.snapshot(snap,Date.now());}catch(e){s.book.reset();throw e;}return;}}
+      if(s.book.last===null){const generation=s.bookGeneration,socket=s.socket;
+        const snap=await publicGet('/fapi/v1/depth?symbol='+s.symbol+'&limit=1000',20);
+        if(snap && snapshotStillCurrent(s,generation,socket)){try{s.book.snapshot(snap,Date.now());}catch(e){s.book.reset();s.bookGeneration++;throw e;}return;}}
       if(s.needBackfill){const rows=await publicGet('/fapi/v1/klines?symbol='+s.symbol+'&interval=1m&limit=65',2);if(rows){for(const k of rows)if(+k[6]<Date.now() && +k[0]>=boot-120000)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k[0]),payload:{open:+k[1],high:+k[2],low:+k[3],close:+k[4],quote_volume:+k[7],taker_buy_quote:+k[10],available_at:iso(Date.now()),source:'REST_CLOSED_BACKFILL',complete:true}});s.needBackfill=false;return;}}
     }
   }catch(e){restFailures++;log('RECOVERY_ERROR',{reason:e.message});}finally{busyRest=false;}
@@ -91,7 +107,7 @@ function bucket(now){
   const btc=states.get('BTCUSDT')?.lastCandle;
   for(const s of states.values()){
     const m=s.book.metrics(now),flow=s.flow.metrics(now);
-    const full=s.started<=s.lastBucket && s.book.syncAt<=s.lastBucket && now-s.lastBucket>=4500 && now-s.lastBucket<=5500;
+    const full=completeCaptureInterval(s,now,s.marketSocket?.readyState===WebSocket.OPEN);
     const row={kind:'micro',symbol:s.symbol,at:iso(Math.floor(now/5000)*5000),payload:{...m,...flow,available_at:iso(now),interval_start:iso(s.lastBucket),interval_end:iso(now),interval_ms:now-s.lastBucket,
       bucket_complete:full && m.book_complete && flow.trade_sequence_complete && flow.flow_causal,
       ...btcCandleFields(btc,now),watch_roles:s.roles??[],sector_return_1m:null,sector_map_version:null,maker_fee_bps:null,taker_fee_bps:null,funding_cashflow:null,
@@ -127,7 +143,7 @@ const timer=setInterval(()=>{
   if(stop || now>=deadline || now-lastControl>90000 || (!production&&now-boot>14*86400000) || process.memoryUsage().rss>230000000){clearInterval(timer);for(const s of states.values()){s.socket?.close();s.marketSocket?.close();}log('STOPPED',{reason:stop?'CONTROL_OR_SIGNAL':now>=deadline?'DEADLINE':now-lastControl>90000?'CONTROL_STALE':'RESOURCE_CAP'});setTimeout(()=>process.exit(stop?0:1),1000);return;}
   try{
     const b=Math.floor(now/5000);if(b!==previousBucket){bucket(now);previousBucket=b;bucketFlushDue=true;}
-    for(const s of states.values())if((!s.socket||s.socket.readyState===WebSocket.CLOSED) && now>=s.reconnectAt)openSocket(s);
+    for(const s of states.values())if((!s.socket && now>=s.bookReconnectAt)||(!s.marketSocket && now>=s.marketReconnectAt))openSocket(s);
     void recover();
     if(!watchTask&&now-lastWatch>=15000){lastWatch=now;watchTask=watch().catch(e=>log('CONTROL_ERROR',{reason:e.message})).finally(()=>{watchTask=null;});}
     // Keep one in-flight ingest; a newly closed bucket must not wait for an unrelated timer phase.

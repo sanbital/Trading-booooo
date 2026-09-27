@@ -22,8 +22,10 @@ export class Book {
   event(e,t) {
     // Before snapshot, retain only the latest20s; a missing bridge still fails closed.
     if (this.last===null) { if(this.buffer.length>=200)this.buffer.shift(); this.buffer.push([e,t]); return; }
-    if (+e.u<this.last || (this.ready && +e.u===this.last)) return;
-    if ((!this.ready && !(+e.U<=this.last && +e.u>=this.last)) || (this.ready && +e.pu!==this.last)) throw Error('DEPTH_GAP');
+    // USD-M: discard updates already included in the snapshot; the first
+    // applied diff must span lastUpdateId + 1 (not lastUpdateId).
+    if (+e.u<=this.last) return;
+    if ((!this.ready && !(+e.U<=this.last+1 && +e.u>=this.last+1)) || (this.ready && +e.pu!==this.last)) throw Error('DEPTH_GAP');
     for(const [side,rows] of [[this.bids,e.b],[this.asks,e.a]]) for(const [p0,q0] of rows) {
       const p=+p0,q=+q0,old=side.get(p)||0;
       if(side===this.asks && this.ready) { this.add+=Math.max(0,q-old)*p; this.remove+=Math.max(0,old-q)*p; }
@@ -86,6 +88,23 @@ export class Flow {
     while(this.seconds.size>30) this.seconds.delete(this.seconds.keys().next().value);
   }
   metrics(cutoff=Date.now()){return {trade_event_at:this.eventAt===null?null:iso(this.eventAt),trade_received_at:this.receivedAt===null?null:iso(this.receivedAt),flow_causal:!this.invalidTime&&(this.eventAt===null||this.eventAt<=cutoff)&&(this.receivedAt===null||this.receivedAt<=cutoff),buy_quote_5s:this.buy,sell_quote_5s:this.sell,sell_quote_max_1s:Math.max(0,...this.seconds.values()),trade_count:this.count,trade_sequence_complete:this.complete,observed_liquidation_usdt:this.liquidation,liquidation_complete:false};}
+}
+// Keep exchange streams independent: a depth reconnect must not erase a
+// still continuous trade stream or move the five-second bucket boundary.
+export function retireBookCapture(s,now){
+  s.book.reset();s.bookGeneration++;s.bookReconnectAt=now+5000;
+}
+export function retireMarketCapture(s,now){
+  s.flow.complete=false;s.marketSequenceVerified=false;
+  s.marketResetAt=now;s.marketReconnectAt=now+5000;
+}
+export function snapshotStillCurrent(s,generation,socket){
+  return s.bookGeneration===generation && s.socket===socket;
+}
+export function completeCaptureInterval(s,now,marketOpen){
+  return s.started<=s.lastBucket && s.book.syncAt<=s.lastBucket &&
+    s.marketResetAt<=s.lastBucket && s.marketSequenceVerified && marketOpen &&
+    now-s.lastBucket>=4500 && now-s.lastBucket<=5500;
 }
 export function inWindow(t,windows,symbol){return windows.some(w=>w.symbol===symbol && t>=Date.parse(w.at)-60000 && t<=Date.parse(w.at)+120000);}
 export class WeightBudget {
