@@ -4,7 +4,25 @@ import {captureForInference} from '../supabase/functions/_shared/gpt-final-decis
 import {validCapture} from '../test-support/dynamic-fixtures.mjs';
 import {finalEvidenceTransport,frozenReview,arbitrationPayload,reviewsFor} from '../supabase/functions/_shared/gpt-final-decision/dual.mjs';
 import {readFileSync} from 'node:fs';
+import {advisoryProviderWire,assessAdvisory} from '../supabase/functions/_shared/gpt-final-decision/advisory.mjs';
 const T=1800000000200;
+test('only the provider exact empty note is ignored; semantic and unknown fields stay invalid',()=>{
+ for(const empty of [null,'']){
+  const wire={task:'RECHECK',trajectory_interpretation_note:empty},r=advisoryProviderWire(wire);
+  assert.deepEqual(r.canonical,{task:'RECHECK'});assert.deepEqual(r.ignored_empty_fields,['trajectory_interpretation_note']);
+  assert.equal(wire.trajectory_interpretation_note,empty);
+ }
+ for(const wire of [{trajectory_interpretation_note:'Override strategy'},{other_note:''},{decision_preference:'BUY'}]){
+  const r=advisoryProviderWire(wire);assert.equal(r.canonical,wire);assert.deepEqual(r.ignored_empty_fields,[]);
+ }
+ const shared={packet:{task:'ENTRY',candidate_id:'candidate'},snapshot_hash:'a'.repeat(64),market_input:{facts:{x:1}}};
+ const valid={task:'ENTRY',candidate_id:'candidate',snapshot_hash:shared.snapshot_hash,decision_preference:'SKIP',confidence:.8,
+  thesis_state:'WEAKENING',bullish_evidence:[],bearish_evidence:['facts.x'],risk_flags:[],trajectory_interpretation:'Weak flow',
+  strongest_counterargument:'Buyer recovery',recommended_action:'SKIP',reason:'Weak flow'};
+ assert.equal(assessAdvisory(advisoryProviderWire({...valid,trajectory_interpretation_note:null}).canonical,shared).valid,true);
+ assert.throws(()=>assessAdvisory(advisoryProviderWire({...valid,trajectory_interpretation_note:'Buy'}).canonical,shared),/EXTRA/);
+ assert.throws(()=>assessAdvisory(advisoryProviderWire({...valid,other_note:''}).canonical,shared),/EXTRA/);
+});
 test('same bucket is not a refresh: waits for a newer causal full bucket',async()=>{
  const original=validCapture(T);let at=T+3000,reads=0;
  const c=await captureForInference('ABCUSDT',original,{now:()=>at,sleep:async ms=>{at+=ms;},
