@@ -18,6 +18,11 @@ the reason is gone.
 
 ## Authority
 
+`GPT_FINAL_ONLY` describes normal arbitration and is exclusive for ENTRY and protection raises.
+A valid GPT decision takes precedence. The existing exception is fresh, identity/snapshot/evidence-bound
+DeepSeek emergency HOLD/EXIT when GPT cannot provide a valid judgment. Its PROTECT keeps the approved
+stop and increases review sensitivity only. This exception never grants ENTRY or a protection raise.
+
 | class | examples | approval |
 | --- | --- | --- |
 | HARD_SAFETY | `NATIVE_HARD_STOP`, `R5_RISK_CUT`, liquidation, reconciliation corruption, invalid position state, exchange critical failure | none — executes immediately, before any model call |
@@ -55,6 +60,9 @@ from `approvedProtection()`, never from the candidate.
   cannot lower the protection of a position that is open across it.
 - Software may close on a crossing of the **approved** level only (the gap backstop for the
   resident order). An unapproved candidate crossing closes nothing; it starts a review.
+- Refreshing the executable bid recomputes both approved/candidate crossing flags while keeping
+  the bound levels fixed. A partially filled exit retains native protection at the reconciled
+  residual quantity, with the symbol's actual tick and quantity step; only flat positions use cleanup.
 
 ## How a candidate reaches the reviewer
 

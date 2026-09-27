@@ -132,14 +132,18 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dyn
  }
  return {close:false,reason:timeCandidate&&st.holdUntil&&now<st.holdUntil?'FD1_GPT_HOLD':null,state:st};
 }
-function refreshExitContext(c,book,at){
+export function refreshExitContext(c,book,at){
  if(!c)return null;
  const bid=Number(book?.bids?.[0]?.[0]),entry=Number(c.entry_price),peak=Math.max(Number(c.peak??entry),bid);
  if(!(bid>0&&entry>0))throw Error('LIVE_POSITION_QUOTE_UNAVAILABLE');
+ const crossed=level=>Number.isFinite(Number(level))&&Number(level)>0&&bid<=Number(level);
  return {...c,snapshot_at_ms:at,current_price:bid,peak,mfe:peak/entry-1,
   mae:Math.min(c.mae??0,bid/entry-1),mfe_giveback:peak>entry?(peak-bid)/(peak-entry):0,drawdown:bid/peak-1,
+  ...(c.protection?{protection:{...c.protection,
+   approved_crossed:crossed(c.protection.approved_soft_stop),
+   candidate_crossed:crossed(c.protection.candidate_soft_stop)}}:{}),
   hard_hit:bid<=c.hard_floor,soft_trigger:c.soft_trigger?{...c.soft_trigger,
-   distance:c.soft_trigger.level?bid/c.soft_trigger.level-1:null,crossed:c.soft_trigger.level?bid<=c.soft_trigger.level:false}:null};
+   distance:c.soft_trigger.level?bid/c.soft_trigger.level-1:null,crossed:crossed(c.soft_trigger.level)}:null};
 }
 /** Build and ask one HOLD review from live public data. Never throws. */
 export async function runHoldReview({position,event,timeCandidate,stopStage,exitContext=null,apiKey,deepseekKey,fetchFn=fetch,now=Date.now,onPacket,dynamicState=null}){

@@ -124,7 +124,7 @@ test('15 QV3 policy rules and exit decision remain byte-identical; V20 adds audi
   const current=readFileSync(new URL('../../supabase/functions/_shared/leader-qv3-runtime.mjs',import.meta.url),'utf8');
   const prior=execFileSync('git',['show',`${basis}:supabase/functions/_shared/leader-qv3-runtime.mjs`],{cwd,encoding:'utf8'});
   const exitDecision=source=>source.slice(source.indexOf('export function qv3Exit('),source.indexOf('/** Public GET only.',source.indexOf('export function qv3Exit(')));
-  assert.equal(exitDecision(current),exitDecision(prior));
+  assert.equal(exitDecision(current).replace(/\r\n/g,'\n'),exitDecision(prior).replace(/\r\n/g,'\n'));
   assert.match(current,/QV3_INPUT_EVIDENCE_VERSION='QV3_INPUT_EVIDENCE_1'/);
   assert.match(current,/export function qv3AuditEvidence\(/);
 });

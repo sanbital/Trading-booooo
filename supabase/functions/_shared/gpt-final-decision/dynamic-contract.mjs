@@ -1,4 +1,4 @@
-import {DYNAMIC_VERSION, HORIZONS, entryCaptureSafety} from './dynamic-flow.mjs';
+import {DYNAMIC_VERSION, DYNAMIC_POLICY, HORIZONS, entryCaptureSafety} from './dynamic-flow.mjs';
 const obj = properties => ({type:'object',properties,required:Object.keys(properties),additionalProperties:false});
 const prose = {type:'string',minLength:1,maxLength:280};
 const citation = {type:'string',minLength:1,maxLength:160};
@@ -20,7 +20,8 @@ The reason must explain why entering now is preferable to waiting; never substit
 If the full trajectory is unavailable, incomplete or stale, ENTRY/RECHECK must WAIT or SKIP. A fresh quote does not refresh a trajectory.
 For an existing position, unavailable trajectory means DATA_DEGRADED, never an automatic HOLD or EXIT.
 Keep the native hard stop and last approved protection. Consider emergency tape/book evidence, last valid capture age and price drift.
-If the server reports DeepSeek unavailable or invalid, reduce confidence and require clear propulsion to BUY; otherwise WAIT.
+For ENTRY/RECHECK with advisor_valid=false, BUY requires confidence >= ${DYNAMIC_POLICY.singleModelBuyConfidence} and propulsion_direction ACCELERATING or STABLE.
+Report confidence honestly; do not inflate it to pass this rule. Otherwise WAIT or SKIP.
 Advisor validity and dual confidence status are server-owned; never generate them.
 Use multi-axis weakness for entry failure and loss of thesis. A single negative bucket or normal winner pullback does not require EXIT.
 Time elapsed may schedule a review but never supplies an exit reason. Protection can only rise.

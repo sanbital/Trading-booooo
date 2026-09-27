@@ -144,7 +144,7 @@ test('CHASE_EXTENDED is offered only for a LIVE chase packet; an ordinary packet
 });
 test('ENTRY prompt/schema: evidence and EV are written before the decision; HOLD contract unchanged',async()=>{
   const e=PROMPTS.ENTRY;
-  for(const x of ['정보가 완벽하지 않다는 이유만으로 ABSTAIN하지 마라','기록용이며 차단 기준이 아니다','DATA_INSUFFICIENT',
+  for(const x of ['정보가 완벽하지 않다는 이유만으로 ABSTAIN하지 마라','advisor_valid=false','그 외 기록용이다','DATA_INSUFFICIENT',
     'EVIDENCE_CONFLICT_SEVERE','EV_UNDETERMINABLE','EXECUTION_UNSAFE',EV_SKIP,'CHASE_EXTENDED'])assert.ok(e.includes(x),x);
   const order=Object.keys(wireSchema('ENTRY').properties);
   for(const k of ['support','bearish','invalidation','upside_pct','downside_pct','ev','confidence'])
