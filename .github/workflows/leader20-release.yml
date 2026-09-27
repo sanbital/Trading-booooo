@@ -90,7 +90,8 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
-          export LEADER20_TRADE_VALIDATOR_MD5="$(node -p 'require("./deployment-evidence/leader20-release-request.json").collector_trade_validator_md5')"
+          LEADER20_TRADE_VALIDATOR_MD5="$(node -p 'require("./deployment-evidence/leader20-release-request.json").collector_trade_validator_md5')"
+          export LEADER20_TRADE_VALIDATOR_MD5
           docker build --build-arg "SOURCE_COMMIT=$GITHUB_SHA" -t "registry.fly.io/sanbital-doa-capture-20260925:$GITHUB_SHA" collectors/doa-capture
           node collectors/doa-capture/release-market-sensor.mjs
           node --input-type=module -e 'import fs from "node:fs";const r=JSON.parse(fs.readFileSync("market-sensor-release.json"));const {samples,...summary}=r;summary.sample_count=samples.length;summary.last_sample={at:samples.at(-1).at,heartbeat_age_s:samples.at(-1).heartbeat_age_s,watched:samples.at(-1).metrics.watched,synced:samples.at(-1).metrics.synced,order_calls:samples.at(-1).metrics.order_calls,llm_calls:samples.at(-1).metrics.llm_calls,sensor_status:samples.at(-1).sensor.status};fs.writeFileSync("release-evidence/collector-release.json",JSON.stringify(summary,null,2));'
