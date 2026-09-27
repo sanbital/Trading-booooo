@@ -68,7 +68,7 @@ When capture_context.representation is COMPACT_WITH_ORIGINAL_BUCKET_INDEX, traje
 capture_context.critical_segments paths; their array index is the compact index, while each segment.index records its original bucket index.
 For RECHECK the market facts are nested: current.facts.trend.return_5m. Copy actual paths from input.
 Do not output bare fact names, values, explanations or evidence objects in these two arrays.
-Keep each prose field to at most two short sentences and each evidence array to at most six paths.
+Keep each prose field to one short clause, at most twenty words. Use at most three paths in each evidence array and at most three risk_flags.
 Give concise evidence-based conclusions, no chain-of-thought. Confidence is uncalibrated, never a vote or gate.
 Set task from input.t; copy candidate_id and snapshot.snapshot_hash exactly. Return one JSON object matching the schema.`;
 export async function callAdvisory(shared,{apiKey,fetchFn=fetch,now=Date.now,timeoutMs=5000}={}){
