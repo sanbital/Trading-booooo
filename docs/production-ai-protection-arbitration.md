@@ -56,6 +56,22 @@ from `approvedProtection()`, never from the candidate.
 - Software may close on a crossing of the **approved** level only (the gap backstop for the
   resident order). An unapproved candidate crossing closes nothing; it starts a review.
 
+## How a candidate reaches the reviewer
+
+Review triggers are unchanged. A candidate is carried in `exit_context.protection` on **every**
+review, whatever started it (a dynamics event, momentum deterioration, a significant price move, a
+protection reassessment, a time candidate, or a crossing), so GPT can approve a raise at any review.
+A crossing of an unapproved candidate is itself a trigger (`SOFT_PROTECTION_TRIGGER:<reason>`), and
+because `softArmed` re-arms whenever the candidate is not active, the first crossing after a quiet
+period asks immediately.
+
+A candidate merely *existing* above the approved level is deliberately **not** a new trigger. The
+trailing ladder recomputes from the peak, so in a strong uptrend the candidate rises on nearly every
+new high; making that a trigger would spend `HOLD_POLICY.maxReviews` (30 per hour) inside minutes and
+leave the position with no reviewer at all — exactly the strong-winner case this change exists to
+protect. The accepted residual: between a candidate appearing and the reviewer approving it, the gap
+protection is the hard floor, not the candidate. That is the trade the authority split makes.
+
 ## Audit
 
 `public.v11_protection_decisions` — append-only, service-only, insert+select grants only. One row

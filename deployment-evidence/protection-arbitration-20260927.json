@@ -1,0 +1,113 @@
+{
+  "release": "AI_PROTECTION_ARBITRATION_1",
+  "status": "DEPLOYED TO PRODUCTION, LIVE EFFECT PENDING NEXT NATURALLY OCCURRING POSITION",
+  "implementation_commit": "2965e30700a1ccea73a68d73c54e37c1ea1f38a8",
+  "release_commit": "d161c53049243ee1d960b18721dcede31445c11b",
+  "workflow_run": "https://github.com/sanbital/Trading-booooo/actions/runs/36289425508",
+  "project": "etaajwpernzrcdrifdnw",
+  "baseline": {
+    "main": "d06528b40d0bd637206aae5338e0ed99a4cd7af5",
+    "executor_version": 107,
+    "executor_ezbr_sha256": "b7d67b97ddfa3d513367349d26fae42e6dbc4ca4623d81bac2c59a767f95e884",
+    "self_evolution_worker_version": 6,
+    "drift_vs_repo_head": "NONE (all 67 bundle files byte-identical before the change)",
+    "regression": "694/694 node tests before any edit"
+  },
+  "deployment": {
+    "deployed_at": "2026-09-27T02:47:39Z",
+    "executor_version": 108,
+    "executor_ezbr_sha256": "fa86a068927ae1a556b04d8e2f2508e7f28ca252f0c42297f0f62dbdcff06f89",
+    "executor_bundle_digest": "a2a0864c17700608ffb8bac1b41bee9669d99323edd814e89e03b283c3d0939e",
+    "executor_files_verified": 66,
+    "self_evolution_worker_version": 7,
+    "self_evolution_worker_ezbr_sha256": "0f26ccdbbe02ec7d0132f9208a09a562a296f6ae5a69952262ec9c6d00b20fcc",
+    "self_evolution_worker_bundle_digest": "171dcb37630e3d76db2f69b2079dc593f00fb702fcced503e125eec686d71661",
+    "self_evolution_worker_files_verified": 36,
+    "bundle_parity": "verified:true for both, byte-identical to d161c530",
+    "exit_authority_mjs_sha256": "d219384a46068bdbbb4ffdee840ded02a79a8457b413fcdeb0bf821405004b03",
+    "hold_mjs_sha256": "96d8daecaef7909b0b98d655b0254fbf55b4e8bf1c20b4008d2c922be684a57f",
+    "migrations": [
+      "20260927023658_protection_arbitration_audit",
+      "20260927023747_protection_audit_append_only"
+    ]
+  },
+  "changed_files_vs_v107": [
+    "supabase/functions/_shared/exit-authority.mjs",
+    "supabase/functions/_shared/gpt-final-decision/hold.mjs",
+    "supabase/functions/_shared/gpt-final-decision/dual.mjs",
+    "supabase/functions/_shared/gpt-final-decision/advisory.mjs",
+    "supabase/functions/_shared/gpt-final-decision/prompt.mjs",
+    "supabase/functions/v10-lane-executor/gpt-final-decision-adapter.mjs",
+    "supabase/functions/v10-lane-executor/index.ts",
+    "supabase/functions/_shared/self-evolution/portfolio.mjs (evolution worker only, research)"
+  ],
+  "unchanged_and_proved_unchanged": {
+    "money_management": "targetMarginUsdt 150, leverage 3, MAX_SLOTS 10, SETUP_MAX_CONCURRENT = MAX_SLOTS; leader-slot-sizing.mjs and leader-momentum-v17.mjs byte-identical to the baseline",
+    "hard_safety_and_execution": "leader-native-protection.mjs, leader-protection-adapter.mjs, leader-exit-review.mjs, leader-cec0040.mjs (retestAnchor engine incl. P142_STOP_WIDENED), entry/exit settlement, reconciliation, fill evidence, ops isolation, entry control, qv3, boo, all entry adapters: byte-identical to the baseline",
+    "production_controls": "mode LIVE_LIMITED, circuit closed, GPT mode and API budget, allocation 150 USDT, leverage 3, max 10 slots: read-only asserted before and after, never written"
+  },
+  "production_state": {
+    "before": {"settings": "150|3|10|LIVE_LIMITED", "open_positions": 1, "runtime": "live_enabled true, circuit_open false"},
+    "after": {"settings": "150|3|10|LIVE_LIMITED", "open_positions": 0, "unresolved_orders_2h": 0, "protection_audit_rows": 0}
+  },
+  "runtime_smoke_test": {
+    "mode": "ops-readiness + preflight, order-free",
+    "patch": "FD1-MULTISLOT-CAPACITY-1",
+    "protectionArbitration": {
+      "version": "AI_PROTECTION_ARBITRATION_1",
+      "actions": ["HOLD", "RAISE_PROTECTION", "EXIT"],
+      "candidateRaisesProtection": false,
+      "approver": "GPT_FINAL_ONLY",
+      "lowering": "IMPOSSIBLE",
+      "onReviewerFailure": "KEEP_LAST_APPROVED_PROTECTION",
+      "hardSafetyIndependent": true,
+      "auditTable": "v11_protection_decisions"
+    },
+    "binance": "positionsComplete true, openOrdersComplete true",
+    "orders_placed_by_this_release": 0
+  },
+  "defect_evidence": [
+    {
+      "position_id": "eb583cdc-3414-48fb-a559-e097476281be",
+      "symbol": "SOONUSDT",
+      "entry": 0.231022,
+      "peak": 0.2365,
+      "hard_floor": 0.2283,
+      "deterministic_candidates_made_resident": [
+        {"at": "2026-09-26T21:36:15Z", "level": 0.233511, "stage": "PROFIT_LOCK"},
+        {"at": "2026-09-26T21:38:18Z", "level": 0.233911, "stage": "retestAnchor_LOCK"}
+      ],
+      "reviewer_state_at_those_raises": "fd1Hold.protectLevel null throughout; last decision HOLD at 21:33:19Z, then ABSTAIN (FD1_FINAL_TIMEOUT)",
+      "exit": {"price": 0.234, "reason": "retestAnchor_LOCK", "net_usdt": 5.35370356000007},
+      "counterfactual": "price then fell through the 0.2283 hard floor, so the arbitrated path would have exited there instead"
+    },
+    {
+      "position_id": "028fc6b2-b062-4713-b7db-99a647f70a14",
+      "symbol": "SOONUSDT",
+      "note": "second live instance, closed 02:44Z on 2026-09-27 under v107 while this release was already in CI",
+      "entry": 0.2477,
+      "peak": 0.2778,
+      "hard_floor": 0.2448,
+      "reviewer_answered_PROTECT_at": "2026-09-27T02:40:19Z",
+      "ai_protect_level_v107_invented": 0.26608925,
+      "deterministic_candidate_made_resident_instead": 0.267132,
+      "later_unapproved_raises": [0.2717615, 0.273633, 0.2737],
+      "reviewer_state_at_those_raises": "ABSTAIN",
+      "exit": {"price": 0.2737, "reason": "V17_TRAILING_STOP"},
+      "under_v108": "the 02:40 PROTECT would have approved exactly the reviewed candidate 0.267132; the later ABSTAIN raises to 0.2717615/0.273633/0.2737 would not have been applied"
+    }
+  ],
+  "tests": {
+    "local_full_node_sweep": "1238/1238 pass (every *.test.mjs outside research/)",
+    "release_gpt_reviewer_and_executor_bundle": "fail 0",
+    "release_decision_evolution_capture_bundle": "fail 0",
+    "deno": "deno task test, deno task test:entry, leader-slot-sizing.test.ts, margin-config.test.ts, deno check on both deployed entrypoints: all pass in CI",
+    "new_suite": "tests/fd1-protection-arbitration.test.mjs, 20 cases on the live SOON numbers"
+  },
+  "telemetry_for_next_live_position": {
+    "function_status": "v10-lane-executor ops-readiness -> protectionArbitration block",
+    "per_position": "v11_long_regime_positions.metadata.exitAuthority: candidateSoftLevel / approvedSoftLevel / approvedSoftSource / residentLevel / protectionArbitration",
+    "per_decision": "public.v11_protection_decisions (append-only), joined to the review journal row by details->>'reviewJobKey'",
+    "per_tick_audit": "v11_long_regime_decisions.details.protectionArbitration and details.fd1.protectApproval"
+  }
+}
