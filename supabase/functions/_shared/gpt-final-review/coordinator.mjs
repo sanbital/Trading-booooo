@@ -191,7 +191,11 @@ export class FinalReviewCoordinator {
       // Snapshot persistence before the paid request; failures cannot lead to an unrecorded PASS.
       if(this.store.snapshot)await this.store.snapshot(key,owner,record);
       ensure(this.now()<record.valid_until_ms,'REVIEW_TRIGGER_EXPIRED');
-      record.result=this.engine?await this.engine.call(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,deadlineMs:record.valid_until_ms,identity:record.identity}):
+      const analysisDeadline=this.engine?.analysisDeadline?this.engine.analysisDeadline(record.packet,
+        {now:this.now(),executionDeadline:deadlineMs,ordinaryDeadline:record.valid_until_ms}):record.valid_until_ms;
+      ensure(Number.isFinite(analysisDeadline)&&analysisDeadline>this.now(),'REVIEW_RECHECK_ROOM_REQUIRED');
+      record.analysis_deadline_ms=analysisDeadline;
+      record.result=this.engine?await this.engine.call(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,deadlineMs:analysisDeadline,identity:record.identity}):
         await callFinalReviewer(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,
         deadlineMs:record.valid_until_ms,profile:this.profile});
       if(this.engine&&record.result.final_packet){
@@ -200,7 +204,7 @@ export class FinalReviewCoordinator {
         record.valid_until_ms=Math.min(deadlineMs,record.snapshot_at_ms+LIMITS.reviewMaxAgeMs);
       }
     }catch(e){
-      const error=['RETRY_CAPTURE_NOT_ADVANCED','DYNAMIC_INFERENCE_CAPTURE_NOT_READY','REVIEW_TRIGGER_EXPIRED'].includes(e?.message)?e.message:'REVIEW_PREPARATION_FAILED';
+      const error=['RETRY_CAPTURE_NOT_ADVANCED','DYNAMIC_INFERENCE_CAPTURE_NOT_READY','REVIEW_TRIGGER_EXPIRED','REVIEW_RECHECK_ROOM_REQUIRED'].includes(e?.message)?e.message:'REVIEW_PREPARATION_FAILED';
       record.result={origin:'LOCAL_DATA_ERROR',valid:false,decision:'ABSTAIN',error,
         attempted:false,api_cost_usd:0,completed_at_ms:this.now(),model_requested:MODEL,wire_profile:this.profile};
     }
@@ -241,7 +245,8 @@ export class FinalReviewCoordinator {
     const ticket={identityJson,decision:answer.decision,validUntil:r.valid_until_ms,expires,
       candidateId:r.packet.candidate_id,snapshotHash:r.packet.snapshot_hash,model,summary:answer.summary,
       // FINAL RECHECK: what this decision was based on (initial facts, book reference, support).
-      ...(this.engine?{initial:initialContext(r,answer)}:{}),...(aged?{aged:true}:{})};
+      ...(this.engine?{initial:initialContext(r,answer)}:{}),...(aged?{aged:true}:{}),
+      ...(this.engine?.requiresFinalRecheck?.(r.packet)?{requiresFinalRecheck:true}:{})};
     // detail: the stored answer's own reason (SKIP categories / ABSTAIN reason) for the journal.
     const detail=answer.decision==='SKIP'?(answer.reasons??[]).map(x=>x.category).join(','):
       answer.decision==='ABSTAIN'?String(answer.abstain_reason??''):'';
@@ -262,6 +267,8 @@ export class FinalReviewCoordinator {
     const life=retryAuthority&&this.retryLifecycles.get(retryAuthority);
     if(retryAuthority&&(!life||life.signal!==s||life.ticket!==t||life.used||life.deadline===null||now>=life.deadline))
       return {allowed:false,reason:'IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID'};
+    if(t.requiresFinalRecheck&&!life&&supersededBy===null&&!allowAged)
+      return {allowed:false,reason:'GPT_FINAL_RECHECK_REQUIRED'};
     const agedEntry=allowAged===true&&t.aged===true&&supersededBy===null&&!life&&
       now<t.expires-LIMITS.executionReserveMs-AGED_RECHECK_MIN_MS;
     if(!life&&!agedEntry&&((supersededBy===null&&now>=t.validUntil)||now>=t.expires-LIMITS.executionReserveMs))return {allowed:false,reason:'GPT_REVIEW_EXPIRED'};

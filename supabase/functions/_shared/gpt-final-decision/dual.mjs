@@ -1,4 +1,5 @@
 import {boundedDynamicTransportSchema} from './dynamic-contract.mjs';
+import {ENTRY_ANALYSIS,isEntryAnalysis} from './entry-analysis.mjs';
 /** Normal arbitration is GPT FINAL-only. The separately validated emergency HOLD consumer is unchanged. */
 import {callDecision,payloadFor,hash,compactWireSchema} from './api.mjs';
 import {validateDecision,validateShape} from './contract.mjs';
@@ -216,8 +217,10 @@ export function finalEvidenceTransport(payload){
 /** First calls overlap; FINAL always runs. FIRST/advice never become an executable fallback. */
 export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch,now=Date.now,deadlineMs,
   gptCall=callDecision,counterCall=callAdvisory,snapshotAtMs,inputPayload=payloadFor,validate=validateDecision,refreshPacket,policy:policyOverride=null,reviewTier='FULL'}={}){
-  const started=now(),requestedDeadline=Number.isFinite(deadlineMs)?deadlineMs:started+15000;
-  const deadline=dynamicEnabled(packet)&&packet.facts?.capture_context?.status==='AVAILABLE'?
+  const analysis=isEntryAnalysis(packet);
+  const started=now(),requestedDeadline=Math.min(Number.isFinite(deadlineMs)?deadlineMs:started+15000,
+    analysis?started+ENTRY_ANALYSIS.maxMs:Infinity);
+  const deadline=!analysis&&dynamicEnabled(packet)&&packet.facts?.capture_context?.status==='AVAILABLE'?
     Math.min(requestedDeadline,packet.facts.capture_context.end_ms+DYNAMIC_POLICY.absoluteAgeMs-1):requestedDeadline;
   const invalid=error=>({valid:false,decision:'ABSTAIN',answer:null,wire:null,error,attempted:false,completed_at_ms:now(),api_cost_usd:0});
   if(dynamicEnabled(packet)&&packet.task!=='HOLD'){
@@ -234,10 +237,10 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   const completionReserveMs=dynamicEnabled(packet)?Math.min(250,Math.max(0,Math.floor(remainingAtStart*.1))):0;
   // Fresh-bucket acquisition leaves room for both providers. Preserve up to
   // 3.5 seconds for independent advice and 4.5 seconds for the final authority.
-  const finalReserveMs=dynamicEnabled(packet)?Math.min(4500,Math.max(0,Math.floor((remainingAtStart-completionReserveMs)*.6))):0;
+  const finalReserveMs=dynamicEnabled(packet)?Math.min(analysis?ENTRY_ANALYSIS.finalMs:4500,Math.max(0,Math.floor((remainingAtStart-completionReserveMs)*(analysis?.7:.6)))):0;
   const preliminaryMs=dynamicEnabled(packet)?Math.max(0,remainingAtStart-finalReserveMs-completionReserveMs):Infinity;
-  const firstMs=Math.min(preliminaryMs,Math.max(1,Math.min(dynamicEnabled(packet)?2500:6000,remainingAtStart-2500,Math.floor((remainingAtStart-1500)*.65))));
-  const advisoryMs=Math.min(preliminaryMs,Math.max(1,Math.min(dynamicEnabled(packet)?3500:6000,remainingAtStart-2200,Math.floor((remainingAtStart-1200)*.75))));
+  const firstMs=Math.min(preliminaryMs,Math.max(1,Math.min(analysis?ENTRY_ANALYSIS.preliminaryMs:dynamicEnabled(packet)?2500:6000,remainingAtStart-2500,Math.floor((remainingAtStart-1500)*.65))));
+  const advisoryMs=Math.min(preliminaryMs,Math.max(1,Math.min(analysis?ENTRY_ANALYSIS.preliminaryMs:dynamicEnabled(packet)?3500:6000,remainingAtStart-2200,Math.floor((remainingAtStart-1200)*.75))));
   const safe=async fn=>{try{return await fn();}catch{return invalid('FD_PROVIDER_ERROR');}};
   const [first0,ds0]=await Promise.all([
     firstMs>0?safe(()=>gptCall(initial.packet,{apiKey,fetchFn,now,timeoutMs:firstMs,payloadFn:()=>firstPayload(initial),validate:dynamicEnabled(packet)?wire=>validateFirstWire(wire,initial):validate})):invalid('FD_FINAL_BUDGET_RESERVED'),
@@ -253,7 +256,8 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   ds.status=advisoryStatus(ds);
   // Dynamic reviews freeze the freshly collected trajectory for BOTH providers and FINAL.
   // Refreshing only GPT between phases makes the advice a different market question.
-  // If it ages out during inference, fail closed and let the caller collect a new review.
+  // Execution reviews fail closed on age. A campaign ENTRY is only an analysis;
+  // it cannot dispatch and must be superseded by a fresh FINAL RECHECK.
   const refreshBetween=refreshPacket&&!dynamicEnabled(packet);
   let current=initial,refreshError=refreshBetween?'LATEST_SNAPSHOT_UNAVAILABLE':null;
   if(refreshBetween&&deadline-now()>2200){try{
@@ -268,14 +272,14 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   if(refreshError){const u=JSON.parse(finalPayload.input[1].content);u.latest_snapshot_error=refreshError;finalPayload.input[1].content=JSON.stringify(u);}
   const transport=dynamicEnabled(packet)?finalEvidenceTransport(finalPayload):{payload:finalPayload,decode:x=>x};
   const finalStartedAt=now(),remaining=deadline-finalStartedAt-completionReserveMs;
-  let final=remaining>0?await safe(()=>gptCall(current.packet,{apiKey,fetchFn,now,timeoutMs:Math.min(8000,remaining),
+  let final=remaining>0?await safe(()=>gptCall(current.packet,{apiKey,fetchFn,now,timeoutMs:Math.min(analysis?ENTRY_ANALYSIS.finalMs:8000,remaining),
     payloadFn:()=>transport.payload,
     validate:(wire,p)=>validateFinalWire(transport.decode(wire),p,{validate,catalog,advisory:ds})})):invalid('FD_ARBITRATION_NO_TIME');
   if(final.valid===true){try{const wire=transport.decode(final.wire),answer=validateFinalWire(wire,current.packet,{validate,catalog,advisory:ds});
     final={...final,...(JSON.stringify(wire)!==JSON.stringify(final.wire)?{provider_wire:final.wire,wire_encoding:'EXACT_EVIDENCE_IDS_V1'}:{}),wire,answer,decision:answer.decision};}
     catch(e){final={...final,valid:false,decision:'ABSTAIN',answer:null,error:e.message??'FD_FINAL_INVALID'};}}
   if(dynamicEnabled(packet)){
-    const integrity=entryCaptureSafety(current.packet.facts?.capture_context,now());
+    const integrity=entryCaptureSafety(current.packet.facts?.capture_context,analysis?started:now());
     const mismatch=ds.error==='DEEPSEEK_INPUT_MISMATCH'||ds.valid===true&&ds.snapshot_hash!==current.snapshot_hash;
     const wasFull=current.packet.facts?.capture_context?.status==='AVAILABLE';
     if(mismatch||!integrity.ok&&(packet.task!=='HOLD'||wasFull))final={...final,valid:false,
@@ -283,7 +287,7 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   }
   const accepted=final.valid===true&&now()<deadline,arb=accepted?final.answer?.arbitration:null;
   const finalDecision=accepted?final.decision:final.decision==='WAIT'?'WAIT':'ABSTAIN';
-  const audit={version:DUAL_VERSION,authority:'GPT_FINAL_ONLY',review_tier:fast?'FAST':'FULL',first_wire_version:dynamicEnabled(packet)?FIRST_COMPACT_VERSION:null,policy_version:policy.bundle.policy_version,policy_hash:policy.hash,policy_source:policy.source,policy_generation:policy.generation??null,initial_gpt_decision:first.decision??'ABSTAIN',
+  const audit={version:DUAL_VERSION,authority:'GPT_FINAL_ONLY',analysis_mode:analysis?ENTRY_ANALYSIS.version:null,requires_final_recheck:analysis,review_tier:fast?'FAST':'FULL',first_wire_version:dynamicEnabled(packet)?FIRST_COMPACT_VERSION:null,policy_version:policy.bundle.policy_version,policy_hash:policy.hash,policy_source:policy.source,policy_generation:policy.generation??null,initial_gpt_decision:first.decision??'ABSTAIN',
     deepseek_preference:ds.valid===true?ds.answer.decision_preference:null,deepseek_valid:ds.valid===true,
     deepseek_status:ds.status,deepseek_invalid_evidence:ds.invalid_evidence??[],
     deepseek_valid_evidence:ds.valid===true?ds.valid_evidence??[]:[],
@@ -312,6 +316,7 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
     position_id:current.packet.position?.position_id??null,snapshot_at:current.snapshot_at_ms,
     capture_start:capture?.start_ms??null,capture_end:capture?.end_ms??null,capture_age:capture?.end_ms?now()-capture.end_ms:null,
     bucket_count:capture?.trajectory?.length??0,capture_valid:entryCaptureSafety(capture,now()).ok,
+    capture_valid_at_start:entryCaptureSafety(capture,started).ok,requires_final_recheck:analysis,
     trajectory_hash:current.capture_trajectory_hash,gpt_snapshot_hash:current.snapshot_hash,deepseek_snapshot_hash:ds.snapshot_hash??null,
     dynamics:capture?.dynamics??null,MFE:position?.mfe??null,MAE:position?.mae??null,giveback:position?.mfe_giveback??null,
     GPT_result:final.decision,DeepSeek_result:ds.answer??null,final_decision:finalDecision,

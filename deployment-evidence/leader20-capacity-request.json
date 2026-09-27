@@ -1,6 +1,6 @@
 {
   "release": "MONTHLY50_TOP10_20260927",
-  "deployment_attempt": 4,
+  "deployment_attempt": 5,
   "monthly_ai_usd": 45,
   "daily_ai_usd": 1.25,
   "incremental_storage_allowance_usd": 5,
@@ -8,9 +8,9 @@
   "activate_strategy": false,
   "validation_orders": false,
   "expected_versions": {
-    "doa-capture-ingest": 3,
-    "v10-lane-executor": 134,
-    "v10-lane-signal-generator": 33,
-    "self-evolution-worker": 14
+    "doa-capture-ingest": 4,
+    "v10-lane-executor": 135,
+    "v10-lane-signal-generator": 34,
+    "self-evolution-worker": 15
   }
 }

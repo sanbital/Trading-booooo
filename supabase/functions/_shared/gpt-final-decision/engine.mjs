@@ -1,5 +1,6 @@
 import {LEADER20_PROMPT} from '../leader20/decision-contract.mjs';
 import {ECONOMY_VERSION,economyPrompt} from './economy-prompt.mjs';
+import {ENTRY_ANALYSIS,entryAnalysisDeadline,isEntryAnalysis} from './entry-analysis.mjs';
 /** FD1 ENTRY engine for the durable FinalReviewCoordinator (journal, budget ledger,
  * async request, ticket, yield). The coordinator's claim/ledger/TTL/ticket machinery is
  * unchanged; this object only replaces WHAT is asked and how the stored answer is
@@ -39,12 +40,14 @@ export async function readHistory(reader,identity,timeoutMs=1500){
   finally{clearTimeout(timer);}
 }
 export const FD1_ENTRY_ENGINE=Object.freeze({
-  id:FD_VERSION+':ENTRY:'+DUAL_VERSION+':'+DYNAMIC_VERSION+':'+ECONOMY_VERSION,
+  id:FD_VERSION+':ENTRY:'+DUAL_VERSION+':'+DYNAMIC_VERSION+':'+ECONOMY_VERSION+':'+ENTRY_ANALYSIS.version,
   allow:'BUY',
   // An initial BUY that aged past its answer validity while its trigger is still live is
   // not dropped: it may enter the order path only to be re-decided by a forced GPT FINAL
   // RECHECK on fresh data (never dispatched on the aged answer). See coordinator.check().
   agedRecheck:true,
+  analysisDeadline:entryAnalysisDeadline,
+  requiresFinalRecheck:isEntryAnalysis,
   timeoutRecovery:true,
   reobserveWait:identity=>identity.leader20?.version!=='LEADER20_DYNAMIC_1',
   model:MODEL,
