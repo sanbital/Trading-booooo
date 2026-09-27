@@ -1,5 +1,5 @@
 import {LEADER20_PROMPT,leaderDecision} from '../leader20/decision-contract.mjs';
-import {economyPrompt} from './economy-prompt.mjs';
+import {economyPrompt,ECONOMY_VERSION} from './economy-prompt.mjs';
 /** GPT FINAL RECHECK (FD1-RC1): the pre-dispatch confirmation of an INITIAL GPT BUY.
  *
  * GPT stays the only strategy decision maker. This module adds no strategy gate:
@@ -372,7 +372,7 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
       recheck_sequence:sequence,initial_snapshot_hash:String(ticket?.snapshotHash??''),trigger_at_ms:num(f.v17Setup?.triggerAt)};
     key=await hash({version:RECHECK_VERSION,identity,purpose});
     record={version:RECHECK_VERSION,kind:'FD1_FINAL_RECHECK',purpose,recheck_sequence:sequence,api_approval_ref:config.approvalRef,identity,reserved_usd:0.10,
-      source_commit:RECHECK_VERSION,prompt_hash:await hash(RECHECK_PROMPT+ARBITRATION_PROMPT),detection,packet:null,result:null};
+      source_commit:RECHECK_VERSION+':'+ECONOMY_VERSION,prompt_hash:await hash(RECHECK_PROMPT+ARBITRATION_PROMPT+economyPrompt.toString()),detection,packet:null,result:null};
     let claimed,attempt=1;
     try{
       // A sequence with a final answer remains single-use. Only a completed timeout

@@ -1,5 +1,6 @@
 import {FACT_DEFS} from './facts.mjs';
 import {CATEGORIES,categoriesFor,SUPPORT_TEXT,BEARISH_TEXT,EXECUTION_SAFETY,JUDGMENT} from './contract.mjs';
+export const ECONOMY_VERSION='MONTHLY40_FULL24_V1';
 /** Concise instructions; the original server validator and complete snapshot remain authoritative. */
 export function economyPrompt(packet){
  const task=packet.task,values=packet.facts?.values??{},keys=Object.keys(FACT_DEFS).filter(k=>values[k]!==null&&values[k]!==undefined);

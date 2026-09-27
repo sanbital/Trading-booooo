@@ -4,7 +4,7 @@ import {readCaptureWithRecovery,emergencyDynamicPacket} from '../_shared/gpt-fin
 import {DYNAMIC_POLICY,positionDynamicState,entryFailureEvidence,entryCaptureSafety} from '../_shared/gpt-final-decision/dynamic-flow.mjs';
 import {dynamicsEvent} from '../_shared/gpt-final-decision/trajectory.mjs';
 /** Strategic closes require fresh validated GPT FINAL. Existing hard safety executes first. */
-import {holdStep,initialHoldState,runHoldReview,TIME_REASONS,FD1_HOLD_POLICY_VERSION,HOLD_POLICY} from '../_shared/gpt-final-decision/hold.mjs';
+import {holdStep,initialHoldState,runHoldReview,TIME_REASONS,FD1_HOLD_POLICY_VERSION,HOLD_POLICY,MONTHLY_HOLD_POLICY} from '../_shared/gpt-final-decision/hold.mjs';
 import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
 import {configFromControl} from '../_shared/gpt-final-review/coordinator.mjs';
 import {recordHoldShadow,shadowJobKey,holdShadowEnabled,HOLD_RELEASE} from '../_shared/gpt-final-decision/hold-shadow.mjs';
@@ -141,7 +141,7 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
     return {state:row.state,decision:r.decision,valid:false,error:r.error,authority:null,completed_at_ms:r.completed_at_ms,
       snapshot_at_ms:r.final_snapshot_at_ms,snapshot_hash:null,refresh_error:r.arbitration?.refresh_error??null};};
   let step;
-  try{step=await holdStep(prior,{now,price:bid,peak:state.peakPrice,timeCandidate,softTrigger,dynamics,positionId:p.id,generation,answerOf,clock:testHooks?()=>now:Date.now});}
+  try{step=await holdStep(prior,{now,price:bid,peak:state.peakPrice,timeCandidate,softTrigger,dynamics,positionId:p.id,generation,answerOf,clock:testHooks?()=>now:Date.now},MONTHLY_HOLD_POLICY);}
   catch{return {close:false,reason:'FD1_FINAL_UNAVAILABLE',state:prior};}
   if(!step.start)return step;
   // A review is starting: claim it in the shared journal/ledger, then ask in the background.

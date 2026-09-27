@@ -15,6 +15,10 @@ export const TIME_REASONS=Object.freeze(['V17_MOMENTUM_STALE','V17_MAX_HOLD']);
 export const HOLD_POLICY=Object.freeze({holdTtlMs:15*60_000,minGapMs:5*60_000,deteriorationMinGapMs:60_000,maxReviews:30,
   deteriorationDrawdown:-0.015,priceMove:0.02,timeAnswerWaitMs:25_000,exitMaxAgeMs:25_000,
   softMinGapMs:20_000,protectMs:30_000,softMove:0.003,reviewWindowMs:3600000});
+export const MONTHLY_HOLD_POLICY=Object.freeze({...HOLD_POLICY,costProfile:true,
+ minGapMs:3600000,deteriorationMinGapMs:300000,softMinGapMs:300000,protectMs:300000,
+ periodicReviewMs:21600000,ordinaryGapMs:300000,urgentGapMs:60000,maxReviews:12});
+const URGENT_COST_EVENTS=new Set(['POST_FILL_THESIS_REVIEW','ENTRY_FAILURE_MULTI_AXIS','BTC_SHOCK','NATIVE_HARD_STOP_PROXIMITY','BID_DEPTH_COLLAPSE','SPREAD_BLOWOUT','TREND_BREAK','RAPID_MFE_GIVEBACK']);
 const MIN=60000;
 export function initialHoldState(entryPrice){
  return {version:FD1_HOLD_POLICY_VERSION,reviews:0,lastReviewAt:null,lastReviewPrice:Number(entryPrice),ddArmed:true,
@@ -29,6 +33,10 @@ export function nextEvent(st,{now,price,peak,timeCandidate,softTrigger,dynamics}
  if(peak>s.lastPeak){s.lastPeak=peak;s.ddArmed=true;}
  if(!softTrigger?.active)s.softArmed=true;
  if(s.pending)return {state:s,event:null};
+ if(P.costProfile){
+  const gap=URGENT_COST_EVENTS.has(dynamics?.event)?P.urgentGapMs:P.ordinaryGapMs;
+  if(elapsed<gap||s.reviews>=P.maxReviews||s.retryAfter&&now<s.retryAfter)return {state:s,event:null};
+ }
  if(dynamics?.event&&
     (elapsed>=DYNAMIC_POLICY.missingRetryMs||dynamics.event==='TRAJECTORY_RECOVERED')&&dynamics.evidenceKey!==s.lastDynamicsKey){
   s.lastDynamicsKey=dynamics.evidenceKey;return {state:s,event:dynamics.event};
@@ -36,7 +44,7 @@ export function nextEvent(st,{now,price,peak,timeCandidate,softTrigger,dynamics}
  if(s.retryAfter&&now<s.retryAfter)return {state:s,event:null};
  if(s.reviews>=P.maxReviews)return {state:s,event:null,exhausted:true};
  if(s.timeoutRetryEvent){const event=s.timeoutRetryEvent;s.timeoutRetryEvent=null;return {state:s,event};}
- if(dynamics?.observation&&elapsed>=DYNAMIC_POLICY.periodicReviewMs)return {state:s,event:'DYNAMIC_PERIODIC_REVIEW'};
+ if(dynamics?.observation&&elapsed>=(P.periodicReviewMs??DYNAMIC_POLICY.periodicReviewMs))return {state:s,event:'DYNAMIC_PERIODIC_REVIEW'};
  if(s.protectUntil&&now>=s.protectUntil){s.protectUntil=null;return {state:s,event:'PROTECTION_REASSESSMENT'};}
  if(softTrigger?.active){
   const receipt=s.softReceipt,factor=s.protectUntil?0.5:1;
