@@ -22,7 +22,7 @@ import {E1_POLICY,advanceE1,e1QuoteEvidence,fetchE1AggTrades,startE1} from "../_
 import {V24_ADAPTER_VERSION,v24EntryGate} from "./v24-entry-adapter.mjs";
 import {IOC_RETRY_POLICY,planAggressiveIocRetry} from "./entry-ioc-retry.mjs";
 import {RETRY_RECONCILIATION_VERSION,retryProofCandidate,parentTradeStart,proveUnplacedPartialRetry} from "./entry-retry-reconciliation.mjs";
-import {ENTRY_LIFECYCLE_VERSION,lifecycleNote,noteChanged,gptTerminalReason,expiredTriggerReason,agedOutReason} from "./entry-lifecycle.mjs";
+import {ENTRY_LIFECYCLE_VERSION,lifecycleNote,noteChanged,gptTerminalReason,expiredTriggerReason,agedOutReason,mergeLifecycleNote,technicalFailureNote,isSymbolLocalSelectionError} from "./entry-lifecycle.mjs";
 import {ENTRY_CAPACITY_VERSION,UNUSED_SLOT_REASON,accountStopReason,budgetCovers,entryCapacity,ledgerEntry,slotCostUsdt,slotReasonOf,unusedSlotAccounting} from "./entry-capacity.mjs";
 import {LIVE_CHASE_POLICY,LIVE_CHASE_REASON,CHASE_STATE,classifyChase,liveChaseTrigger,deadChaseState,chaseEvidenceUsable} from "../_shared/leader-live-chase.mjs";
 import {BOO_ADAPTER_VERSION,ENFORCEMENT as BOO_ENFORCEMENT,evaluateBooEntry,finalizeBooEntry,loadBooGateContext,openRiskSummary,recordBooVerdict} from "./boo-entry-adapter.mjs";
@@ -426,14 +426,29 @@ async function evaluateLiveChase(row,state,now,fetchCandles=qv3Candles){
 }
 /** Evidence only: the last execution-path outcome of a still-open candidate, so its eventual
  * terminal reason can name it (entry-lifecycle.mjs). A failed write never changes a decision. */
-async function noteEntryLifecycle(db,row,note,statuses=["NEW"]){
+async function noteEntryLifecycle(db,row,note,statuses=["NEW"],required=false){
   const f=rec(row?.features);
+  note=mergeLifecycleNote(f.entryLifecycle,note);
   if(!row?.id||!noteChanged(f.entryLifecycle,note))return row;
   try{
     const w=await db.from("v11_long_regime_signals").update({features:{...f,entryLifecycle:note}}).eq("id",row.id).in("status",statuses);
-    if(w.error)console.error("ENTRY_LIFECYCLE_NOTE_FAILED",row.id,String(w.error.message).slice(0,200));
-  }catch(error){console.error("ENTRY_LIFECYCLE_NOTE_FAILED",row.id,String(error?.message??error).slice(0,200));}
+    if(w.error)throw Error(String(w.error.message).slice(0,200));
+  }catch(error){console.error("ENTRY_LIFECYCLE_NOTE_FAILED",row.id,String(error?.message??error).slice(0,200));
+    if(required)throw Error("ENTRY_TECHNICAL_NOTE_WRITE_FAILED");}
   return {...row,features:{...f,entryLifecycle:note}};
+}
+/** Exceptions are durable evidence, never admission. One small signal summary and one
+ * compact decision record; no duplicated candles/order books. Failed persistence halts. */
+async function recordEntryTechnicalFailure(db,row,stage,error,options={}){
+  const note=technicalFailureNote({row,at:Date.now(),stage,error,...options});
+  const written=await noteEntryLifecycle(db,row,note,options.statuses??["NEW"],true);
+  const result=await db.from("v11_long_regime_decisions").insert({revision:REVISION,position_id:null,
+    active_lane_before:"BULL",active_lane_after:"BULL",action:"ENTRY_DEFER",reason:note.reason,
+    details:{executorPatch:PATCH,signalId:row.id,symbol:row.symbol,stage,kind:"TECHNICAL_ERROR",
+      finalAdmission:false,orderDispatched:note.technicalFailure.latest.orderDispatched,
+      lifecycle:note}});
+  if(result.error)throw Error("ENTRY_TECHNICAL_AUDIT_WRITE_FAILED");
+  return written;
 }
 /**
  * Terminal accounting for candidates that can no longer enter: a TRIGGERED setup whose
@@ -490,6 +505,8 @@ async function applyB06133Selection(db,row,state){
   // as reference evidence; admission is the V30 score gate on those same factors.
   const v30=v30FrontDecision(stamp,V30_FRONT_LIVE_VERSION),admitted=v30.admitted===true;
   const features={...rec(row.features),b06133:stamp,v30Front:v30};
+  const inputError=stamp.error??(stamp.source?.marketErrors?"B06133_MARKET_SOURCE_FAILURE":null);
+  if(inputError)features.entryLifecycle=technicalFailureNote({row,at:evaluatedAt,stage:"B06133",error:inputError,blocking:false});
   // (2026-09-26) Sensors prepare evidence; they never end a candidate before the AI decides.
   // A V30 non-admission or unavailable B06133 inputs are recorded and shown to GPT/DeepSeek.
   const patch={features,updated_at:new Date(evaluatedAt).toISOString()};
@@ -500,7 +517,8 @@ async function applyB06133Selection(db,row,state){
     `V30_FRONT_NOT_ADMITTED:${[...v30.failed,...v30.unknown].join("+")||"UNKNOWN"}:EVIDENCE_ONLY`;
   await audit(db,null,"BULL","BULL",admitted?"ENTRY_ALLOW":"ENTRY_EVIDENCE",reason,
     {signalId:row.id,symbol:row.symbol,stage:"V30_ENTRY_SELECTION",finalAdmission:false,
-      orderDispatched:false,b06133:stamp,v30Front:v30});
+      orderDispatched:false,b06133:stamp,v30Front:v30,
+      ...(inputError?{kind:"TECHNICAL_ERROR",lifecycle:features.entryLifecycle}:{})});
   return {allowed:true,row:write.data,stamp:{...stamp,reason}};
 }
 
@@ -2488,22 +2506,31 @@ for(const advanced of triggered){
   }
   let selected;
   try{selected=await applyB06133Selection(db,advanced.row,state);}
-  catch(error){entry={entered:false,reason:String(error?.message??error)};continue;}
+  catch(error){await recordEntryTechnicalFailure(db,row,"B06133",error);
+    if(!isSymbolLocalSelectionError(error))throw error;
+    entry={entered:false,reason:String(error?.message??error)};continue;}
   if(!selected.allowed){entry={entered:false,reason:selected.stamp.reason};continue;}
   let controlled;
   try{controlled=await applyCec0040Selection(db,selected.row,state);}
-  catch(error){entry={entered:false,reason:String(error?.message??error)};continue;}
+  catch(error){await recordEntryTechnicalFailure(db,selected.row,"CEC0040",error);
+    if(!isSymbolLocalSelectionError(error))throw error;
+    entry={entered:false,reason:String(error?.message??error)};continue;}
   if(!controlled.allowed){entry={entered:false,reason:controlled.stamp.reason};continue;}
   executable.push(controlled.row);
 }
-const gptReviewed=await gptFilterExecutable(db,executable);
+let gptReviewed;
+try{gptReviewed=await gptFilterExecutable(db,executable);}
+catch(error){for(const row of executable)await recordEntryTechnicalFailure(db,row,"GPT",error,{gptAttempted:null});throw error;}
 if(executable.length&&!gptReviewed.candidates.length)entry={entered:false,reason:gptReviewed.reason};
 // Every reviewed candidate that GPT did not pass leaves a trace: a SKIP/ABSTAIN (or failed
 // answer) is final for its trigger and is recorded terminally now; anything transient
 // (pending, aged past recheck, not configured) is noted for the window-close label.
 for(const review of gptReviewed.reviews??[]){
   if(review.allowed===true)continue;
-  const row=executable.find(x=>String(x.id)===String(review.signalId));if(!row)continue;
+  let row=executable.find(x=>String(x.id)===String(review.signalId));if(!row)continue;
+  if(/^(GPT_NO_VALID_API_RESPONSE|GPT_REVIEW_STORAGE|GPT_CONTROL_UNREADABLE|GPT_API_BUDGET|GPT_BINDING_MISMATCH|GPT_SNAPSHOT_)/.test(String(review.reason??"")))
+    row=await recordEntryTechnicalFailure(db,row,"GPT",Error([review.reason,review.error].filter(Boolean).join(":")),
+      {gptAttempted:review.gptAttempted??null});
   const terminal=gptTerminalReason(review);
   if(terminal){
     const w=await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:terminal,updated_at:new Date().toISOString()})
@@ -2565,7 +2592,8 @@ for(const [index,s] of queued.entries()){
       .catch(()=>console.error("V17_ENTRY_OUTCOME_AUDIT_FAILED",s.id));
     if(entry?.releaseClaim===true){
       // The released candidate carries the refusal it came back with (its window-close label).
-      const released={...rec(cl.data.features),entryLifecycle:lifecycleNote({at:Date.now(),stage:"EXECUTION",reason:entry.reason,gptDecision:"BUY"})};
+      const released={...rec(cl.data.features),entryLifecycle:mergeLifecycleNote(rec(cl.data.features).entryLifecycle,
+        lifecycleNote({at:Date.now(),stage:"EXECUTION",reason:entry.reason,gptDecision:"BUY"}))};
       await db.from("v11_long_regime_signals").update({status:"NEW",updated_at:new Date().toISOString(),features:released}).eq("id",s.id).eq("status","CLAIMED");
       if(releaseStopsRun(entry)){stop={reason:accountStopReason(entry.reason),detail:String(entry.reason??"").slice(0,200)};
         await noteRest(index+1,`${stop.reason}:${stop.detail}`);break}
@@ -2596,6 +2624,7 @@ for(const [index,s] of queued.entries()){
     // nothing is held, so the slot stays free for the next candidate.
     refusals.push(slotReasonOf(entry?.reason));
   }catch(e){
+    await recordEntryTechnicalFailure(db,cl.data,"EXECUTION",e,{gptAttempted:true,orderDispatched:attempt.dispatched===true,statuses:["CLAIMED","REJECTED"]});
     const msg=e instanceof Error?e.message:String(e),pending=await db.from("v11_long_regime_orders").select("id").eq("signal_id",s.id).eq("state","RECONCILIATION_FAILED").limit(1);
     if(!pending.data?.length)await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);
     if(attempt.dispatched)throw e;

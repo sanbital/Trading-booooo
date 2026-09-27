@@ -63,11 +63,11 @@ function v30Candidate(action,id='sig-'+action){
   return s;
 }
 /** INITIAL decision through the real coordinator + FD1 engine; returns the order-time ticket. */
-async function initialDecision({initial='BUY',final='BUY',action='ADMIT',clock}={}){
+async function initialDecision({initial='BUY',final='BUY',action='ADMIT',clock,symbol}={}){
   let now=T+1500;const w=world({initial,final}),store=new MemoryReviewStore();
   const c=new FinalReviewCoordinator({config:ENFORCE,store,apiKey:()=>'k',now:clock??(()=>now),fetchFn:w.fetchFn,engine:FD1_ENTRY_ENGINE,
     baseline:baselineAllowedLive,schedule:()=>{}});
-  const db={},s=v30Candidate(action);setTestCoordinator(db,c);
+  const db={},s=v30Candidate(action);if(symbol)s.symbol=symbol;setTestCoordinator(db,c);
   await gptFilterExecutable(db,[s]);await Promise.all([...c.pending.values()]);await gptFilterExecutable(db,[s]);
   const check=gptFinalCheck(db,s),log=[];
   setRecheckTestHooks({store,config:ENFORCE,apiKey:'k',fetchFn:w.fetchFn,log,schedule:()=>{},
@@ -78,6 +78,13 @@ const calmQuote=at=>({best_bid:1.199,best_ask:1.2,bids:BOOK.bids,asks:BOOK.asks,
 const e1Obs=(ret,share,n=150)=>({confirmationState:'BASELINE_ELIGIBLE',reasonCodes:['E1_NOT_FAST_WEAK'],expectedCostBps:12,
   observations:[{startAt:T,endAt:T+10000,return:ret,buyShare:share,tradeCount:n}]});
 const CALM=e1Obs(0.001,0.6),WEAK=e1Obs(-0.003,0.35);
+test('WUSDT reaches real ENTRY and FINAL RECHECK; SKIP still forbids dispatch',async()=>{
+  const x=await initialDecision({symbol:'WUSDT',final:'SKIP'});
+  assert.equal(x.check.allowed,true);assert.equal(x.s.symbol,'WUSDT');
+  const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+11900),now:()=>T+12000});
+  assert.equal(r.record.recheck_triggered,true);assert.equal(r.proceed,false);
+  assert.equal(r.record.final_gpt_decision,'SKIP');assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,false);
+});
 
 test('1. INITIAL BUY + no meaningful change -> no extra GPT call; the initial BUY stands and the order check passes',async()=>{
   const x=await initialDecision();assert.equal(x.check.allowed,true);assert.ok(x.ticket.initial?.executionRef?.mid>0,'initial book reference carried');

@@ -71,7 +71,7 @@ test('BUY orphan prevention: every openBull refusal returns its claim, is termin
   // and the queue turns each of those into a state with a reason.
   const queue=src.slice(src.indexOf('async function runEntryQueue('),src.indexOf('async function requireLeaderEntryControls'));
   assert.match(queue,/if\(entry\?\.terminal&&entry\?\.entered!==true\)/);
-  assert.match(queue,/entryLifecycle:lifecycleNote\(\{at:Date\.now\(\),stage:"EXECUTION",reason:entry\.reason/);
+  assert.match(queue,/entryLifecycle:mergeLifecycleNote\(rec\(cl\.data\.features\)\.entryLifecycle,\s*lifecycleNote\(\{at:Date\.now\(\),stage:"EXECUTION",reason:entry\.reason/);
   assert.match(queue,/sweepEntryLifecycle\(db,Date\.now\(\)\)/);
 });
 
@@ -85,7 +85,10 @@ test('the lifecycle sweep retires only closed triggers and aged-out rows, only N
       note:{reason:'ENTRY_PER_RUN_LIMIT',gptDecision:'BUY'}},
     {id:'live',symbol:'ABCUSDT',entry_bar_at:new Date(now-6*MIN).toISOString(),setup_state:'TRIGGERED',trigger_expires_at:String(now+20000),note:null},
     {id:'old-armed',symbol:'OLDUSDT',entry_bar_at:new Date(now-60*MIN).toISOString(),setup_state:'ARMED',trigger_expires_at:null,note:null},
-    {id:'old-legacy',symbol:'LEGUSDT',entry_bar_at:new Date(now-9*24*60*MIN).toISOString(),setup_state:null,trigger_expires_at:null,note:null}];
+    {id:'old-legacy',symbol:'LEGUSDT',entry_bar_at:new Date(now-9*24*60*MIN).toISOString(),setup_state:null,trigger_expires_at:null,note:null},
+    {id:'technical',symbol:'WUSDT',entry_bar_at:new Date(now-MIN).toISOString(),setup_state:'TRIGGERED',trigger_expires_at:String(now-1),
+      note:lifecycle.technicalFailureNote({row:{id:'technical',symbol:'WUSDT',features:{v17Setup:{triggerAt:now-MIN,triggerExpiresAt:now-1}}},
+        at:now-50000,stage:'CEC0040',error:Error('CEC0040_DECISION:CEC0040_DECISION_INPUT_INVALID')})}];
   const db={from:()=>{const q={filters:[],patch:null};const b={
     select:()=>b,eq:(k,v)=>{q.filters.push(['eq',k,v]);return b;},lt:(k,v)=>{q.filters.push(['lt',k,v]);return b;},
     gte:(k,v)=>{q.filters.push(['gte',k,v]);return b;},order:()=>b,update:p=>{q.patch=p;return b;},
@@ -97,12 +100,15 @@ test('the lifecycle sweep retires only closed triggers and aged-out rows, only N
     SIGNAL_MAX:20*MIN,REVISION:'R',STRATEGY:'S',SETUP_STATE:{TRIGGERED:'TRIGGERED'},audit:async(...a)=>{audits.push(a);}};
   vm.createContext(ctx);vm.runInContext(fn+';this.sweep=sweepEntryLifecycle;',ctx);
   const retired=await ctx.sweep(db,now);
-  assert.deepEqual(Array.from(retired,r=>r.signalId).sort(),['closed-buy','old-armed','old-legacy']); // main-realm copy of a vm array
+  assert.deepEqual(Array.from(retired,r=>r.signalId).sort(),['closed-buy','old-armed','old-legacy','technical']); // main-realm copy of a vm array
   const by=Object.fromEntries(writes.map(w=>[w.id,w]));
   assert.equal(by['closed-buy'].patch.reject_reason,'STALE:GPT_BUY_NOT_EXECUTED:ENTRY_PER_RUN_LIMIT');
   assert.equal(by['old-armed'].patch.reject_reason,'V17_SETUP_EXPIRED:AGED_OUT_UNCONCLUDED');
   assert.equal(by['old-legacy'].patch.reject_reason,'STALE:SIGNAL_AGED_OUT');
   assert.ok(!by.live,'a live trigger is untouched');
   for(const w of writes){assert.equal(w.patch.status,'REJECTED');assert.equal(w.guard,'NEW','only a NEW row can be retired');}
-  assert.equal(audits.length,3);assert.ok(audits.every(a=>a[6].stage==='ENTRY_LIFECYCLE_TERMINAL'&&a[6].orderDispatched===false));
+  assert.equal(audits.length,4);assert.ok(audits.every(a=>a[6].stage==='ENTRY_LIFECYCLE_TERMINAL'&&a[6].orderDispatched===false));
+  assert.equal(by.technical.patch.reject_reason,'STALE:TRIGGER_WINDOW_CLOSED');
+  assert.equal(audits.find(a=>a[6].signalId==='technical')[6].lifecycle.note.technicalFailure.root.code,'CEC0040_DECISION_INPUT_INVALID');
+  assert.equal(by.technical.patch.features,undefined,'terminalization must not overwrite the persisted cause');
 });

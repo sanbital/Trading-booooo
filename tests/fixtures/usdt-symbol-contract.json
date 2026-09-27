@@ -1,0 +1,23 @@
+[
+  {"symbol":"WUSDT","valid":true},
+  {"symbol":"TUSDT","valid":true},
+  {"symbol":"INUSDT","valid":true},
+  {"symbol":"SOONUSDT","valid":true},
+  {"symbol":"BTCUSDT","valid":true},
+  {"symbol":"1000SHIBUSDT","valid":true},
+  {"symbol":"","valid":false},
+  {"symbol":null,"valid":false},
+  {"symbol":"USDT","valid":false},
+  {"symbol":"W/USDT","valid":false},
+  {"symbol":"WUSDT/","valid":false},
+  {"symbol":"W-USDT","valid":false},
+  {"symbol":" WUSDT","valid":false},
+  {"symbol":"WUSDT ","valid":false},
+  {"symbol":"WUSDT\n","valid":false},
+  {"symbol":"W\nUSDT","valid":false},
+  {"symbol":"WUSDT\r\n","valid":false},
+  {"symbol":"BTCUSDT\n","valid":false},
+  {"symbol":"BTCUSDT\u0000","valid":false},
+  {"symbol":"W\tUSDT","valid":false},
+  {"symbol":"W\u0001USDT","valid":false}
+]
