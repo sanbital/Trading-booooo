@@ -193,10 +193,12 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   // Live advisory responses take about 3-4 s; leave at least 2.5 s for refresh + FINAL.
   const fast=reviewTier==='FAST'&&packet.task==='HOLD'&&dynamicEnabled(packet);
   const firstMs=Math.max(1,Math.min(fast?750:dynamicEnabled(packet)?4000:6000,deadline-now()-2500,Math.floor((deadline-now()-1500)*.65)));
+  // FIRST is short; retain DeepSeek's existing full-review allowance independently.
+  const advisoryMs=fast?firstMs:Math.max(1,Math.min(6000,deadline-now()-2500,Math.floor((deadline-now()-1500)*.65)));
   const safe=async fn=>{try{return await fn();}catch{return invalid('FD_PROVIDER_ERROR');}};
   const [first0,ds0]=await Promise.all([
     fast?Promise.resolve(invalid('FAST_REVIEW_FIRST_OMITTED')):safe(()=>gptCall(initial.packet,{apiKey,fetchFn,now,timeoutMs:firstMs,payloadFn:()=>firstPayload(initial),validate:dynamicEnabled(packet)?wire=>validateFirstWire(wire,initial):validate})),
-    safe(()=>counterCall(initial,{apiKey:deepseekKey,fetchFn,now,timeoutMs:firstMs}))]);
+    safe(()=>counterCall(initial,{apiKey:deepseekKey,fetchFn,now,timeoutMs:advisoryMs}))]);
   const first={...first0,snapshot_hash:initial.snapshot_hash};let ds={...ds0};
   if(ds.valid===true){try{
     if(ds.snapshot_hash!==initial.snapshot_hash||ds.snapshot_at_ms!==initial.snapshot_at_ms)throw Error('DEEPSEEK_INPUT_MISMATCH');

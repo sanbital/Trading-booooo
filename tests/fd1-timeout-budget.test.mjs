@@ -27,10 +27,10 @@ test('FIRST is an evidence-bound preliminary opinion with no execution authority
  assert.throws(()=>validateFirstWire({...wire,c:'wrong'},s));assert.throws(()=>validateFirstWire({...wire,evidence:['facts.invented']},s));assert.throws(()=>validateFirstWire({...wire,evidence:[]},s));
 });
 test('compact FIRST BUY cannot replace a timed-out FINAL and original deadline remains bounded',async()=>{
- const timeouts=[],seen=[];const r=await dualEntryDecision(f.packet,{apiKey:'unit-key',now:()=>at,snapshotAtMs:at,deadlineMs:at+15000,
-  counterCall:async()=>({valid:false,attempted:false,error:'DEEPSEEK_KEY_MISSING'}),
+ const timeouts=[],seen=[],advisoryTimeouts=[];const r=await dualEntryDecision(f.packet,{apiKey:'unit-key',now:()=>at,snapshotAtMs:at,deadlineMs:at+15000,
+  counterCall:async(p,o)=>{advisoryTimeouts.push(o.timeoutMs);return {valid:false,attempted:false,error:'DEEPSEEK_KEY_MISSING'};},
   gptCall:async(p,o)=>{timeouts.push(o.timeoutMs);const req=o.payloadFn(p);seen.push(req);if(seen.length===2)return {valid:false,decision:'ABSTAIN',attempted:true,error:'API_TIMEOUT',completed_at_ms:at};const wire={c:p.candidate_id,d:'BUY',confidence:.9,evidence:['facts.trend.return_5m'],n:'Supported preliminary view'};return {valid:true,decision:'BUY',wire,answer:o.validate(wire,p),attempted:true,completed_at_ms:at};}});
- assert.equal(seen.length,2);assert.deepEqual(timeouts,[4000,8000]);assert.equal(r.valid,false);assert.equal(r.decision,'ABSTAIN');assert.equal(r.error,'API_TIMEOUT');assert.equal(r.arbitration.first_wire_version,'FD1_FIRST_COMPACT_1');
+ assert.equal(seen.length,2);assert.deepEqual(timeouts,[4000,8000]);assert.deepEqual(advisoryTimeouts,[6000]);assert.equal(r.valid,false);assert.equal(r.decision,'ABSTAIN');assert.equal(r.error,'API_TIMEOUT');assert.equal(r.arbitration.first_wire_version,'FD1_FIRST_COMPACT_1');
 });
 test('legacy journals retain their original FIRST contract',async()=>{
  const packet=structuredClone(f.packet);delete packet.dynamic_policy;const {hash}=await import('../supabase/functions/_shared/gpt-final-decision/api.mjs');packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
