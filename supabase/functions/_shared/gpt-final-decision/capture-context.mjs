@@ -1,7 +1,8 @@
-import {trajectoryDynamics} from './trajectory.mjs';
+import {trajectoryDynamics,bucketDynamics} from './trajectory.mjs';
+import {entryCaptureSafety,DYNAMIC_POLICY} from './dynamic-flow.mjs';
 async function hash(value){return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(value))))].map(x=>x.toString(16).padStart(2,'0')).join('');}
 export const CAPTURE_VERSION='CAPTURE-CONTEXT-3-TRAJECTORY-120S';
-export const CAPTURE_NOTE='capture_context는 판단 직전 약 120초를 5초 x 24구간으로 보존한 변화 경로다. 평균/총합 요약이 아니라 trajectory의 순서와 각 구간 변화량을 읽어라. 현재 실행 시점의 절대 호가·스프레드·깊이는 facts의 최신 microstructure를 우선하고, capture_context는 그 현재 상태에 도달한 방향·가속·반전 여부를 해석하는 데 사용한다. d_mid_bps는 구간 가격 변화, d_spread_bps는 스프레드 증감, d_*_depth_25_pct는 호가 깊이 증감, buy_share_5s와 d_buy_share는 5초 매수 체결 우위와 변화, net_taker_quote_5s와 d_net_taker_quote는 매수-매도 체결대금 및 변화, ask_book_net_5s는 표시 매도호가 순증감(추가-제거), *_impact_450_bps와 d_*_impact_bps는 450 USDT 체결 충격과 변화다. 특히 초반과 후반의 방향이 다르면 마지막 10~20초의 반전/가속을 명시적으로 고려하라. 단, 표시 호가 증감은 취소·이동·체결을 완전히 구분하지 못하므로 단독으로 진짜 매도벽/스푸핑이라 단정하지 마라. UNAVAILABLE은 추가 정보가 없다는 뜻이며 그 자체로 BUY 거부·청산·ABSTAIN 사유가 아니다. trajectory는 판단 증거이며 새 하드게이트를 만들지 않는다.';
+export const CAPTURE_NOTE='capture_context는 판단 직전 약 120초를 5초 x 24구간으로 보존한 변화 경로다. 평균/총합 요약이 아니라 trajectory의 순서와 각 구간 변화량을 읽어라. 현재 실행 시점의 절대 호가·스프레드·깊이는 facts의 최신 microstructure를 우선하고, capture_context는 그 현재 상태에 도달한 방향·가속·반전 여부를 해석하는 데 사용한다. d_mid_bps는 구간 가격 변화, d_spread_bps는 스프레드 증감, d_*_depth_25_pct는 호가 깊이 증감, buy_share_5s와 d_buy_share는 5초 매수 체결 우위와 변화, net_taker_quote_5s와 d_net_taker_quote는 매수-매도 체결대금 및 변화, ask_book_net_5s는 표시 매도호가 순증감(추가-제거), *_impact_450_bps와 d_*_impact_bps는 450 USDT 체결 충격과 변화다. 특히 초반과 후반의 방향이 다르면 마지막 10~20초의 반전/가속을 명시적으로 고려하라. 단, 표시 호가 증감은 취소·이동·체결을 완전히 구분하지 못하므로 단독으로 진짜 매도벽/스푸핑이라 단정하지 마라. ENTRY에서 UNAVAILABLE 또는 10초 이상 된 trajectory는 WAIT이며 신규 주문을 허용하지 않는다. OPEN POSITION에서는 DATA_DEGRADED로 표시하고 최신 emergency 자료와 직전 valid snapshot age/drift를 함께 재심사한다. 자료 누락은 자동 HOLD나 EXIT 근거가 아니다.';
 const POINT_KEYS=['end_ms','d_mid_bps','d_spread_bps','d_ask_depth_25_pct','d_bid_depth_25_pct','buy_share_5s','d_buy_share','net_taker_quote_5s','d_net_taker_quote','ask_book_net_5s','buy_impact_450_bps','d_buy_impact_bps','sell_impact_450_bps','d_sell_impact_bps'];
 const OPTIONAL_KEYS=['trade_count','arrival_rate','aggressive_notional','bid_book_net_5s','spread_bps','bid_depth_25_usdt','ask_depth_25_usdt','imbalance','btc_return_1m'];
 const finiteOrNull=v=>v===null||Number.isFinite(v);
@@ -29,15 +30,51 @@ export function validateCapture(raw,asOf){
  }
  return {version:raw.version,status:'AVAILABLE',window_ms:end-start,age_ms:asOf-end,start_ms:start,end_ms:end,buckets:12,trajectory};
 }
-export async function readCapture(symbol,asOf,{fetchFn=fetch,timeoutMs=350,positionId=null,env=k=>globalThis.Deno?.env?.get(k)}={}){
+export async function readCapture(symbol,asOf,{fetchFn=fetch,timeoutMs=350,positionId=null,rpc='doa_context_for_role_v1',env=k=>globalThis.Deno?.env?.get(k)}={}){
  const url=env('SUPABASE_URL'),key=env('SUPABASE_SERVICE_ROLE_KEY');if(!url||!key)return unavailable('NOT_CONFIGURED');
  const controller=new AbortController();let timer;
  try{
-  const work=(async()=>{const r=await fetchFn(url+'/rest/v1/rpc/doa_context_for_role_v1',{method:'POST',redirect:'error',signal:controller.signal,
-   headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({p_symbol:symbol,p_as_of:new Date(asOf).toISOString(),p_position_id:positionId,p_role:positionId?'OPEN_POSITION':'TRADE_CANDIDATE'})});
+  const work=(async()=>{const r=await fetchFn(url+'/rest/v1/rpc/'+rpc,{method:'POST',redirect:'error',signal:controller.signal,
+   headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify({p_symbol:symbol,p_as_of:new Date(asOf).toISOString(),p_position_id:positionId,...(rpc==='doa_context_for_role_v1'?{p_role:positionId?'OPEN_POSITION':'TRADE_CANDIDATE'}:{})})});
    if(!r.ok)return unavailable('READ_FAILED');const text=await r.text();if(text.length>65536)return unavailable('TOO_LARGE');const c=validateCapture120(JSON.parse(text),asOf);if(c.status==='AVAILABLE')c.trajectory_hash=await hash(c.trajectory);return c;})();
-  return await Promise.race([work,new Promise(resolve=>{timer=setTimeout(()=>{controller.abort();resolve(unavailable('TIMEOUT'));},Math.max(1,Math.min(350,timeoutMs)));})]);
+  return await Promise.race([work,new Promise(resolve=>{timer=setTimeout(()=>{controller.abort();resolve(unavailable('TIMEOUT'));},Math.max(1,Math.min(1500,timeoutMs)));})]);
  }catch{return unavailable('READ_FAILED');}finally{clearTimeout(timer);}
+}
+
+/** Retry once, then reconstruct through the raw-bucket RPC. Never fills a gap synthetically. */
+export async function readCaptureWithRecovery(symbol,asOf,{now=Date.now,read=readCapture,...options}={}){
+ const attempts=[];
+ let capture;
+ for(const [method,timeoutMs] of [['ROLE',350],['REFRESH',550],['RAW_RECONSTRUCTION',550]]){
+  const at=method==='ROLE'?asOf:now();
+  capture=await read(symbol,at,{...options,timeoutMs,rpc:method==='RAW_RECONSTRUCTION'?'doa_gpt_capture_context_v3':'doa_context_for_role_v1'});
+  const safety=entryCaptureSafety(capture,now());
+  attempts.push({method,at_ms:at,received_at_ms:now(),status:capture?.status??'UNAVAILABLE',reason:safety.reason});
+  if(safety.ok&&(!safety.refresh_recommended||method!=='ROLE'))return {...capture,recovery_attempts:attempts};
+ }
+ return {...(capture??unavailable('READ_FAILED')),recovery_attempts:attempts};
+}
+
+/** Minimal current evidence for OPEN positions only; explicitly not a full capture. */
+export async function emergencyDynamicPacket(symbol,{fetchFn=fetch,now=Date.now,timeoutMs=800}={}){
+ const requested=now();
+ const get=async path=>{const r=await fetchFn('https://fapi.binance.com'+path,{method:'GET',redirect:'error',signal:AbortSignal.timeout(timeoutMs)});
+  if(!r.ok)throw Error('EMERGENCY_HTTP');return r.json();};
+ const settled=await Promise.allSettled([
+  get('/fapi/v1/depth?symbol='+encodeURIComponent(symbol)+'&limit=100'),
+  get('/fapi/v1/aggTrades?'+new URLSearchParams({symbol,startTime:String(requested-15000),endTime:String(requested),limit:'1000'}))]);
+ const book=settled[0].status==='fulfilled'?settled[0].value:null,rows=settled[1].status==='fulfilled'?settled[1].value:null;
+ const bid=Number(book?.bids?.[0]?.[0]),ask=Number(book?.asks?.[0]?.[0]),received=now();
+ const trades=Array.isArray(rows)?rows.filter(x=>Number.isSafeInteger(x.T)&&x.T<=requested&&x.T>=requested-15000&&Number(x.p)>0&&Number(x.q)>0):[];
+ let buy=0,sell=0;for(const x of trades){const q=Number(x.p)*Number(x.q);if(x.m===true)sell+=q;else if(x.m===false)buy+=q;}
+ const depth=levels=>Array.isArray(levels)?levels.reduce((sum,x)=>sum+Number(x[0])*Number(x[1]),0):null;
+ const b=depth(book?.bids),a=depth(book?.asks),bookOk=bid>0&&ask>=bid&&Number.isFinite(b)&&Number.isFinite(a)&&
+  Number.isSafeInteger(book?.T??book?.E)&&(book.T??book.E)<=received&&received-(book.T??book.E)<DYNAMIC_POLICY.absoluteAgeMs;
+ return {status:bookOk||trades.length?'EMERGENCY_PARTIAL':'UNAVAILABLE',full_trajectory:false,entry_allowed:false,
+  requested_at_ms:requested,received_at_ms:received,executable_bid:bookOk?bid:null,spread_bps:bookOk?(ask-bid)/((bid+ask)/2)*10000:null,
+  book_imbalance:bookOk&&b+a>0?(b-a)/(b+a):null,aggressive_buy:trades.length?buy:null,aggressive_sell:trades.length?sell:null,
+  net_taker_flow:trades.length?buy-sell:null,buy_share:buy+sell>0?buy/(buy+sell):null,trade_count:trades.length,
+  tape_may_be_truncated:Array.isArray(rows)&&rows.length>=1000,errors:settled.map((x,i)=>x.status==='rejected'?['BOOK','TAPE'][i]:null).filter(Boolean)};
 }
 
 const V3_KEYS=['flow_event_ms','flow_received_at_ms','bucket_ms','start_ms','received_at_ms','exchange_event_ms','book_received_at_ms','mid','start_mid','aggressive_buy','aggressive_sell'];
@@ -71,5 +108,5 @@ export function validateCapture120(raw,asOf){
  }
  if(trajectory[0].start_ms!==start||trajectory.at(-1).end_ms!==end)return unavailable('WINDOW_MISMATCH');
  return {version:CAPTURE_VERSION,status:'AVAILABLE',coverage_policy:'ALL_24_REQUIRED',position_id:raw.position_id??null,
-  window_ms:end-start,age_ms:asOf-end,start_ms:start,end_ms:end,buckets:24,trajectory,dynamics:trajectoryDynamics(trajectory)};
+  window_ms:end-start,age_ms:asOf-end,start_ms:start,end_ms:end,buckets:24,trajectory:bucketDynamics(trajectory),dynamics:trajectoryDynamics(trajectory)};
 }

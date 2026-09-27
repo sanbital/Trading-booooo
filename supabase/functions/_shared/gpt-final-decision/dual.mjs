@@ -6,6 +6,8 @@ import {flashCostCeiling} from './hold-shadow.mjs';
 import {resolvePolicy} from '../self-evolution/runtime.mjs';
 import {policyPrompt} from '../self-evolution/policy.mjs';
 import {validateMarketSensor,SENSOR_NOTE} from './market-sensor.mjs';
+import {dynamicEnabled} from './dynamic-contract.mjs';
+import {entryCaptureSafety,DYNAMIC_POLICY} from './dynamic-flow.mjs';
 export const DUAL_VERSION='FD1_GPT_FINAL_ARBITRATION_2';
 export const ARBITRATION_PROMPT=`
 DeepSeek is an independent advisory model. It has no trading authority.
@@ -115,6 +117,12 @@ export function validateFinalWire(wire,packet,{validate=validateDecision,catalog
   // missing duplicate path cannot invalidate an otherwise evidence-valid FINAL decision.
   const arbitration=normalizeArbitration(rawArbitration);
   const answer=validate(base,packet);
+  if(dynamicEnabled(packet)&&packet.task!=='HOLD'&&advisory){
+    if(wire.dual_confidence_degraded!==(advisory.valid!==true))throw Error('FD_DYNAMIC_DUAL_STATUS_MISMATCH');
+    if(answer.decision==='BUY'&&advisory.valid!==true&&
+       (answer.confidence<DYNAMIC_POLICY.singleModelBuyConfidence||!['ACCELERATING','STABLE'].includes(answer.propulsion_direction)))
+      throw Error('FD_DYNAMIC_SINGLE_MODEL_BUY_UNSUPPORTED');
+  }
   if(catalog)for(const field of ['considered','adopted','rejected','supporting','opposing']){
     const keys=arbitration[field];if(new Set(keys).size!==keys.length||keys.some(k=>!Object.hasOwn(catalog,k)))throw Error('FD_ARBITRATION_EVIDENCE');
   }
@@ -147,16 +155,21 @@ export function arbitrationPayload(current,initial,reviews){
 }
 /** First calls overlap; FINAL always runs. FIRST/advice never become an executable fallback. */
 export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch,now=Date.now,deadlineMs,
-  gptCall=callDecision,counterCall=callAdvisory,snapshotAtMs,inputPayload=payloadFor,validate=validateDecision,refreshPacket,policy:policyOverride=null}={}){
+  gptCall=callDecision,counterCall=callAdvisory,snapshotAtMs,inputPayload=payloadFor,validate=validateDecision,refreshPacket,policy:policyOverride=null,reviewTier='FULL'}={}){
   const started=now(),deadline=Number.isFinite(deadlineMs)?deadlineMs:started+15000;
   const invalid=error=>({valid:false,decision:'ABSTAIN',answer:null,wire:null,error,attempted:false,completed_at_ms:now(),api_cost_usd:0});
+  if(dynamicEnabled(packet)&&packet.task!=='HOLD'){
+    const integrity=entryCaptureSafety(packet.facts?.capture_context,started);
+    if(!integrity.ok)return {...invalid(integrity.reason),decision:'WAIT',origin:'LOCAL_DYNAMIC_GATE',dynamic_gate:integrity};
+  }
   const policy=await resolvePolicy(packet,{policy:policyOverride,snapshotAtMs:snapshotAtMs??started,now,fetchFn});
   const initial=await frozenReview(packet,{snapshotAtMs:snapshotAtMs??started,inputPayload,policy});
   // Live advisory responses take about 3-4 s; leave at least 2.5 s for refresh + FINAL.
-  const firstMs=Math.max(1,Math.min(6000,deadline-now()-2500,Math.floor((deadline-now()-1500)*.65)));
+  const fast=reviewTier==='FAST'&&packet.task==='HOLD'&&dynamicEnabled(packet);
+  const firstMs=Math.max(1,Math.min(fast?750:6000,deadline-now()-2500,Math.floor((deadline-now()-1500)*.65)));
   const safe=async fn=>{try{return await fn();}catch{return invalid('FD_PROVIDER_ERROR');}};
   const [first0,ds0]=await Promise.all([
-    safe(()=>gptCall(initial.packet,{apiKey,fetchFn,now,timeoutMs:firstMs,payloadFn:()=>firstPayload(initial),validate})),
+    fast?Promise.resolve(invalid('FAST_REVIEW_FIRST_OMITTED')):safe(()=>gptCall(initial.packet,{apiKey,fetchFn,now,timeoutMs:firstMs,payloadFn:()=>firstPayload(initial),validate})),
     safe(()=>counterCall(initial,{apiKey:deepseekKey,fetchFn,now,timeoutMs:firstMs}))]);
   const first={...first0,snapshot_hash:initial.snapshot_hash};let ds={...ds0};
   if(ds.valid===true){try{
@@ -179,9 +192,12 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   if(final.valid===true){try{const answer=validateFinalWire(final.wire,current.packet,{validate,catalog,advisory:ds});final={...final,answer,decision:answer.decision};}
     catch(e){final={...final,valid:false,decision:'ABSTAIN',answer:null,error:e.message??'FD_FINAL_INVALID'};}}
   const accepted=final.valid===true&&now()<deadline,arb=accepted?final.answer?.arbitration:null;
-  const audit={version:DUAL_VERSION,authority:'GPT_FINAL_ONLY',policy_version:policy.bundle.policy_version,policy_hash:policy.hash,policy_source:policy.source,policy_generation:policy.generation??null,initial_gpt_decision:first.decision??'ABSTAIN',
+  const audit={version:DUAL_VERSION,authority:'GPT_FINAL_ONLY',review_tier:fast?'FAST':'FULL',policy_version:policy.bundle.policy_version,policy_hash:policy.hash,policy_source:policy.source,policy_generation:policy.generation??null,initial_gpt_decision:first.decision??'ABSTAIN',
     deepseek_preference:ds.valid===true?ds.answer.decision_preference:null,deepseek_valid:ds.valid===true,
     deepseek_available:ds.available===true,deepseek_agreement:disagreement(first,ds),deepseek_error:ds.error??null,
+    dual_confidence_degraded:ds.valid!==true,
+    effective_confidence:Number.isFinite(final.answer?.confidence)?final.answer.confidence*(ds.valid===true?1:
+      current.packet.facts?.capture_context?.status==='AVAILABLE'?.8:.5):null,
     deepseek_evidence_considered:arb?.considered??[],deepseek_adopted:arb?.adopted??[],deepseek_rejected:arb?.rejected??[],
     final_decision:accepted?final.decision:'ABSTAIN',arbitration_reason:arb?.reason??final.error??'FINAL_INVALID_OR_EXPIRED',
     supporting_evidence:arb?.supporting??[],opposing_evidence:arb?.opposing??[],snapshot_hash:initial.snapshot_hash,

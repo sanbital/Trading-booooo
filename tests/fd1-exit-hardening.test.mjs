@@ -1,4 +1,5 @@
 import {finalFields} from '../test-support/arbitration-fixtures.mjs';
+import {dynamicMarketFixture} from '../test-support/dynamic-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {holdStep,initialHoldState,nextEvent,HOLD_POLICY,runHoldReview} from '../supabase/functions/_shared/gpt-final-decision/hold.mjs';
@@ -116,7 +117,7 @@ test('live review supplies identical bid valuation to GPT and observer; observer
     else body={lastFundingRate:s.funding.rate};
     return new Response(JSON.stringify(body));
   };
-  const r=await runHoldReview({position:{...position,id:'p',symbol:'ABCUSDT'},event:'REVIEW',apiKey:'test',now:()=>T,fetchFn,
+  const r=await runHoldReview({position:{...position,id:'p',symbol:'ABCUSDT'},event:'REVIEW',apiKey:'test',now:()=>T,fetchFn:dynamicMarketFixture(fetchFn),
     onPacket:p=>{observed=p;throw Error('observer failure');}});
   assert.equal(r.result.valid,true);assert.equal(r.result.decision,'HOLD');
   assert.equal(observed.snapshot_hash,r.result.arbitration.initial_packet.snapshot_hash);

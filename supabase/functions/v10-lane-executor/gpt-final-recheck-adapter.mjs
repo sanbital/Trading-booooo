@@ -9,6 +9,8 @@ import {detectChange,preDispatchSnapshot,runFinalRecheck,recheckAllows,postReche
   RECHECK_POLICY,RECHECK_VERSION,AGED_REASON} from '../_shared/gpt-final-decision/recheck.mjs';
 import {computeFacts} from '../_shared/gpt-final-decision/facts.mjs';
 import {readSources} from '../_shared/gpt-final-decision/market.mjs';
+import {readCaptureWithRecovery} from '../_shared/gpt-final-decision/capture-context.mjs';
+import {entryCaptureSafety,DYNAMIC_VERSION} from '../_shared/gpt-final-decision/dynamic-flow.mjs';
 import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
 import {configFromControl} from '../_shared/gpt-final-review/coordinator.mjs';
 import {gptRecheckConfig} from './gpt-final-review-adapter.mjs';
@@ -51,7 +53,9 @@ export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,pur
   // A historical fixture (asOf) is judged at its own dispatch instant, never at the wall clock.
   // Sequence 1 only: an initial BUY that is aged, or would age before dispatch, is re-asked
   // (INITIAL_ANSWER_AGED) instead of being dispatched on or expiring at the dispatch check.
-  const at=asOf??now(),snapshot=preDispatchSnapshot({at,rawQuote,e1});
+  const captured=asOf??now(),live=purpose==='PRODUCTION'&&dataMode==='LIVE';
+  const capture=live?await (testHooks?.capture??readCaptureWithRecovery)(s.symbol,captured,{now}):null;
+  const at=asOf??now(),snapshot=preDispatchSnapshot({at,rawQuote,e1,capture});
   const aged=sequence===1&&(ticket?.aged===true||(Number.isFinite(ticket?.validUntil)&&at>=ticket.validUntil-RECHECK_POLICY.initialAgeMarginMs));
   const detection=detectChange(ticket?.initial,snapshot,RECHECK_POLICY,{force:aged?[AGED_REASON]:[]});
   const record={version:RECHECK_VERSION,recheck_sequence:sequence,initial_gpt_decision:ticket?.decision??null,initial_gpt_at:ticket?.initial?.completedAt??null,
@@ -59,9 +63,15 @@ export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,pur
     initial_context:ticket?.initial??null,pre_dispatch_snapshot:snapshot,pre_dispatch_at:at,
     recheck_triggered:detection.triggered,recheck_reasons:detection.reasons,deltas:detection.deltas,
     final:null,final_gpt_decision:null,final_gpt_at:null,max_rechecks:RECHECK_POLICY.maxRechecksPerCandidate};
+  if(live){
+    record.dynamic_policy=DYNAMIC_VERSION;record.capture_safety=entryCaptureSafety(capture,at);
+    if(!record.capture_safety.ok){record.outcome='WAIT';record.final_gpt_decision='WAIT';
+      logRow(db,s,record,'NO_ORDER_WAIT:'+record.capture_safety.reason);
+      return {proceed:false,decision:'WAIT',reason:record.capture_safety.reason,record};}
+  }
   if(!detection.triggered){
     if(purpose==='PRODUCTION')logRow(db,s,record,'NO_RECHECK_INITIAL_BUY_STANDS');
-    return {proceed:true,reason:'GPT_FINAL_RECHECK_NOT_REQUIRED',record};
+    return {proceed:true,decision:'BUY_NOW',reason:'GPT_FINAL_RECHECK_NOT_REQUIRED',record};
   }
   let final;
   try{
@@ -69,11 +79,11 @@ export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,pur
       store:testHooks?.store??new SupabaseReviewStore(db),config:config??testHooks?.config??gptRecheckConfig(db),
       apiKey:apiKey??testHooks?.apiKey??getenv('OPENAI_API_KEY'),deepseekKey:testHooks?.deepseekKey??getenv('deepseek api'),fetchFn:testHooks?.fetchFn??fetch,now,readFresh:testHooks?.readFresh});
   }catch(e){final={decision:'ABSTAIN',valid:false,error:'RC_ADAPTER_ERROR',completed_at_ms:now()};}
-  record.final=final;record.final_gpt_decision=final.valid===true?final.decision:'ABSTAIN';record.final_gpt_at=final.completed_at_ms??null;
+  record.final=final;record.final_gpt_decision=final.valid===true||final.decision==='WAIT'?final.decision:'ABSTAIN';record.final_gpt_at=final.completed_at_ms??null;
   const proceed=recheckAllows(final,now());
   const reason=proceed?'GPT_FINAL_RECHECK_BUY':`GPT_FINAL_RECHECK_${record.final_gpt_decision}${final.error?':'+final.error:''}`;
   if(purpose==='PRODUCTION')logRow(db,s,record,proceed?'FINAL_BUY_TO_ORDER_CHECKS':'NO_ORDER_'+record.final_gpt_decision);
-  return {proceed,reason,record};
+  return {proceed,decision:proceed?'BUY_NOW':record.final_gpt_decision==='SKIP'?'SKIP':'WAIT',reason,record};
 }
 /** Wall-clock decision latency from the initial GPT answer to the order intent. */
 export function withOrderTiming(record,at=Date.now()){

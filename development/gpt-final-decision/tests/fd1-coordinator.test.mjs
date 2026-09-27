@@ -1,3 +1,4 @@
+import {dynamicMarketFixture,validCapture} from '../../../test-support/dynamic-fixtures.mjs';
 import {finalFields} from '../../../test-support/arbitration-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,7 +26,7 @@ const trig=Math.floor(Date.now()/MIN)*MIN;
 const sig=()=>({id:'sig-fd1',symbol:'ABCUSDT',status:'NEW',features:{strategy:'LEADER_MOMENTUM_V17',referenceClose:1,dayReturn:.2,rank:2,v17Setup:{state:'TRIGGERED',triggerAt:trig},exitPolicy:{stopPct:.01}}});
 const cfg={mode:'ENFORCE',modeValid:true,approvalRef:'t',apiBudgetUsd:3,maxCalls:300,enforceApproved:true,source:'TEST'};
 function coord(decide,now=()=>trig+1500,engine=FD1_ENTRY_ENGINE){return new FinalReviewCoordinator({config:cfg,store:new MemoryReviewStore(),apiKey:()=>'k',now,
-  fetchFn:world(decide,{now}),engine,baseline:()=>true});}
+  fetchFn:dynamicMarketFixture(world(decide,{now})),engine,baseline:()=>true});}
 test('FD1 entry: valid BUY yields an entry ticket; the ticket is bound to the identity',async()=>{
   const c=coord(i=>(entryWire({t:'ENTRY',c:i.candidate_id,d:'BUY',reasons:[],support:['return_5m','taker_buy_ratio_5m'],n:'상승 지속'})));
   const s=sig();let r=await c.consider(s);assert.equal(r.reason,'GPT_REVIEW_PENDING');await Promise.all([...c.pending.values()]);

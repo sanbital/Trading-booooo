@@ -46,7 +46,7 @@ const clip=x=>String(x??'').slice(0,500);
  * row (features.entryLifecycle) so the eventual terminal reason can name it. */
 export function lifecycleNote({at,stage,reason,gptDecision=null}){
   return {version:ENTRY_LIFECYCLE_VERSION,at:Number.isSafeInteger(at)?at:null,stage:String(stage??'UNKNOWN').slice(0,40),
-    reason:clip(reason).slice(0,200),gptDecision:['BUY','SKIP','ABSTAIN'].includes(gptDecision)?gptDecision:null};
+    reason:clip(reason).slice(0,200),gptDecision:['BUY','WAIT','SKIP','ABSTAIN'].includes(gptDecision)?gptDecision:null};
 }
 /** Only rewrite when the recorded outcome changes (bounded writes per candidate). */
 export function noteChanged(prev,next){

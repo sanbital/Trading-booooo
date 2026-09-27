@@ -1,3 +1,5 @@
+import {dispatchDynamicSafety,DYNAMIC_VERSION} from '../supabase/functions/_shared/gpt-final-decision/dynamic-flow.mjs';
+import {dynamicMarketFixture,validCapture} from '../test-support/dynamic-fixtures.mjs';
 import {finalFields} from '../test-support/arbitration-fixtures.mjs';
 // GPT FINAL RECHECK (FD1-RC1): INITIAL GPT BUY -> pre-dispatch change detector -> (only when the
 // market meaningfully changed) GPT FINAL RECHECK -> deterministic post-recheck safety -> order guards.
@@ -52,7 +54,7 @@ function world({initial='BUY',final='BUY'}={}){
     if(p==='/fapi/v1/depth')return Response.json(BOOK);
     return new Response('no',{status:404});
   };
-  return {fetchFn,calls};
+  return {fetchFn:dynamicMarketFixture(fetchFn),calls};
 }
 function v30Candidate(action,id='sig-'+action){
   const s=candidate(id);const b=s.features.b06133;
@@ -70,8 +72,8 @@ async function initialDecision({initial='BUY',final='BUY',action='ADMIT',clock}=
   const db={},s=v30Candidate(action);setTestCoordinator(db,c);
   await gptFilterExecutable(db,[s]);await Promise.all([...c.pending.values()]);await gptFilterExecutable(db,[s]);
   const check=gptFinalCheck(db,s),log=[];
-  setRecheckTestHooks({store,config:ENFORCE,apiKey:'k',fetchFn:w.fetchFn,log,schedule:()=>{},
-    readFresh:async(symbol,at)=>({src:srcFixture(at),errors:{}})});
+  setRecheckTestHooks({capture:async(_s,at)=>validCapture(at),store,config:ENFORCE,apiKey:'k',fetchFn:w.fetchFn,log,schedule:()=>{},
+    readFresh:async(symbol,at)=>({src:{...srcFixture(at),captureContext:validCapture(at)},errors:{}})});
   return {db,c,s,w,check,ticket:check.review,log,setNow:x=>{now=x;},store};
 }
 const calmQuote=at=>({best_bid:1.199,best_ask:1.2,bids:BOOK.bids,asks:BOOK.asks,timing:{requested_at_ms:at-10,received_at_ms:at}});
@@ -84,7 +86,7 @@ test('1. INITIAL BUY + no meaningful change -> no extra GPT call; the initial BU
   x.setNow(T+9000);
   const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:CALM,rawQuote:calmQuote(T+8900),now:()=>T+9000});
   assert.equal(r.record.recheck_triggered,false,JSON.stringify(r.record.recheck_reasons));assert.equal(r.proceed,true);
-  assert.equal(x.w.calls.recheck,0);assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,true);
+  assert.equal(x.w.calls.recheck,0);assert.equal(gptFinalCheck(x.db,x.s,{...r.record,dispatch_capture:validCapture(x.c.now())}).allowed,true);
   assert.equal(x.log.length,1);assert.equal(x.log[0].outcome,'NO_RECHECK_INITIAL_BUY_STANDS');
 });
 test('2+3. INITIAL BUY + meaningful deterioration -> FINAL RECHECK; FINAL BUY -> safety passes -> order check passes (beyond the initial 15 s age)',async()=>{
@@ -96,7 +98,7 @@ test('2+3. INITIAL BUY + meaningful deterioration -> FINAL RECHECK; FINAL BUY ->
   x.setNow(T+17500);
   const safety=postRecheckSafety({recheck:r.record.final,quote:calmQuote(T+17400),at:T+17500});
   assert.equal(safety.ok,true,JSON.stringify(safety));
-  assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,true);
+  assert.equal(gptFinalCheck(x.db,x.s,{...r.record,dispatch_capture:validCapture(x.c.now())}).allowed,true);
   assert.equal(gptFinalCheck(x.db,x.s,{recheck_triggered:false}).allowed,false,'without the recheck the initial answer has expired');
   const t=withOrderTiming(r.record,T+17600);assert.equal(t.decision_to_order_ms,T+17600-x.ticket.initial.completedAt);
 });
@@ -105,7 +107,7 @@ test(`${id}. FINAL ${final} -> no order`,async()=>{
   const x=await initialDecision({final});
   const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+11900),now:()=>T+12000});
   assert.equal(r.record.recheck_triggered,true);assert.equal(r.proceed,false);
-  assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,false);
+  assert.equal(gptFinalCheck(x.db,x.s,{...r.record,dispatch_capture:validCapture(x.c.now())}).allowed,false);
   if(err)assert.match(String(r.record.final.error),new RegExp(err==='RC_SKIP_PRICE_ONLY'?'RC_SKIP_PRICE_ONLY|FD_REASON_NOT_PRESENT':err));
   assert.equal(x.log.at(-1).outcome,'NO_ORDER_'+(final==='SKIP'?'SKIP':'ABSTAIN'));
 });
@@ -114,7 +116,7 @@ test('6d. expired FINAL BUY -> no order (and no fallback to the INITIAL BUY)',as
   const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+11900),now:()=>T+12000});
   assert.equal(r.proceed,true);
   const late=r.record.final.valid_until_ms+1;x.setNow(late);
-  assert.equal(recheckAllows(r.record.final,late),false);assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,false);
+  assert.equal(recheckAllows(r.record.final,late),false);assert.equal(gptFinalCheck(x.db,x.s,{...r.record,dispatch_capture:validCapture(x.c.now())}).allowed,false);
 });
 test('6e. final rechecks are bounded per IOC attempt: duplicate sequence fails, sequence 2 is the last allowed',async()=>{
   const x=await initialDecision({final:'BUY'});
@@ -151,13 +153,13 @@ test(`${id}. INITIAL ${initial} -> no order and no FINAL RECHECK (openBull retur
 test('11. CEC REJECT + INITIAL BUY + FINAL BUY -> order check passes (CEC is evidence)',async()=>{
   const x=await initialDecision({action:'REJECT',final:'BUY'});assert.equal(x.check.allowed,true);
   const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+11900),now:()=>T+12000});
-  assert.equal(r.proceed,true);x.setNow(T+13000);assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,true);
+  assert.equal(r.proceed,true);x.setNow(T+13000);assert.equal(gptFinalCheck(x.db,x.s,{...r.record,dispatch_capture:validCapture(x.c.now())}).allowed,true);
   const sent=x.store.rows.get(r.record.final.job_key).record.packet;assert.equal(sent.model_judgments.cec0040.action,'REJECT');
 });
 test('12. CEC REJECT + INITIAL BUY + FINAL SKIP -> no order',async()=>{
   const x=await initialDecision({action:'REJECT',final:'SKIP'});
   const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+11900),now:()=>T+12000});
-  assert.equal(r.proceed,false);assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,false);
+  assert.equal(r.proceed,false);assert.equal(gptFinalCheck(x.db,x.s,{...r.record,dispatch_capture:validCapture(x.c.now())}).allowed,false);
 });
 test('13. NIL fixture: the stored NILUSDT pre-dispatch state triggers a FINAL RECHECK (the answer is left to GPT)',async()=>{
   const snap=preDispatchSnapshot({at:NIL_DISPATCH_AT,rawQuote:NIL_DISPATCH_QUOTE,e1:NIL_E1});
@@ -240,6 +242,7 @@ async function retryLifecycle({fills=[375],final='BUY',changed=false,expired=fal
     budgetCovers,cycleBudgets:new Map(budget?[[db,budget]]:[]),IOC_RETRY_RESERVE:{ms:16000,calls:14},
     IOC_RETRY_POLICY,planAggressiveIocRetry,floorStep,E1_POLICY:{maxQuoteAgeMs:1000},
     gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,
+    dispatchDynamicSafety,DYNAMIC_VERSION,readCaptureWithRecovery:async()=>validCapture(now),markRecheckOutcome:()=>{},
     Date:class extends Date{static now(){return now;}},console,
     N:(v,d=0)=>Number.isFinite(Number(v))?Number(v):d,rec:v=>v??{},withOrderTiming,
     normalizeEntryBook,fetchE1AggTrades:async(_s,startAt,endAt)=>({available:true,startAt,endAt,last10sReturn:.001,takerBuyQuoteShare:.6,tradeCount:50}),retryE1Evidence:()=>changed?WEAK:CALM,
@@ -275,7 +278,7 @@ test('CASE 1 LTC: full first fill has one IOC and protection, no retry',async()=
 });
 test('CASE 2 BROCCOLI: expired ordinary BUY, fresh no-change evidence, bounded second fill',async()=>{
   const r=await retryLifecycle({fills:[0,375]});assert.equal(r.orders.length,2);assert.equal(r.result.reason,'IOC_RETRY_FILLED');
-  assert.equal(r.x.w.calls.recheck,0);assert.equal(r.x.c.check(r.x.s).reason,'GPT_REVIEW_EXPIRED');
+  assert.equal(r.x.w.calls.recheck,2);assert.equal(r.x.c.check(r.x.s).reason,'GPT_REVIEW_EXPIRED');
 });
 test('CASE 3: expired retry capability sends no second IOC',async()=>{
   const r=await retryLifecycle({fills:[0,375],expired:true});assert.equal(r.orders.length,1);
@@ -361,9 +364,9 @@ test('AGED initial BUY: forced FINAL RECHECK (INITIAL_ANSWER_AGED) on an unchang
   assert.equal(gptFinalCheck(x.db,x.s).allowed,false,'the aged answer alone never dispatches');
   const entry=gptFinalCheck(x.db,x.s,null,null,{allowAged:true});assert.equal(entry.allowed,true);
   const r=await finalRecheckStep(x.db,x.s,{ticket:entry.review,e1:CALM,rawQuote:calmQuote(at-100),now:()=>at});
-  assert.equal(r.record.recheck_triggered,true);assert.deepEqual(r.record.recheck_reasons,['INITIAL_ANSWER_AGED']);
+  assert.equal(r.record.recheck_triggered,true);assert.deepEqual(r.record.recheck_reasons,['INITIAL_ANSWER_AGED','REVIEWED_TRAJECTORY_REQUIRES_REFRESH']);
   assert.equal(x.w.calls.recheck,2);assert.equal(r.record.final_gpt_decision,'BUY');assert.equal(r.proceed,true);
-  assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,true,'the FINAL BUY supersedes the aged answer');
+  assert.equal(gptFinalCheck(x.db,x.s,{...r.record,dispatch_capture:validCapture(x.c.now())}).allowed,true,'the FINAL BUY supersedes the aged answer');
   assert.equal(gptFinalCheck(x.db,x.s,r.record,null,{allowAged:true}).allowed,true);
 });
 for(const final of ['ABSTAIN','INVALID','TIMEOUT'])
@@ -372,12 +375,12 @@ test(`AGED initial BUY + FINAL ${final} places no order`,async()=>{
   await gptFilterExecutable(x.db,[x.s]);const entry=gptFinalCheck(x.db,x.s,null,null,{allowAged:true});
   const r=await finalRecheckStep(x.db,x.s,{ticket:entry.review,e1:CALM,rawQuote:calmQuote(at-100),now:()=>at});
   assert.equal(r.record.recheck_triggered,true);assert.equal(r.proceed,false);
-  assert.equal(gptFinalCheck(x.db,x.s,r.record).allowed,false);
+  assert.equal(gptFinalCheck(x.db,x.s,{...r.record,dispatch_capture:validCapture(x.c.now())}).allowed,false);
 });
 test('a BUY about to age before dispatch is re-asked now; the IOC retry (sequence 2) is never forced',async()=>{
   const x=await initialDecision({final:'BUY'}),at=x.ticket.validUntil-1000;x.setNow(at);
   const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:CALM,rawQuote:calmQuote(at-100),now:()=>at});
-  assert.deepEqual(r.record.recheck_reasons,['INITIAL_ANSWER_AGED']);
+  assert.deepEqual(r.record.recheck_reasons,['INITIAL_ANSWER_AGED','REVIEWED_TRAJECTORY_REQUIRES_REFRESH']);
   const y=await initialDecision({final:'BUY'}),late=y.ticket.validUntil+1500;y.setNow(late);
   const r2=await finalRecheckStep(y.db,y.s,{ticket:y.ticket,e1:CALM,rawQuote:calmQuote(late-100),now:()=>late,sequence:2});
   assert.equal(r2.record.recheck_triggered,false,'the retry authority, not the answer age, governs attempt 2');

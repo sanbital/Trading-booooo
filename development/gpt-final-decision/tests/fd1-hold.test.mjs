@@ -1,3 +1,4 @@
+import {validCapture} from '../../../test-support/dynamic-fixtures.mjs';
 import {finalFields} from '../../../test-support/arbitration-fixtures.mjs';
 import {dualEntryDecision,frozenReview,DUAL_VERSION} from '../../../supabase/functions/_shared/gpt-final-decision/dual.mjs';
 import {buildDecisionPacket,MODEL} from '../../../supabase/functions/_shared/gpt-final-decision/api.mjs';
@@ -13,7 +14,7 @@ const T=1_800_000_000_000,MIN=60000;
 const cfg={mode:'ENFORCE',modeValid:true,approvalRef:'test',apiBudgetUsd:3,maxCalls:300,enforceApproved:true,source:'TEST'};
 function harness(decision,{valid=true,config=cfg}={}){
   const store=new MemoryReviewStore(),tasks=[];
-  setFd1HoldTestHooks({store,apiKey:'k',config,schedule:t=>tasks.push(t),
+  setFd1HoldTestHooks({store,apiKey:'k',config,capture:async(_s,at)=>validCapture(at),schedule:t=>tasks.push(t),
     review:async({position})=>{
       const now=Date.now(),packet=await buildDecisionPacket({task:'HOLD',subjectId:'hold-test',symbol:'ABCUSDT',dataMode:'LIVE',facts:computeFacts(marketSource(now),{asOf:now}),position:{event:'REVIEW',positionId:position.id,generation:position.generation}});
       const result=await dualEntryDecision(packet,{apiKey:'k',fetchFn:async(url,init)=>{
@@ -67,8 +68,8 @@ test('GPT budget exhaustion promotes only a fresh validated DeepSeek HOLD review
 });
 test('events: deterioration and big moves start a review; GPT EXIT closes only when fresh; spacing respected',async()=>{
   const h=harness('EXIT');let meta={};
-  let r=await fd1HoldTick({},pos,{meta,state:st(1.01),bid:1.005,now:Date.now(),timeCandidate:null});assert.equal(r.start,undefined);
-  r=await fd1HoldTick({},pos,{meta,state:st(1.05),bid:1.03,now:Date.now(),timeCandidate:null});assert.equal(r.start.event,'MOMENTUM_DETERIORATION');meta.fd1Hold=r.state;
+  let r=await fd1HoldTick({},pos,{meta,state:st(1.01),bid:1.005,now:Date.now(),timeCandidate:null});assert.equal(r.start.event,'DYNAMIC_PERIODIC_REVIEW');
+  r=await fd1HoldTick({},pos,{meta,state:st(1.05),bid:1.03,now:Date.now(),timeCandidate:null});assert.equal(r.start.event,'DYNAMIC_PERIODIC_REVIEW');meta.fd1Hold=r.state;
   await h.flush();r=await fd1HoldTick({},pos,{meta,state:st(1.05),bid:1.03,now:Date.now()+1000,timeCandidate:null});assert.equal(r.close,true);assert.equal(r.reason,'FD1_GPT_EXIT');
   const s=nextEvent({...initialHoldState(1),lastReviewAt:T,lastReviewPrice:1},{now:T+MIN,price:1.1,peak:1.1});assert.equal(s.event,null,'min gap');
   const u=nextEvent({...initialHoldState(1),lastReviewAt:T,lastReviewPrice:1},{now:T+6*MIN,price:1.03,peak:1.03});assert.equal(u.event,'SIGNIFICANT_PRICE_CHANGE');

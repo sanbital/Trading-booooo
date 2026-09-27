@@ -4,6 +4,7 @@ import {promptFor} from './prompt.mjs';
 import {collectMarket,buildPacket,packetHash} from './market.mjs';
 import {callFinalReviewer,DEFAULT_PROFILE,profileOf} from './openai.mjs';
 import {initialContext} from '../gpt-final-decision/recheck.mjs';
+import {DYNAMIC_POLICY} from '../gpt-final-decision/dynamic-flow.mjs';
 export const MAX_RESERVED_USD=.10; // Conservative per-call reservation; settled to documented token cost after the call.
 /** (2026-09-25) An engine with agedRecheck lets a stored BUY that outlived its own answer
  * validity reach the order path while at least this long remains before the trigger's
@@ -103,6 +104,18 @@ export class FinalReviewCoordinator {
       const identity=this.identity(s),identityJson=canonical(identity),binding=await this.binding;
       key=await hash({binding,identity});this.tracked.set(key,{identityJson,s:structuredClone(s),expires});
       let row=await this.store.get(key);
+      // A WAIT is a durable, bounded re-observation chain. Reuse RUNNING claims;
+      // never pay twice for the same attempt or turn a WAIT into a permanent SKIP.
+      for(let waits=0;row?.state==='DONE'&&row.record?.result?.decision==='WAIT';waits++){
+        if(row.record.binding!==binding||row.record.identity_json!==identityJson)return deny('GPT_BINDING_MISMATCH');
+        const completed=row.record.result.completed_at_ms;
+        if(!Number.isSafeInteger(completed)||completed>now||waits>=DYNAMIC_POLICY.maxWaitReviews||
+           now-completed<DYNAMIC_POLICY.missingRetryMs)
+          return {allowed:false,decision:'WAIT',storedDecision:'WAIT',reason:'GPT_WAIT_REOBSERVE',scope:'CANDIDATE',jobKey:key};
+        key=await hash({binding,identity,wait_after:key});
+        this.tracked.set(key,{identityJson,s:structuredClone(s),expires});
+        row=await this.store.get(key);
+      }
       if(!row){
         const record={version:VERSION,binding,identity,identity_json:identityJson,expires_at_ms:expires,
           reserved_usd:MAX_RESERVED_USD,api_approval_ref:this.config.approvalRef,purpose:this.purpose,wire_profile:this.profile,
@@ -124,7 +137,7 @@ export class FinalReviewCoordinator {
       // storedDecision: the recorded answer's own decision, for lifecycle labels only (never admission).
       const stored=row.record?.result?.decision;
       return {allowed:shadow||checked.allowed,reason:checked.reason,decision:checked.decision,scope:'CANDIDATE',jobKey:key,
-        ...(['BUY','SKIP','ABSTAIN'].includes(stored)?{storedDecision:stored}:{}),
+        ...(['BUY','WAIT','SKIP','ABSTAIN'].includes(stored)?{storedDecision:stored}:{}),
         ...(checked.aged?{aged:true}:{}),...(checked.detail?{detail:checked.detail}:{}),
         ...(!checked.valid&&row.record?.result?.error?{error:String(row.record.result.error).slice(0,80)}:{})};
     }catch{return deny('GPT_REVIEW_STORAGE_OR_VALIDATION_ERROR');}

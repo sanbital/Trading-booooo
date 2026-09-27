@@ -1,5 +1,6 @@
 import {positionGeneration} from '../_shared/exit-authority.mjs';
-import {readCapture} from '../_shared/gpt-final-decision/capture-context.mjs';
+import {readCaptureWithRecovery,emergencyDynamicPacket} from '../_shared/gpt-final-decision/capture-context.mjs';
+import {DYNAMIC_POLICY,positionDynamicState,entryFailureEvidence} from '../_shared/gpt-final-decision/dynamic-flow.mjs';
 import {dynamicsEvent} from '../_shared/gpt-final-decision/trajectory.mjs';
 /** Strategic closes require fresh validated GPT FINAL. Existing hard safety executes first. */
 import {holdStep,initialHoldState,runHoldReview,TIME_REASONS,FD1_HOLD_POLICY_VERSION,HOLD_POLICY} from '../_shared/gpt-final-decision/hold.mjs';
@@ -86,18 +87,36 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
   const generation=positionGeneration(p);
   if(prior.generation&&prior.generation!==generation)prior=initialHoldState(p.entry_price);
   prior={...prior,generation};
+  const pendingRead=prior.pending?store.get(prior.pending.key).catch(()=>null):null;
   let dynamics=null;
-  if(!prior.pending&&now-(prior.dynamicsAt??0)>=10000){
-    const capture=await (testHooks?.capture??readCapture)(p.symbol,now,{positionId:p.id});
+  if(now-(prior.dynamicsAt??0)>=DYNAMIC_POLICY.positionReadMs){
+    const capture=await (testHooks?.capture??readCaptureWithRecovery)(p.symbol,now,{positionId:p.id,now:testHooks?.now??Date.now});
     dynamics=dynamicsEvent(capture,prior.dynamicsObservation,!!prior.protectUntil);
-    prior={...prior,dynamicsAt:now,dynamicsObservation:dynamics.observation};
+    const capturedAt=testHooks?.capture?now:Date.now();
+    const seed=meta.entryDynamicSeed?.capture;
+    const previous=prior.dynamicTracker??(seed?{generation,last_valid_capture:seed}:null);
+    let tracker=positionDynamicState(previous,capture,{at:capturedAt,bid,entry:Number(p.entry_price),generation,positionId:p.id});
+    if(tracker.status==='DATA_DEGRADED'){
+      const emergency=testHooks?.emergency?await testHooks.emergency(p.symbol):testHooks?.capture?
+        {status:'UNAVAILABLE',reason:'TEST_EMERGENCY_NOT_SUPPLIED',full_trajectory:false,entry_allowed:false}:
+        await emergencyDynamicPacket(p.symbol);
+      tracker={...tracker,emergency_packet:emergency};
+      dynamics={...dynamics,event:'DATA_DEGRADED',evidenceKey:'DATA_DEGRADED:'+Math.floor(now/DYNAMIC_POLICY.missingRetryMs)};
+    }else{
+      const failure=entryFailureEvidence(capture,{entry:Number(p.entry_price),peak:state.peakPrice,prior:prior.dynamicTracker?.last_valid_capture});
+      tracker.entry_failure=failure;
+      if(failure.review)dynamics={...dynamics,event:'ENTRY_FAILURE_MULTI_AXIS',evidenceKey:'ENTRY_FAILURE:'+capture.end_ms};
+      else if(!prior.dynamicTracker&&now>=Date.parse(p.entry_at)&&now-Date.parse(p.entry_at)<120000)
+        dynamics={...dynamics,event:'POST_FILL_THESIS_REVIEW',evidenceKey:'POST_FILL:'+p.id};
+    }
+    prior={...prior,dynamicsAt:capturedAt,dynamicsObservation:dynamics.observation,dynamicTracker:tracker};
   }
-  const answerOf=async key=>{const row=await store.get(key);if(!row)return null;const r=row.record?.result??{},
+  const answerOf=async key=>{const row=await (pendingRead??store.get(key));if(!row)return null;const r=row.record?.result??{},
       identityOk=row.record?.identity?.position_id===String(p.id)&&row.record?.identity?.generation===generation&&row.record?.purpose==='PRODUCTION'&&
         row.record?.packet?.position?.generation===generation;
     let valid=false;try{valid=r.valid===true&&identityOk&&revalidateArbitration(r,row.record.packet).decision===r.decision;}catch{}
     if(valid)return {state:row.state,decision:r.decision,valid:true,authority:'GPT_FINAL_ONLY',
-      completed_at_ms:r.completed_at_ms,snapshot_at_ms:r.final_snapshot_at_ms,snapshot_hash:r.arbitration?.final_snapshot_hash??null,
+      started_at_ms:r.started_at_ms,completed_at_ms:r.completed_at_ms,snapshot_at_ms:r.final_snapshot_at_ms,snapshot_hash:r.arbitration?.final_snapshot_hash??null,
       refresh_error:r.arbitration?.refresh_error??null};
     if(row.state==='DONE'&&identityOk){
       const emergency=await deepseekEmergency(r,{p,packet:row.record.packet,generation,now});
@@ -106,7 +125,7 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
     return {state:row.state,decision:r.decision,valid:false,authority:null,completed_at_ms:r.completed_at_ms,
       snapshot_at_ms:r.final_snapshot_at_ms,snapshot_hash:null,refresh_error:r.arbitration?.refresh_error??null};};
   let step;
-  try{step=await holdStep(prior,{now,price:bid,peak:state.peakPrice,timeCandidate,softTrigger,dynamics,positionId:p.id,generation,answerOf});}
+  try{step=await holdStep(prior,{now,price:bid,peak:state.peakPrice,timeCandidate,softTrigger,dynamics,positionId:p.id,generation,answerOf,clock:testHooks?()=>now:Date.now});}
   catch{return {close:false,reason:'FD1_FINAL_UNAVAILABLE',state:prior};}
   if(!step.start)return step;
   // A review is starting: claim it in the shared journal/ledger, then ask in the background.
@@ -119,7 +138,7 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
         peakPrice:state.peakPrice,entryAt:Date.parse(p.entry_at),lastHighAt:state.lastHighAt,stopPrice:state.stopPrice,entryFeatures:f},
       emergencyReview=async why=>{
         if(!emergencyEligible(config,deepseekKey))return null;
-        const out=await (testHooks?.review??runHoldReview)({apiKey:'',deepseekKey,exitContext,position,
+        const out=await (testHooks?.review??runHoldReview)({apiKey:'',deepseekKey,exitContext,position,dynamicState:prior.dynamicTracker,
           event:step.start.event,timeCandidate,stopStage:state.protectionStage??null});
         // Provider completion occurs after the observation that started this tick.
         const consumedAt=(testHooks?.now??Date.now)();
@@ -148,7 +167,7 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
       const task=(async()=>{
         // GPT FINAL remains primary. If it is unavailable after the claim, answerOf may consume
         // the already-validated DeepSeek review on the next management observation.
-        const out=await (testHooks?.review??runHoldReview)({apiKey,deepseekKey,exitContext,position,
+        const out=await (testHooks?.review??runHoldReview)({apiKey,deepseekKey,exitContext,position,dynamicState:prior.dynamicTracker,
           event:step.start.event,timeCandidate,stopStage:state.protectionStage??null});
         await store.complete(step.start.key,owner,{...record,packet:out.packet,result:{...out.result,final_packet:undefined},
           snapshot_at_ms:out.packet?now:null});
