@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {validCapture,dynamicWire} from '../test-support/dynamic-fixtures.mjs';
+import {validCapture,rawCapture,dynamicWire} from '../test-support/dynamic-fixtures.mjs';
 import {src,entryWire} from '../development/gpt-final-decision/tests/fixtures.mjs';
 import {computeFacts} from '../supabase/functions/_shared/gpt-final-decision/facts.mjs';
 import {buildDecisionPacket,hash,modelInput} from '../supabase/functions/_shared/gpt-final-decision/api.mjs';
@@ -9,6 +9,7 @@ import {dualEntryDecision,frozenReview,arbitrationPayload,reviewsFor} from '../s
 import {detectChange,buildRecheckPacket,recheckModelInput} from '../supabase/functions/_shared/gpt-final-decision/recheck.mjs';
 import {nextEvent,initialHoldState,holdStep} from '../supabase/functions/_shared/gpt-final-decision/hold.mjs';
 import {prepareStoredReplay} from '../supabase/functions/_shared/gpt-final-decision/stored-replay.mjs';
+import {readCapture} from '../supabase/functions/_shared/gpt-final-decision/capture-context.mjs';
 const T=1800000000200;
 async function packet(){const p=await buildDecisionPacket({task:'ENTRY',subjectId:'continuity',symbol:'ABCUSDT',dataMode:'LIVE',
  facts:computeFacts({...src(T),captureContext:validCapture(T)},{asOf:T,referenceClose:1})});
@@ -37,6 +38,14 @@ test('same-snapshot FINAL sends every ordered bucket once and explicitly binds b
  assert.equal(input.initial_snapshot,undefined);
  assert.equal(input.initial_snapshot_reference.snapshot_hash,f.snapshot_hash);
  assert.match(input.initial_snapshot_reference.meaning,/initial\.\* and current\.\*/);
+});
+
+test('capture reader and review use one canonical hash even after JSONB reorders object keys',async()=>{
+ const c=await readCapture('ABCUSDT',T,{env:k=>k==='SUPABASE_URL'?'https://fixture.invalid':'test-key',
+  fetchFn:async()=>Response.json(rawCapture(T))});
+ assert.equal(c.status,'AVAILABLE');assert.equal(c.trajectory_hash,await hash(c.trajectory));
+ const reordered=c.trajectory.map(p=>Object.fromEntries(Object.entries(p).reverse()));
+ assert.equal(c.trajectory_hash,await hash(reordered));
 });
 
 test('stored replay keeps the historical clock and missing data, excluding realized outcomes',async()=>{

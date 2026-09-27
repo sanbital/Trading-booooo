@@ -6,21 +6,13 @@ import {contextForModel} from './capture-context.mjs';
 import {entryAssessment} from './assessment.mjs';
 import {compactDynamic} from './dynamic-flow.mjs';
 import {DYNAMIC_PROMPT,dynamicEnabled,boundedDynamicTransportSchema} from './dynamic-contract.mjs';
+import {hash} from './snapshot-hash.mjs';
+export {hash};
 export const MODEL='gpt-5.4-mini-2026-03-17';
 export const API_URL='https://api.openai.com/v1/responses';
 export const PRICING=Object.freeze({inputPerMillion:.75,cachedPerMillion:.075,outputPerMillion:4.5});
 export const REQUEST_MS=8000;
 function ensure(ok,reason){if(!ok)throw Error(reason);}
-function canonical(x){
-  if(x===null||['string','boolean'].includes(typeof x))return JSON.stringify(x);
-  if(typeof x==='number'){ensure(Number.isFinite(x),'NONFINITE');return JSON.stringify(x);}
-  if(Array.isArray(x))return '['+x.map(canonical).join(',')+']';
-  return '{'+Object.keys(x).sort().filter(k=>x[k]!==undefined).map(k=>JSON.stringify(k)+':'+canonical(x[k])).join(',')+'}';
-}
-export async function hash(x){
-  const b=new TextEncoder().encode(typeof x==='string'?x:canonical(x));
-  return [...new Uint8Array(await crypto.subtle.digest('SHA-256',b))].map(v=>v.toString(16).padStart(2,'0')).join('');
-}
 /** @param position {event, deterministicExitCandidate, stopStage} for HOLD
  *  @param chase    ENTRY only: late-entry context of a LIVE_MOMENTUM_CHASE candidate (absent otherwise,
  *                  so an ordinary candidate's packet is byte-identical to before). */

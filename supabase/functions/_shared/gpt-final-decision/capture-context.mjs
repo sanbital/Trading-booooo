@@ -1,6 +1,6 @@
 import {trajectoryDynamics,bucketDynamics} from './trajectory.mjs';
 import {entryCaptureSafety,DYNAMIC_POLICY} from './dynamic-flow.mjs';
-async function hash(value){return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(value))))].map(x=>x.toString(16).padStart(2,'0')).join('');}
+import {hash} from './snapshot-hash.mjs';
 export const CAPTURE_VERSION='CAPTURE-CONTEXT-3-TRAJECTORY-120S';
 export const CAPTURE_NOTE='capture_context는 판단 직전 약 120초를 5초 x 24구간으로 보존한 변화 경로다. 평균/총합 요약이 아니라 trajectory의 순서와 각 구간 변화량을 읽어라. 현재 실행 시점의 절대 호가·스프레드·깊이는 facts의 최신 microstructure를 우선하고, capture_context는 그 현재 상태에 도달한 방향·가속·반전 여부를 해석하는 데 사용한다. d_mid_bps는 구간 가격 변화, d_spread_bps는 스프레드 증감, d_*_depth_25_pct는 호가 깊이 증감, buy_share_5s와 d_buy_share는 5초 매수 체결 우위와 변화, net_taker_quote_5s와 d_net_taker_quote는 매수-매도 체결대금 및 변화, ask_book_net_5s는 표시 매도호가 순증감(추가-제거), *_impact_450_bps와 d_*_impact_bps는 450 USDT 체결 충격과 변화다. 특히 초반과 후반의 방향이 다르면 마지막 10~20초의 반전/가속을 명시적으로 고려하라. 단, 표시 호가 증감은 취소·이동·체결을 완전히 구분하지 못하므로 단독으로 진짜 매도벽/스푸핑이라 단정하지 마라. ENTRY에서 UNAVAILABLE 또는 10초 이상 된 trajectory는 WAIT이며 신규 주문을 허용하지 않는다. OPEN POSITION에서는 DATA_DEGRADED로 표시하고 최신 emergency 자료와 직전 valid snapshot age/drift를 함께 재심사한다. 자료 누락은 자동 HOLD나 EXIT 근거가 아니다.';
 const POINT_KEYS=['end_ms','d_mid_bps','d_spread_bps','d_ask_depth_25_pct','d_bid_depth_25_pct','buy_share_5s','d_buy_share','net_taker_quote_5s','d_net_taker_quote','ask_book_net_5s','buy_impact_450_bps','d_buy_impact_bps','sell_impact_450_bps','d_sell_impact_bps'];
