@@ -107,6 +107,13 @@ test('01 the hard stop is always active and executes with no AI work at all',asy
   assert.equal(hard.hardFloor,SOON.hardStop);
   assert.equal(exitContext(p,hard,candidate,SOON.exitFill,T,approved).hard_floor,SOON.hardStop);
 });
+test('WUSDT management keeps candidate-only HOLD and independent hard-stop EXIT',async()=>{
+  const p=soonPosition();p.symbol='WUSDT';
+  const held=production(p,SOON.exitFill);assert.equal((await held.manage()).action,'HOLD');
+  assert.equal(held.closes().length,0);assert.deepEqual(held.stops(),[]);
+  const stopped=production(p,SOON.hardStop-SOON.tick);stopped.ctx.fd1HoldTick=()=>{throw Error('MUST_NOT_CALL_AI')};
+  assert.equal((await stopped.manage()).action,'CLOSE');assert.equal(stopped.closes().length,1);
+});
 
 test('02 generating a candidate alone changes no protection and touches no stop order',async()=>{
   const p=soonPosition();

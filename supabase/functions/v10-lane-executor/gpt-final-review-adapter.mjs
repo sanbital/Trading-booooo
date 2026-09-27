@@ -3,7 +3,7 @@ import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review
 import {baselineAllowedLive,canonical} from '../_shared/gpt-final-review/contract.mjs';
 import {FD1_ENTRY_ENGINE} from '../_shared/gpt-final-decision/engine.mjs';
 import {recheckAllows} from '../_shared/gpt-final-decision/recheck.mjs';
-import {lifecycleNote} from './entry-lifecycle.mjs';
+import {lifecycleNote,mergeLifecycleNote} from './entry-lifecycle.mjs';
 const contexts=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 /** After lease release, replace only this identity's still-pending lifecycle note.
@@ -14,7 +14,8 @@ export async function recordAsyncReviewOutcome(db,s,review,now=Date.now){
   if(r.error)throw Error('GPT_ASYNC_LIFECYCLE_READ');
   const row=r.data;if(!row||row.features?.entryLifecycle?.reason!=='GPT_REVIEW_PENDING')return;
   if(canonical(FD1_ENTRY_ENGINE.identity(row))!==canonical(FD1_ENTRY_ENGINE.identity(s)))return;
-  const note=lifecycleNote({at:now(),stage:'GPT_REVIEW',reason:review.reason,gptDecision:review.storedDecision});
+  const note=mergeLifecycleNote(row.features.entryLifecycle,
+    lifecycleNote({at:now(),stage:'GPT_REVIEW',reason:review.reason,gptDecision:review.storedDecision}));
   const w=await db.from('v11_long_regime_signals').update({features:{...row.features,entryLifecycle:note}})
     .eq('id',row.id).eq('status','NEW').eq('features',JSON.stringify(row.features));
   if(w.error)throw Error('GPT_ASYNC_LIFECYCLE_WRITE');

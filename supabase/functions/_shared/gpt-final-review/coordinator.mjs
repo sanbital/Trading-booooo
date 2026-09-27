@@ -124,6 +124,7 @@ export class FinalReviewCoordinator {
       // storedDecision: the recorded answer's own decision, for lifecycle labels only (never admission).
       const stored=row.record?.result?.decision;
       return {allowed:shadow||checked.allowed,reason:checked.reason,decision:checked.decision,scope:'CANDIDATE',jobKey:key,
+        gptAttempted:typeof row.record?.result?.attempted==='boolean'?row.record.result.attempted:null,
         ...(['BUY','SKIP','ABSTAIN'].includes(stored)?{storedDecision:stored}:{}),
         ...(checked.aged?{aged:true}:{}),...(checked.detail?{detail:checked.detail}:{}),
         ...(!checked.valid&&row.record?.result?.error?{error:String(row.record.result.error).slice(0,80)}:{})};
@@ -250,6 +251,7 @@ export class FinalReviewCoordinator {
         if(checked.valid)this.tickets.set(String(t.s.id),checked.ticket);
         if(checked.allowed)ready=true;
         const review={signalId:t.s.id,jobKey:key,allowed:checked.allowed,decision:checked.decision,reason:checked.reason,
+          gptAttempted:typeof row.record?.result?.attempted==='boolean'?row.record.result.attempted:null,
           storedDecision:row.record?.result?.decision??null,detail:checked.detail??null,error:row.record?.result?.error??null};
         if(!reported.has(key)){
           reported.add(key);this.waitOutcomes.push(review);

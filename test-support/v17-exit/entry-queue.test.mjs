@@ -144,6 +144,7 @@ import {POLICY} from '../../supabase/functions/_shared/leader-momentum-v17.mjs';
 import {SETUP_POLICY, SETUP_REASON, SETUP_STATE, isTerminal as setupIsTerminal}
   from '../../supabase/functions/_shared/leader-pullback-reaccel.mjs';
 import {lifecycleNote, gptTerminalReason} from '../../supabase/functions/v10-lane-executor/entry-lifecycle.mjs';
+import * as lifecycle from '../../supabase/functions/v10-lane-executor/entry-lifecycle.mjs';
 import * as capacity from '../../supabase/functions/v10-lane-executor/entry-capacity.mjs';
 import {CONTROL_SCOPE} from '../../supabase/functions/_shared/leader-entry-control.mjs';
 import {SLOT_SIZING_CONTRACT, slotSizingBounds} from '../../supabase/functions/_shared/leader-slot-sizing.mjs';
@@ -218,6 +219,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     const st = {patch: null, id: null};
     const b = {
       select: () => b, eq: (k, v) => { if (k === 'id') st.id = v; return b; },
+      insert: async value => { audits.push(value); return {error:null}; },
       gte: () => b, order: () => b, neq: () => b,
       update: (patch) => { st.patch = patch; if (patch?.status === 'REJECTED') terminals.push({id: null, patch, st}); return b; },
       in: () => b,
@@ -279,7 +281,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     REVISION: 'V11-LONG-REGIME-1.0.1', STRATEGY: 'P10',
     gptFilterExecutable: async (_db, executable) => reviews ? reviews(executable) :
       ({candidates: executable, reason: 'TEST_GPT_PASS', reviews: executable.map(s => ({signalId: s.id, allowed: true}))}),
-    lifecycleNote, gptTerminalReason, notes, terminals, attempts, model,
+    ...lifecycle,lifecycleNote, gptTerminalReason, notes, terminals, attempts, model,PATCH:'TEST',
     noteEntryLifecycle: async (_db, row, note) => { notes.push({id: row.id, ...note}); return row; },
     gptArmFollowUp: (_db, rest) => followUp && rest.length > 0,
     // Entry capacity: the real module and the executor's real helpers (sliced below), reading the
@@ -311,6 +313,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     db,
   };
   vm.createContext(ctx);
+  vm.runInContext(source.slice(source.indexOf('async function recordEntryTechnicalFailure('),source.indexOf('/**\n * Terminal accounting')),ctx);
   const helpers = source.slice(source.indexOf('// Account state the entry capacity is computed from'), source.indexOf('async function runEntryQueue('));
   if (!helpers.includes('function refreshCapacityInputs(db)')) throw new Error('the capacity helpers moved');
   vm.runInContext(helpers, ctx);
@@ -320,6 +323,23 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
   vm.runInContext(`this.go=async function(){let entry={entered:false,reason:"V17_NO_ENTRY"};const out=await (async()=>{${loop}\n})();return {entry:out,seen}}`, ctx);
   return ctx;
 }
+
+test('CEC input failure is recorded and the next normal candidate still reaches GPT',async()=>{
+ const now=Date.parse('2026-09-27T03:07:10Z');
+ const rows=['WUSDT','BTCUSDT'].map((symbol,i)=>({id:String(i),symbol,entry_bar_at:new Date(now-10000).toISOString(),features:{rank:i,signal5Close:now-10000}}));
+ const h=harness({now,rows,outcomes:{BTCUSDT:{result:{entered:false}}}});
+ const reviewed=[];h.gptFilterExecutable=async(_db,x)=>{reviewed.push(...x.map(r=>r.symbol));return {candidates:[],reviews:[]}};
+ h.applyCec0040Selection=async(_db,row)=>{if(row.symbol==='WUSDT')throw Error('CEC0040_DECISION:CEC0040_DECISION_INPUT_INVALID');return {allowed:true,row}};
+ await h.go();assert.deepEqual(reviewed,['BTCUSDT']);
+ const note=h.notes.find(x=>x.id==='0');assert.equal(note.technicalFailure.root.code,'CEC0040_DECISION_INPUT_INVALID');
+ assert.equal(h.audits.find(x=>x.details?.kind==='TECHNICAL_ERROR').details.lifecycle.technicalFailure.latest.orderDispatched,false);
+});
+for(const failure of ['V17_EXECUTION_LEASE_EXPIRED','ACCOUNT_UNKNOWN','CEC0040_DECISION:CEC0040_STATE_IDENTITY_INVALID','UNEXPECTED'])
+ test('selector safely stops on '+failure,async()=>{
+  const now=Date.parse('2026-09-27T03:07:10Z'),rows=[{id:'fatal',symbol:'WUSDT',entry_bar_at:new Date(now-10000).toISOString(),features:{signal5Close:now-10000}}];
+  const h=harness({now,rows,outcomes:{}});h.applyCec0040Selection=async()=>{throw Error(failure)};
+  await assert.rejects(()=>h.go(),new RegExp(failure));assert.equal(h.attempts.length,0);assert.equal(h.notes[0].stage,'CEC0040');
+ });
 
 test('a symbol-specific no-fill lets the next candidate be priced in the same run', async () => {
   const ctx = harness({outcomes: {
