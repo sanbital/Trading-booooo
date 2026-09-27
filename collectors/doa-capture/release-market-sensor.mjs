@@ -31,6 +31,8 @@ try{const current=await machine('/'+before.id);if(current.instance_id!==before.i
 }finally{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}
 evidence.after=safe(await machine('/'+before.id));save();
 let stableSince=null,verified=false;
+let soakError=null;
+try{
 for(let i=0;i<100;i++){
  await new Promise(r=>setTimeout(r,15000));
  const [row]=(await query(`with cutoff as materialized(select clock_timestamp() t), sensor as materialized(select public.doa_market_sensor_context_v1('BTCUSDT',t) c from cutoff)
@@ -40,17 +42,31 @@ for(let i=0;i<100;i++){
  from jsonb_each(c.metrics->'watch_roles') w(k,v)
  cross join lateral (select public.doa_gpt_capture_context_v3(k,cutoff.t) ctx) x where k<>'BTCUSDT') trade_contexts,
  (select jsonb_agg(jsonb_build_object('symbol',p.symbol,'id',p.id,'context',public.doa_context_for_role_v1(p.symbol,cutoff.t,'OPEN_POSITION',p.id)-'trajectory')) from public.v11_long_regime_positions p where p.state='OPEN') open_positions,
+ public.doa_context_for_role_v1('QNTUSDT',cutoff.t,'TRADE_CANDIDATE',null)-'trajectory' qnt_trade,
  public.doa_context_for_role_v1('BTCUSDT',cutoff.t,'TRADE_CANDIDATE')-'trajectory' btc_trade
  from doa_capture.control c cross join cutoff cross join sensor where c.id=1`));
  const sensor=validateMarketSensor(row.sensor,Math.floor(Number(row.as_of_ms))),last=sensor.market_sensor_trajectory?.at(-1);
  const sample={at:new Date(Number(row.as_of_ms)).toISOString(),metrics:row.metrics,heartbeat_age_s:row.heartbeat_age_s,
- sensor:{...sensor,market_sensor_trajectory:undefined},last_point:last,trade_contexts:row.trade_contexts,open_positions:row.open_positions,btc_trade:row.btc_trade};
- evidence.samples.push(sample);console.log(JSON.stringify({at:sample.at,status:sensor.status,reason:sensor.reason,watched:row.metrics.watched,synced:row.metrics.synced,return_1m:sensor.btc_return_1m,latency_ms:sensor.max_event_latency_ms,coverage:sensor.depth_coverage_bps,trade_unavailable:row.trade_contexts?.filter(x=>x.status!=='AVAILABLE'),open_count:row.open_positions?.length??0}));
- const good=sensor.status==='AVAILABLE'&&row.metrics.version==='DOA-CAPTURE-6-MARKET-SENSOR'&&row.metrics.source_commit===sha&&row.metrics.watched===row.metrics.synced&&row.heartbeat_age_s<25;
+ sensor:{...sensor,market_sensor_trajectory:undefined},last_point:last,trade_contexts:row.trade_contexts,open_positions:row.open_positions,qnt_trade:row.qnt_trade,btc_trade:row.btc_trade};
+ evidence.samples.push(sample);console.log(JSON.stringify({at:sample.at,status:sensor.status,reason:sensor.reason,qnt_status:row.qnt_trade?.status,qnt_reason:row.qnt_trade?.reason,watched:row.metrics.watched,synced:row.metrics.synced,return_1m:sensor.btc_return_1m,latency_ms:sensor.max_event_latency_ms,coverage:sensor.depth_coverage_bps,trade_unavailable:row.trade_contexts?.filter(x=>x.status!=='AVAILABLE'),open_count:row.open_positions?.length??0}));
+ const good=sensor.status==='AVAILABLE'&&row.qnt_trade?.status==='AVAILABLE'&&row.qnt_trade?.buckets===24&&
+  row.metrics.version==='DOA-CAPTURE-6-MARKET-SENSOR'&&row.metrics.source_commit===sha&&
+  row.metrics.watched===row.metrics.synced&&row.heartbeat_age_s<25&&row.metrics.order_calls===0&&row.metrics.llm_calls===0;
  if(good){stableSince??=Number(row.as_of_ms);if(Number(row.as_of_ms)-stableSince>=600000){verified=true;save();break;}}else stableSince=null;
  save();
 }
+}catch(e){soakError=e;}
 evidence.verified=verified;evidence.stable_since=stableSince;evidence.after=safe(await machine('/'+before.id));
 const {image:oldImage,...oldConfig}=cfg,{image:newImage,...newConfig}=(await machine('/'+before.id)).config;
-if(JSON.stringify(oldConfig)!==JSON.stringify(newConfig))throw Error('COLLECTOR_CONFIG_DRIFT');
-evidence.image_only_update=true;save();if(!verified)throw Error('TEN_MINUTE_SENSOR_SOAK_INCOMPLETE');
+if(JSON.stringify(oldConfig)!==JSON.stringify(newConfig))soakError??=Error('COLLECTOR_CONFIG_DRIFT');
+evidence.image_only_update=true;save();
+if(!verified||soakError){
+ const current=await machine('/'+before.id);
+ if(current.config.image!==image)throw Error('COLLECTOR_MOVED_DURING_FAILED_SOAK');
+ const rollbackLease=await machine('/'+before.id+'/lease','POST',{description:'capture-rollback-'+sha.slice(0,12),ttl:60});
+ const rollbackNonce=rollbackLease.data?.nonce;if(!rollbackNonce)throw Error('ROLLBACK_LEASE_MISSING');
+ try{await machine('/'+before.id,'POST',{current_version:current.instance_id,config:cfg},rollbackNonce);}
+ finally{await machine('/'+before.id+'/lease','DELETE',undefined,rollbackNonce);}
+ evidence.rollback=safe(await machine('/'+before.id));save();
+ throw Error('QNT_OR_SENSOR_SOAK_FAILED_ROLLED_BACK:'+String(soakError?.message??'INCOMPLETE'));
+}
