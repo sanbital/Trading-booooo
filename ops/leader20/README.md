@@ -1,6 +1,6 @@
 # Leader20 dynamic strategy — release candidate
 
-This change is prepared for review. It is **not a live activation**. The migration starts with `observation_enabled=false`, `active_strategy=LEGACY`, and an unapproved archive budget of zero. It changes no account allocation, leverage, slots, API budget, circuit, position, or native order.
+The initial release was deployed and 20/20 fresh capture verified on 2026-09-27 (PR #213, workflow run 36321386431). This is **observation deployment, not a live strategy activation**. The migration starts with `observation_enabled=false`, `active_strategy=LEGACY`, and an unapproved archive budget of zero. It changes no account allocation, leverage, slots, API budget, circuit, position, or native order.
 
 ## Behavior
 
@@ -49,3 +49,18 @@ The authorized leader20-release workflow deploys the existing services and enabl
 If capture is partial/stale, epoch refresh fails, GPT is unavailable or budget is exhausted, new entry stays deferred. Holdings keep their native hard stop and last approved protection. No delayed answer creates a new approval. A rollback first pauses new entries and invalidates pending approvals by generation; keep the compatible migration, capture, native protection and settlement. Do not delete live protection orders or roll back to an incompatible executor that cannot recognize new positions.
 
 Still required before calling this LIVE: approved rollout/capacity, verified deployed bundle/worker identities, exact historical or forward replay coverage, measured inference latency/cost under load, durable retention/export, existing dashboard/alert integration, and observation of natural reviews/rechecks/fills and a real six-hour rotation. Unobserved events must remain explicitly unobserved.
+
+## Unicode follow-up
+
+All current Binance COIN contracts, including Unicode names, participate in numeric ranking.
+The collector, private database constraints, capture RPCs and public model-context readers accept
+the same letter/number symbol family already supported by the existing order gateway.
+Separators, query delimiters and emoji remain invalid. Migration source
+20260927131311_leader20_unicode_symbols.sql was applied as 20260927131840.
+The frozen initial epoch remains unchanged: independently ranking all 525 eligible source
+contracts produced the same 20 members; its original eligibility counter was 520.
+The next scheduled epoch will use the corrected full universe.
+
+The follow-up release replaces the existing collector image without changing its machine
+configuration or scaling, verifies ten continuous minutes of heartbeat/sensor availability,
+then requires 20 fresh 24-bucket trade contexts and unchanged protected settings.
