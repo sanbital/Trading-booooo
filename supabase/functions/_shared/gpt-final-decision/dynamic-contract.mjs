@@ -3,9 +3,15 @@ const obj = properties => ({type:'object',properties,required:Object.keys(proper
 const prose = {type:'string',minLength:1,maxLength:280};
 const citation = {type:'string',minLength:1,maxLength:160};
 const citations = {type:'array',maxItems:8,items:citation};
+export const DYNAMIC_EVIDENCE_FIELDS = Object.freeze(['return','velocity_bps_s','acceleration_bps_s2','net_taker_flow',
+  'buy_share','flow_acceleration','bid_liquidity_change','ask_liquidity_change','imbalance','spread','trade_count',
+  'high_renewal_slowdown','drawdown_from_sampled_peak','recovery_velocity_bps_s','arrival_rate_slope']);
 export const DYNAMIC_PROMPT = `
 STRUCTURAL STRENGTH and CURRENT PROPULSION are separate questions. Structural trend alone never justifies BUY or HOLD.
 Read the ordered 5s, 15s, 30s, 60s, 120s horizons and price, flow, book, participation together.
+dynamic_evidence and dynamic_risks contain ONLY exact numeric dot paths from their schema enum, never prose or values.
+For these fields use paths relative to capture_context, such as dynamics.horizons.s30.net_taker_flow.
+Put explanations in current_propulsion, structural_strength and uncertainty. If evidence is missing, use empty citation arrays.
 WAIT is a normal decision: a strong symbol with uncertain timing should be observed again without adding exposure.
 Explain current propulsion direction as ACCELERATING, STABLE, DECELERATING or REVERSING.
 For each why_buy_now horizon, cite an exact numeric path under dynamics.horizons.s5/s15/s30/s60/s120.
@@ -37,6 +43,16 @@ export const dynamicEnabled = packet => packet?.dynamic_policy === DYNAMIC_VERSI
 export function extendDynamicSchema(schema, task, packet) {
   if (!dynamicEnabled(packet)) return schema;
   const extra=dynamicWireProperties(task);
+  const capture=packet.facts?.capture_context;
+  const keys=HORIZONS.flatMap(s=>DYNAMIC_EVIDENCE_FIELDS.map(k=>'dynamics.horizons.s'+s+'.'+k))
+    .filter(k=>valueAt(capture,k)!==null);
+  const menu=paths=>paths.length?{...citations,items:{type:'string',enum:paths}}:{...citations,maxItems:0};
+  extra.dynamic_evidence=menu(keys);extra.dynamic_risks=menu(keys);
+  if(extra.why_buy_now){
+    for(const s of HORIZONS)extra.why_buy_now.properties.horizons.properties['s'+s].properties.evidence=menu(keys.filter(k=>k.startsWith('dynamics.horizons.s'+s+'.')));
+    extra.why_buy_now.properties.flow=menu(keys.filter(k=>/\.(net_taker_flow|buy_share|flow_acceleration)$/.test(k)));
+    extra.why_buy_now.properties.orderbook=menu(keys.filter(k=>/\.(bid_liquidity_change|ask_liquidity_change|imbalance|spread)$/.test(k)));
+  }
   return {...schema,properties:{...schema.properties,...extra},required:[...schema.required,...Object.keys(extra)]};
 }
 function valueAt(c,path) {

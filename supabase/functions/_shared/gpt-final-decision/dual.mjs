@@ -6,7 +6,7 @@ import {flashCostCeiling} from './hold-shadow.mjs';
 import {resolvePolicy} from '../self-evolution/runtime.mjs';
 import {policyPrompt} from '../self-evolution/policy.mjs';
 import {validateMarketSensor,SENSOR_NOTE} from './market-sensor.mjs';
-import {dynamicEnabled} from './dynamic-contract.mjs';
+import {dynamicEnabled,DYNAMIC_EVIDENCE_FIELDS} from './dynamic-contract.mjs';
 import {entryCaptureSafety,DYNAMIC_POLICY} from './dynamic-flow.mjs';
 export const DUAL_VERSION='FD1_GPT_FINAL_ARBITRATION_2';
 export const ARBITRATION_PROMPT=`
@@ -58,9 +58,12 @@ const FINAL_TRAJECTORY_FIELDS=new Set([
   'd_buy_share','d_net_taker_quote','d_ask_depth_25_pct','d_bid_depth_25_pct','trade_count'
 ]);
 export function finalEvidenceKeys(catalog){
+  const compact=Object.keys(catalog).some(k=>k.includes('.capture_context.critical_segments.'));
   return Object.keys(catalog).filter(k=>{
     if(/^(initial|current)\.market_sensor\.(btc_return_1m|return_(5|15|30|60|120)s|sensor_freshness_ms|sensor_event_latency_ms|depth_coverage_complete)$/.test(k))return true;
     if(!/^(initial|current)\.(current\.)?(facts|capture_context|change)\./.test(k))return false;
+    if(compact&&k.includes('.capture_context.dynamics.horizons.')&&!DYNAMIC_EVIDENCE_FIELDS.includes(k.slice(k.lastIndexOf('.')+1)))return false;
+    if(k.includes('.capture_context.critical_segments.'))return /\.critical_segments\.(0|3|7)\./.test(k)&&FINAL_TRAJECTORY_FIELDS.has(k.slice(k.lastIndexOf('.')+1));
     if(!k.includes('.capture_context.trajectory.'))return true;
     return FINAL_TRAJECTORY_FIELDS.has(k.slice(k.lastIndexOf('.')+1));
   });
