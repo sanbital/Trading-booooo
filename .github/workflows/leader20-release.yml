@@ -1,0 +1,108 @@
+name: Leader20 deployment and observation
+on:
+  push:
+    branches: [main]
+    paths: [deployment-evidence/leader20-release-request.json]
+permissions:
+  contents: read
+concurrency:
+  group: deploy-v10-lane-executor
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.5.6
+      - name: Verify release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-evidence
+          git diff --check
+          node -e 'const r=require("./deployment-evidence/leader20-release-request.json");if(r.activate_strategy||r.change_budgets||r.validation_orders||r.release_mode!=="DEPLOY_AND_OBSERVE")throw Error("INVALID_RELEASE_SCOPE");'
+          baseline=$(node -p 'require("./deployment-evidence/leader20-release-request.json").baseline_main')
+          git merge-base --is-ancestor "$baseline" HEAD
+          git diff --quiet "$baseline" HEAD -- supabase/functions/_shared/leader-slot-sizing.mjs supabase/functions/_shared/leader-native-protection.mjs supabase/functions/_shared/leader-entry-settlement.mjs supabase/functions/_shared/leader-exit-settlement.mjs supabase/functions/_shared/leader-fill-evidence.mjs supabase/functions/_shared/leader-db-only-reconciliation.mjs supabase/functions/_shared/exit-authority.mjs
+          npm install --prefix "$RUNNER_TEMP/leader20-test" --ignore-scripts --no-audit --no-fund @electric-sql/pglite@0.3.14
+          export PGLITE_MODULE="$RUNNER_TEMP/leader20-test/node_modules/@electric-sql/pglite/dist/index.js"
+          node ops/dynamic-flow/run-tests.mjs > release-evidence/tests.tap
+          deno check --no-config supabase/functions/v10-lane-executor/index.ts supabase/functions/v10-lane-signal-generator/index.ts supabase/functions/self-evolution-worker/index.ts
+          deno task test > release-evidence/deno-tests.txt
+      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+      - name: Verify production baseline and preserve rollback source
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          supabase functions deploy --help > release-evidence/deploy-help.txt
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-before.json
+          node --input-type=module -e 'import fs from "node:fs";let x=JSON.parse(fs.readFileSync("release-evidence/functions-before.json"));x=x.functions??x;const r=JSON.parse(fs.readFileSync("deployment-evidence/leader20-release-request.json"));for(const [slug,version]of Object.entries(r.expected_versions)){const f=x.find(x=>x.slug===slug);if(f?.version!==version||f.verify_jwt!==false||f.status!=="ACTIVE")throw Error("CONCURRENT_DEPLOY_OR_AUTH_CHANGE:"+slug);}'
+          test "$(psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select count(*) from supabase_migrations.schema_migrations where version='20260927125415' and name='leader20_campaigns'")" = 1
+          test "$(psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select count(*) from public.leader20_control where singleton and not observation_enabled and active_strategy='LEGACY' and archive_max_bytes=0 and generation=1")" = 1
+          psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -f ops/leader20/protected-settings.sql > release-evidence/settings-before.json
+          psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c 'select public.leader20_status()' > release-evidence/leader20-before.json
+          for slug in v10-lane-executor v10-lane-signal-generator self-evolution-worker; do
+            mkdir -p "release-evidence/before-$slug"
+            supabase functions download "$slug" --project-ref "$SUPABASE_PROJECT_REF" --use-api --workdir "$PWD/release-evidence/before-$slug"
+          done
+      - name: Deploy existing services and verify every downloaded source file
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          for slug in v10-lane-executor v10-lane-signal-generator self-evolution-worker; do
+            supabase functions deploy "$slug" --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
+            mkdir -p "release-evidence/after-$slug"
+            supabase functions download "$slug" --project-ref "$SUPABASE_PROJECT_REF" --use-api --workdir "$PWD/release-evidence/after-$slug"
+            node ops/gpt-final-review/verify-bundle-parity.mjs "release-evidence/after-$slug" . "$slug" > "release-evidence/parity-$slug.json"
+          done
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-after.json
+          echo "$GITHUB_SHA" > release-evidence/source-sha.txt
+      - name: Verify runtime and start observation
+        shell: bash
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          token="$(psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select token from public.edge_internal_tokens where name='v10-lane-executor'")"
+          test -n "$token"
+          curl -fsS --retry 2 --max-time 100 -H 'content-type: application/json' -H "x-v10-executor-token: $token" -d '{"mode":"ops-readiness"}' "https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/v10-lane-executor" > release-evidence/ops-readiness.json
+          node -e 'const r=require("./release-evidence/ops-readiness.json");if(!r.ok||!r.binance?.positionsComplete||!r.binance?.openOrdersComplete||r.dynamicLifecycle?.version!=="DYNAMIC_FLOW_LIFECYCLE_1")throw Error("READINESS_FAILED");'
+          psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 -c "update public.leader20_control set observation_enabled=true,updated_at=now() where singleton and active_strategy='LEGACY' and generation=1 and archive_max_bytes=0 and not observation_enabled"
+          # Existing cron publishes epochs; verification never invokes a run/order endpoint.
+          for attempt in $(seq 1 24); do
+            psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c 'select public.leader20_schedule()' > release-evidence/scheduler.json
+            psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -f ops/leader20/observation-status.sql > release-evidence/observation.json
+            if node -e 'const r=require("./release-evidence/observation.json");if(r.members!==20||r.fresh_full_members!==20||r.heartbeat_age_seconds>20||r.active_strategy!=="LEGACY"||r.archive_max_bytes!==0)process.exit(1)'; then break; fi
+            sleep 15
+          done
+          psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c 'select public.leader20_status()' > release-evidence/leader20-after.json
+          psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -f ops/leader20/protected-settings.sql > release-evidence/settings-after.json
+          cmp release-evidence/settings-before.json release-evidence/settings-after.json
+          node -e 'const r=require("./release-evidence/observation.json");if(r.members!==20||r.fresh_full_members!==20||r.heartbeat_age_seconds>20||r.active_strategy!=="LEGACY"||r.archive_max_bytes!==0)throw Error("OBSERVATION_NOT_READY");'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: leader20-production-release
+          path: release-evidence
+          retention-days: 30
