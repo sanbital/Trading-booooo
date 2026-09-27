@@ -30,6 +30,7 @@ test('all ordered bucket information is represented and latest six are explicitl
 
 test('same-snapshot FINAL sends every ordered bucket once and explicitly binds both citation prefixes',async()=>{
  const p=await packet(),f=await frozenReview(p,{snapshotAtMs:T});
+ assert.equal(f.capture_trajectory_hash,await hash(p.facts.capture_context.trajectory));
  const payload=arbitrationPayload(f,f,reviewsFor({valid:false},{valid:false}));
  const input=JSON.parse(payload.input[1].content);
  assert.equal(input.capture_context.ordered_path.length,24);

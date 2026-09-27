@@ -150,7 +150,7 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
     const config=testHooks?.config??configFromControl(await readReviewControl(db).catch(()=>null),getenv),
       deepseekKey=testHooks?.deepseekKey??getenv('deepseek api'),f=meta.entryFeatures??{},
       position={id:p.id,capturePositionId:p.id,generation,symbol:p.symbol,entryPrice:Number(p.entry_price),
-        entryCapture:meta.gptEntryDecision?.initial?.capture_context??meta.finalRecheck?.initial?.capture_context,
+        entryCapture:meta.gptEntryDecision?.initial?.capture_context??meta.finalRecheck?.initial_context?.capture_context,
         finalCapture:meta.finalRecheck?.final?.capture_context??meta.entryDynamicSeed?.capture,
         peakPrice:state.peakPrice,entryAt:Date.parse(p.entry_at),lastHighAt:state.lastHighAt,stopPrice:state.stopPrice,entryFeatures:f},
       emergencyReview=async why=>{

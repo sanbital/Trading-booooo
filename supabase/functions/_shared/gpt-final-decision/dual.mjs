@@ -96,7 +96,7 @@ export async function frozenReview(packet,{snapshotAtMs,inputPayload=payloadFor,
     book_reference:copy.current_ref??copy.execution_ref??copy.position?.valuation??null,
     pre_dispatch:copy.pre_dispatch??null,deterministic_exit_candidate:copy.position?.deterministic_exit_candidate??null,
     execution_permission:'NONE_UNTIL_FINAL_AND_EXECUTOR_SAFETY_CHECKS'};
-  const capture=copy.facts?.capture_context??{status:'UNAVAILABLE'},trajectoryHash=await hash(JSON.stringify(capture.trajectory??null));
+  const capture=copy.facts?.capture_context??{status:'UNAVAILABLE'},trajectoryHash=await hash(capture.trajectory??null);
   const identity={symbol:copy.symbol,task:copy.task,candidate_id:copy.candidate_id,snapshot_at_ms:snapshotAtMs,
     market_sensor_hash:await hash(copy.facts?.market_sensor??null),packet_hash:await hash(copy),capture_window:{start_ms:capture.start_ms??null,end_ms:capture.end_ms??null},
     capture_trajectory_hash:trajectoryHash,orderbook_reference:copy.current_ref??copy.execution_ref??copy.position?.valuation??null,
