@@ -25,6 +25,7 @@ export function advisoryEvidenceSchema(shared){
     /^(current\.)?capture_context\.dynamics\.(return_(5|15|30|60|120)s|velocity|acceleration)$/.test(k)||
     /^(current\.)?capture_context\.dynamics\.horizons\.s(5|15|30|60|120)\.(return|net_taker_flow|buy_share|flow_acceleration|imbalance|spread|trade_count)$/.test(k)||
     /^(current\.)?capture_context\.trajectory\.(0|11|23)\.(d_mid_bps|buy_share_5s|net_taker_quote_5s|spread_bps|imbalance)$/.test(k)||
+    /^(current\.)?capture_context\.critical_segments\.[0-7]\.(d_mid_bps|buy_share_5s|net_taker_quote_5s|spread_bps|imbalance)$/.test(k)||
     /^market_sensor\.(btc_return_1m|return_(5|15|30|60|120)s|sensor_freshness_ms|sensor_event_latency_ms|depth_coverage_complete)$/.test(k)||
     /^market_sensor\.market_sensor_trajectory\.(0|11|23)\.(taker_buy_quote_5s|taker_sell_quote_5s|observed_imbalance|depth_coverage_complete)$/.test(k)
   ).slice(0,256);
@@ -63,6 +64,8 @@ For example facts.trend.return_5m, facts.position.position_return, capture_conte
 Aggregated trade flow uses capture_context.dynamics.horizons.s120.net_taker_flow (also s5/s15/s30/s60); always retain the horizons segment.
 BTC sensor returns use market_sensor.return_120s; its per-bucket flow uses market_sensor.market_sensor_trajectory.23.taker_buy_quote_5s.
 These are path examples only: cite them only when the exact numeric/boolean field exists in this snapshot.
+When capture_context.representation is COMPACT_WITH_ORIGINAL_BUCKET_INDEX, trajectory is absent. Use the schema's
+capture_context.critical_segments paths; their array index is the compact index, while each segment.index records its original bucket index.
 For RECHECK the market facts are nested: current.facts.trend.return_5m. Copy actual paths from input.
 Do not output bare fact names, values, explanations or evidence objects in these two arrays.
 Keep each prose field to at most two short sentences and each evidence array to at most six paths.

@@ -6,7 +6,10 @@ import {DYNAMIC_VERSION,HORIZONS,entryCaptureSafety,dynamicDelta,dispatchDynamic
 import {readCaptureWithRecovery,validateCapture120,emergencyDynamicPacket} from '../supabase/functions/_shared/gpt-final-decision/capture-context.mjs';
 import {initialHoldState,holdStep} from '../supabase/functions/_shared/gpt-final-decision/hold.mjs';
 import {buildDecisionPacket,hash,modelInput} from '../supabase/functions/_shared/gpt-final-decision/api.mjs';
-import {validateDecision} from '../supabase/functions/_shared/gpt-final-decision/contract.mjs';
+import {validateDecision,wireSchema} from '../supabase/functions/_shared/gpt-final-decision/contract.mjs';
+import {advisoryEvidenceSchema,evidenceCatalog} from '../supabase/functions/_shared/gpt-final-decision/advisory.mjs';
+import {finalEvidenceKeys} from '../supabase/functions/_shared/gpt-final-decision/dual.mjs';
+import {extendDynamicSchema} from '../supabase/functions/_shared/gpt-final-decision/dynamic-contract.mjs';
 import {computeFacts} from '../supabase/functions/_shared/gpt-final-decision/facts.mjs';
 import {src,entryWire} from '../development/gpt-final-decision/tests/fixtures.mjs';
 const T=1800000000200,clone=structuredClone;
@@ -94,6 +97,20 @@ test('BUY requires five horizon citations plus flow and book; confidence is boun
 test('emergency packet never claims full trajectory or authorizes entry',async()=>{
  const r=await emergencyDynamicPacket('ABCUSDT',{now:()=>T,fetchFn:async url=>Response.json(url.includes('depth')?{T,bids:[[1,5]],asks:[[1.001,5]]}:[{T:T-100,p:'1',q:'2',m:true}])});
  assert.equal(r.status,'EMERGENCY_PARTIAL');assert.equal(r.full_trajectory,false);assert.equal(r.entry_allowed,false);assert.equal(r.net_taker_flow,-2);
+});
+
+test('production citation menus forbid prose and unavailable paths and support compact evidence',()=>{
+ const capture=validCapture(T),packet={task:'HOLD',dynamic_policy:DYNAMIC_VERSION,facts:{capture_context:capture}};
+ const schema=extendDynamicSchema(wireSchema('HOLD'),'HOLD',packet);
+ assert.ok(schema.properties.dynamic_evidence.items.enum.includes('dynamics.horizons.s30.net_taker_flow'));
+ assert.ok(!schema.properties.dynamic_evidence.items.enum.includes('Buying is strong'));
+ const missing=extendDynamicSchema(wireSchema('HOLD'),'HOLD',{...packet,facts:{capture_context:{status:'UNAVAILABLE'}}});
+ assert.equal(missing.properties.dynamic_evidence.maxItems,0);
+ const compact=compactDynamic(capture),market={capture_context:compact};
+ const keys=advisoryEvidenceSchema({packet,market_input:market}).$defs.evidence_path.enum;
+ assert.ok(keys.some(k=>k.includes('.critical_segments.')));assert.ok(keys.every(k=>!k.includes('.trajectory.')));
+ const catalog={...evidenceCatalog(market,'initial'),...evidenceCatalog(market,'current')};
+ const final=finalEvidenceKeys(catalog);assert.ok(final.length<500);assert.ok(final.every(k=>Object.hasOwn(catalog,k)));
 });
 const incident=JSON.parse(readFileSync(new URL('../test-support/soon-20260927-replay.json',import.meta.url)));
 test('stored SOON loss: actual initial/final direction flip and predispatch stale reviewed trajectory produce WAIT',()=>{
