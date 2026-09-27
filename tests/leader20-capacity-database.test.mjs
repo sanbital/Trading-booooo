@@ -30,6 +30,7 @@ test('monthly budget and bounded private archive PostgreSQL transitions',async t
   create table evolution_control(singleton boolean,daily_api_cap_usd numeric,max_daily_api_calls integer); insert into evolution_control values(true,10,600);
   create schema cron; create table cron.job(jobid bigint,jobname text); create function cron.alter_job(bigint,schedule text) returns void language sql as 'select';`);
  await db.exec(await sql('supabase/migrations/20260927145129_leader20_all_ai_monthly_budget.sql'));
+ await db.exec(await sql('supabase/migrations/20260927153012_leader20_active_exposure_retention.sql'));
  const q=async(s,a=[])=>(await db.query(s,a)).rows;
  const rpc=async(n,a)=>(await q(`select public.${n}(${a.map((_,i)=>'$'+(i+1)).join(',')}) r`,a))[0].r;
  const owner=crypto.randomUUID(),ref='USER-APPROVED-2026-09-27-MONTHLY50-AI40-STORAGE10';
@@ -89,6 +90,27 @@ test('monthly budget and bounded private archive PostgreSQL transitions',async t
   assert.equal((await q('select state from leader20_archive_objects'))[0].state,'DELETED');
   assert.equal((await q("select has_table_privilege('anon','leader20_micro_archive','select') ok"))[0].ok,false);
   assert.equal((await q("select has_function_privilege('authenticated','public.leader20_archive_maintenance(text,jsonb)','execute') ok"))[0].ok,false);
+ });
+ await t.test('open exposure, pending settlement, replay pins and unknown manifests retain evidence',async()=>{
+  await db.exec("insert into leader20_micro_archive(symbol,at,received_at,payload) values ('HELDUSDT',now()-interval '73 hours',now(),'{}'),('PENDINGUSDT',now()-interval '73 hours',now(),'{}'); insert into v11_long_regime_positions(symbol,state,remaining_quantity,metadata) values ('HELDUSDT','OPEN',1,'{}'),('PENDINGUSDT','CLOSED',0,'{\"exitAccountingPending\":true}')");
+  const a=await rpc('leader20_archive_maintenance',['claim',{owner}]);assert.equal(a.state,'UPLOAD');
+  assert.deepEqual(a.object.symbols,['HELDUSDT','PENDINGUSDT']);
+  await rpc('leader20_archive_maintenance',['verified',{owner,id:a.object.id,row_count:2,bytes:100,raw_sha256:'c'.repeat(64),object_sha256:'d'.repeat(64)}]);
+  assert.equal((await rpc('leader20_archive_maintenance',['claim',{owner}])).state,'IDLE');
+  assert.equal((await q("select count(*)::int n from leader20_micro_archive where symbol in ('HELDUSDT','PENDINGUSDT')"))[0].n,2);
+  await q("update leader20_archive_objects set min_at=now()-interval '31 days',max_at=now()-interval '31 days' where id=$1",[a.object.id]);
+  assert.equal((await rpc('leader20_archive_maintenance',['claim',{owner}])).state,'IDLE');
+  await db.exec("update v11_long_regime_positions set state='CLOSED',remaining_quantity=0 where symbol='HELDUSDT'");
+  assert.equal((await rpc('leader20_archive_maintenance',['claim',{owner}])).state,'IDLE','pending settlement still pins the object');
+  await q('update leader20_archive_objects set retention_pinned=true where id=$1',[a.object.id]);
+  await db.exec("update v11_long_regime_positions set metadata='{}' where symbol='PENDINGUSDT'");
+  assert.equal((await rpc('leader20_archive_maintenance',['claim',{owner}])).state,'IDLE','explicit replay pin is independent of exposure');
+  await q("update leader20_archive_objects set retention_pinned=false,symbols='{}' where id=$1",[a.object.id]);
+  assert.equal((await rpc('leader20_archive_maintenance',['claim',{owner}])).state,'IDLE','an unknown manifest cannot authorize deletion');
+  await q("update leader20_archive_objects set symbols=array['HELDUSDT','PENDINGUSDT'] where id=$1",[a.object.id]);
+  const del=await rpc('leader20_archive_maintenance',['claim',{owner}]);assert.equal(del.state,'DELETE');
+  await assert.rejects(q('update leader20_archive_objects set retention_pinned=true where id=$1',[a.object.id]),/pin_before_delete/);
+  await rpc('leader20_archive_maintenance',['deleted',{owner,id:a.object.id}]);
  });
  await t.test('cold cap cannot delete unverified data or quietly continue a new live route',async()=>{
   await db.exec("update leader20_control set cold_archive_max_bytes=1,active_strategy='LEADER20_DYNAMIC_1'; insert into leader20_micro_archive(symbol,at,received_at,payload) values('NEWUSDT',now()-interval '73 hours',now(),'{}')");
