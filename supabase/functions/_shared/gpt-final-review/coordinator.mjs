@@ -111,6 +111,9 @@ export class FinalReviewCoordinator {
       while(row?.state==='DONE'){
         const timedOut=this.engine?.timeoutRecovery===true&&isReviewRecoverable(row.record?.result);
         if(!timedOut&&row.record?.result?.decision!=='WAIT')break;
+        // Campaigns own their next observation event and cost pacing. A completed
+        // WAIT must not silently enter the legacy seconds-long retry chain.
+        if(!timedOut&&this.engine?.reobserveWait?.(identity)===false)break;
         if(row.record.binding!==binding||row.record.identity_json!==identityJson)return deny('GPT_BINDING_MISMATCH');
         const completed=row.record.result.completed_at_ms;
         const childKey=await hash({binding,identity,...(timedOut?{timeout_after:key}:{wait_after:key})}),child=await this.store.get(childKey);

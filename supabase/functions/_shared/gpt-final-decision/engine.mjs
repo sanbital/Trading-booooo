@@ -46,6 +46,7 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   // RECHECK on fresh data (never dispatched on the aged answer). See coordinator.check().
   agedRecheck:true,
   timeoutRecovery:true,
+  reobserveWait:identity=>identity.leader20?.version!=='LEADER20_DYNAMIC_1',
   model:MODEL,
   // The binding covers the ENTRY prompt and the dual-AI arbitration addendum.
   promptText:PROMPTS.ENTRY+'\n['+DUAL_VERSION+']'+ARBITRATION_PROMPT+DYNAMIC_PROMPT+LEADER20_PROMPT+ECONOMY_VERSION+economyPrompt.toString(),

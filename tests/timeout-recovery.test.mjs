@@ -10,6 +10,7 @@ import {gptTerminalReason,expiredTriggerReason} from '../supabase/functions/v10-
 import {runWithGptReview,setTestCoordinator} from '../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {validCapture} from '../test-support/dynamic-fixtures.mjs';
 import {src} from '../development/gpt-final-decision/tests/fixtures.mjs';
+import {FD1_ENTRY_ENGINE} from '../supabase/functions/_shared/gpt-final-decision/engine.mjs';
 const T=1800000000000,cfg={mode:'ENFORCE',modeValid:true,approvalRef:'test',apiBudgetUsd:10,maxCalls:100,enforceApproved:true};
 function harness(errors=['API_TIMEOUT',null],{auto=true,maxCalls=100}={}){
  let at=T+1000,calls=0;const store=new MemoryReviewStore(),prepared=[],resolved=[];
@@ -193,6 +194,22 @@ test('RECHECK missing capture keeps recovery watermark and reserves a later fres
  assert.equal(missing.error,'DYNAMIC_INFERENCE_CAPTURE_NOT_READY');assert.equal(missing.retryable,true);assert.equal(calls,1);
  const third=await runFinalRecheck(args);assert.equal(third.valid,true);assert.equal(calls,2);
  assert.equal(ends[2],first.capture_context.end_ms);assert.equal(store.rows.size,3);
+});
+
+test('Leader campaign WAIT stops inside waitReady and after restart; a new event can be reviewed',async()=>{
+ const h=harness([null]),call=h.c.engine.call,identity=h.c.engine.identity;
+ h.signal.features.leader20={version:'LEADER20_DYNAMIC_1',event_id:'first'};
+ h.c.engine.identity=s=>({...identity(s),leader20:s.features.leader20});
+ h.c.identity=h.c.engine.identity;
+ h.c.engine.reobserveWait=FD1_ENTRY_ENGINE.reobserveWait;
+ h.c.engine.call=async p=>({...await call(p),decision:'WAIT',raw_response:{model:'test',wire:{decision:'WAIT'}}});
+ await h.c.consider(h.signal);assert.equal(await h.c.waitReady(),false);assert.equal(h.calls,1);
+ h.setTime(T+11000);const restarted=h.make();
+ const r=await restarted.consider(h.signal);assert.equal(r.decision,'WAIT');assert.equal(r.allowed,false);
+ assert.equal(h.calls,1);assert.equal(h.store.rows.size,1);
+ const next=structuredClone(h.signal);next.id='new-event';next.features.leader20.event_id='second';
+ await restarted.consider(next);await drain(restarted);assert.equal(h.calls,2);
+ assert.equal(FD1_ENTRY_ENGINE.reobserveWait({}),true,'legacy WAIT policy remains available');
 });
 test('RECHECK blocks an expired reservation and a journal snapshot failure before any model request',async()=>{
  for(const failure of ['reservation-expired','snapshot-failed']){

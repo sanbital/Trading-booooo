@@ -25,6 +25,9 @@ test('Leader20 migration and transactional campaign lifecycle',async t=>{
       'select jsonb_build_object(''enabled'',true,''watch'',jsonb_build_array(jsonb_build_object(''symbol'',''OLDUSDT'',''roles'',jsonb_build_array(''TRADE_CANDIDATE''))))';`);
   await db.exec(await readFile(new URL('../supabase/migrations/20260927121708_leader20_campaigns.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../supabase/migrations/20260927131311_leader20_unicode_symbols.sql',import.meta.url),'utf8'));
+  await db.exec(`create table gpt_final_review_control(singleton boolean,monthly_cap_usd numeric constraint gpt_final_review_control_monthly_cap_usd_check check(monthly_cap_usd<=40),approval_ref text,updated_at timestamptz);
+   insert into gpt_final_review_control(singleton,monthly_cap_usd) values(true,40);`);
+  await db.exec(await readFile(new URL('../supabase/migrations/20260927151635_leader20_defer_and_budget_allocation.sql',import.meta.url),'utf8'));
   const q=async(sql,args=[]) => (await db.query(sql,args)).rows;
   const rpc=async(name,args=[]) => (await q(`select public.${name}(${args.map((_,i)=>'$'+(i+1)).join(',')}) as result`,args))[0].result;
   const makeEpoch=async(prefix='C')=>{
@@ -88,12 +91,16 @@ test('Leader20 migration and transactional campaign lifecycle',async t=>{
   });
   await t.test('durable review audit retains DEFER reasoning without granting an order',async()=>{
     const marker=(await q('select features from v11_long_regime_signals where id=$1',[signal]))[0].features.leader20;
-    const record={identity:{signal_id:signal},packet:{leader20:marker,snapshot_hash:'frozen'},result:{valid:true,answer:{action:'DEFER',pressure_state:'MIXED',decision_reason:'Insufficient fresh demand',counter_evidence:[],thesis_invalidation:'Demand weakens',next_review_conditions:'Fresh book replenishment'}}};
+    const record={identity:{signal_id:signal},packet:{task:'ENTRY',leader20:marker,snapshot_hash:'frozen'},result:{valid:true,answer:{action:'DEFER',pressure_state:'MIXED',decision_reason:'Insufficient fresh demand',counter_evidence:[],thesis_invalidation:'Demand weakens',next_review_conditions:'Fresh book replenishment'}}};
     await q("insert into gpt_final_entry_reviews values('synthetic','RUNNING',$1)",[record]);
     await db.exec("update gpt_final_entry_reviews set state='DONE' where job_key='synthetic'");
     assert.equal((await q('select result from leader20_review_events where id=$1',[event.id]))[0].result.next_review_conditions,'Fresh book replenishment');
     assert.equal((await rpc('leader20_status')).members.length,20);
     assert.equal((await q('select status from v11_long_regime_signals where id=$1',[signal]))[0].status,'NEW');
+    assert.equal((await q('select state from leader20_review_events where id=$1',[event.id]))[0].state,'DEFERRED');
+    assert.equal((await rpc('leader20_entry_authority',[signal])).allowed,false,'old WAIT cannot buy a second review or an order');
+    assert.equal(Number((await q('select monthly_cap_usd from gpt_final_review_control'))[0].monthly_cap_usd),45);
+    await assert.rejects(db.exec('update gpt_final_review_control set monthly_cap_usd=46'),/monthly_cap_usd_check/);
   });
   await t.test('SKIP ends the review event and retains its watch campaign for new evidence',async()=>{
     await q("update v11_long_regime_signals set status='REJECTED',reject_reason='GPT_SKIP' where id=$1",[signal]);
