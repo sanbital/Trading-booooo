@@ -78,7 +78,7 @@ async function initialDecision({initial='BUY',final='BUY',action='ADMIT',clock,s
     for(const k of ['v17Setup','b06133','v30Front','cec0040'])delete s.features[k];}
   setTestCoordinator(db,c);
   await gptFilterExecutable(db,[s]);await Promise.all([...c.pending.values()]);await gptFilterExecutable(db,[s]);
-  const check=gptFinalCheck(db,s),log=[];
+  const check=gptFinalCheck(db,s,null,null,{allowAged:leader}),log=[];
   setRecheckTestHooks({capture:async(_s,at)=>validCapture(at),store,config:ENFORCE,apiKey:'k',fetchFn:w.fetchFn,log,schedule:()=>{},
     readFresh:async(symbol,at)=>({src:{...srcFixture(at),captureContext:validCapture(at)},errors:{}})});
   return {db,c,s,w,check,ticket:check.review,log,setNow:x=>{now=x;},store};
@@ -441,12 +441,14 @@ test('FINAL RECHECK categories are unchanged; the prompt explains INITIAL_ANSWER
 for(const final of ['BUY','SKIP'])test(`Leader20 without any legacy model reaches real ENTRY and fresh FINAL RECHECK ${final}`,async()=>{
   const x=await initialDecision({leader:true,final});
   assert.equal(x.check.allowed,true,JSON.stringify(x.check));
+  assert.equal(gptFinalCheck(x.db,x.s).reason,'GPT_FINAL_RECHECK_REQUIRED');
   assert.equal(x.ticket.initial.leader20.version,'LEADER20_DYNAMIC_1');
   x.setNow(T+12000);
   const r=await finalRecheckStep(x.db,x.s,{ticket:x.ticket,e1:WEAK,rawQuote:calmQuote(T+11900),now:()=>T+12000});
   assert.equal(r.record.recheck_triggered,true);
   assert.ok(r.record.recheck_reasons.includes('LEADER20_FINAL_RECHECK'));
   assert.equal(r.proceed,final==='BUY',JSON.stringify(r.record.final));
+  assert.equal(gptFinalCheck(x.db,x.s,{...r.record,dispatch_capture:validCapture(x.c.now())}).allowed,final==='BUY');
   assert.equal(r.record.final.answer.action,final==='BUY'?'ENTER':'DEFER');
   const input=r.record.final.arbitration.final_input;
   assert.equal(input.current.capture_context.ordered_path.length,24);

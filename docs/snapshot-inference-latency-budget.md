@@ -1,6 +1,37 @@
 # Snapshot inference latency budget
 
-## Current implementation: acquire a fresh inference window
+## Campaign ENTRY analysis and execution freshness (2026-09-28 KST)
+
+Leader campaign ENTRY analysis may now take up to 30 seconds: parallel GPT FIRST
+and independent DeepSeek each receive up to 8 seconds, GPT FINAL up to 20 seconds.
+The caller's event deadline remains binding and 15 seconds are reserved for the
+fresh FINAL RECHECK. Less than 15 seconds of useful analysis time starts no API.
+The full 24 buckets must be valid at the start and remain frozen for all three
+calls. Completion records both start validity and actual completion freshness;
+an old capture is never relabeled fresh.
+
+Every campaign BUY ticket requires a separate fresh FINAL RECHECK, even when the
+initial analysis is fast. The coordinator refuses direct dispatch or execution
+capabilities on that ticket. The existing adapter validates the new recheck and
+dispatch capture. RECHECK, HOLD and dispatch retain their 10-second absolute
+capture age limit; legacy entry behavior is unchanged.
+
+The monthly allowance remains AI USD45 plus USD5 for incremental storage, with
+daily AI spending capped at USD1.25. A flat account protects USD0.50 for final
+recheck and position review, leaving USD0.75 for entry work. With exposure it
+protects the greater of half the daily cap or USD0.25 times (exposure count + 1),
+up to the full daily cap. Open positions, residual quantities and pending exit
+accounting count as exposure. The claim and scheduler share the same calculation.
+Known usage settles normally; a timed-out request without usage retains its full
+USD0.25 reservation. No byte-based billing estimate or historical refund is used.
+
+`tests/leader20-entry-analysis.test.mjs` exercises delayed valid opinions, stale
+input, deadlines, same-snapshot binding and forced recheck authority.
+`tests/leader20-capacity-database.test.mjs` verifies real PostgreSQL claims,
+exposure changes, uncertain charges, priority reserves, concurrency, UTC offsets,
+monthly ceilings and scheduler/claim agreement. These tests place no orders.
+
+## Execution review implementation: acquire a fresh inference window
 
 The v124 six-probe verification showed that rereading could return the same
 bucket, and a 20% preliminary allowance routinely timed out DeepSeek. The
