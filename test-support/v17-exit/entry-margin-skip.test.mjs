@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
 import * as entryEvidence from '../../supabase/functions/v10-lane-executor/entry-evidence.mjs';
 // A fully deployed account has no free margin for another 40 USDT slot. That is a normal
 // state, not a fault, but openBull threw on it: the exception escaped run(), so the whole
@@ -114,7 +115,7 @@ function make({available, setupCutover = Number.MAX_SAFE_INTEGER}) {
     },
   };
   Object.assign(ctx,{classifyPortfolio:()=>({ok:true}),readOpsOrders:async()=>[],opsGateway:()=>ctx.gateway});
-  vm.createContext(ctx);
+  Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);
   vm.runInContext(code + ';this.openBull=openBull;', ctx);
   return {ctx, signal: {id: 's1', symbol: 'FORMUSDT', features}};
 }

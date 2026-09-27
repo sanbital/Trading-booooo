@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
 // Wiring tests for the exchange-resident protective stop.
 //
 // Motivation, from the 2026-09-08 23:17 ~ 09-09 07:17 KST cohort: across nine closed
@@ -54,7 +55,7 @@ function harness({ enabled = false, bid = 99, ensure, symbolInfoFails = false } 
     closePos: async () => { calls.push('close'); return { closed: true }; },
     audit: async () => { calls.push('audit'); },
   };
-  Object.assign(ctx,managerBindings);vm.createContext(ctx);
+  Object.assign(ctx,managerBindings);Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);
   vm.runInContext(code + ';this.manage=manageLeader;', ctx);
   const builder={update(){return this},eq(){return this},select(){return this},async single(){calls.push('write');return{data:{ok:true}}}};
   const db={from:()=>builder};

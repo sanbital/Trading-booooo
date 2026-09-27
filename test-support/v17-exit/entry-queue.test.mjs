@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
 // Every signal from one 5m bar expires together at signal5Close+120s, but the executor runs
 // once a minute and used to price exactly one candidate per run. So one refusal killed the
 // whole bar: on 2026-09-09 13:30 IOSTUSDT no-filled at 13:31, and BULLAUSDT and XTZUSDT were
@@ -312,7 +313,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     maxInFlight: () => maxInFlight,
     db,
   };
-  vm.createContext(ctx);
+  Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);
   vm.runInContext(source.slice(source.indexOf('async function recordEntryTechnicalFailure('),source.indexOf('/**\n * Terminal accounting')),ctx);
   const helpers = source.slice(source.indexOf('// Account state the entry capacity is computed from'), source.indexOf('async function runEntryQueue('));
   if (!helpers.includes('function refreshCapacityInputs(db)')) throw new Error('the capacity helpers moved');
@@ -725,7 +726,7 @@ test('BUY but stale: a closed trigger window is skipped before any selector, con
 
 test('the lifecycle sweep runs before the slot check and is never an admission', () => {
   const q = source.slice(source.indexOf('async function runEntryQueue('));
-  const sweep = q.indexOf('sweepEntryLifecycle(db'), slot = q.indexOf('if(active(pair.pf).length>=MAX_SLOTS)');
+  const sweep = q.indexOf('sweepEntryLifecycle(db'), slot = q.indexOf("if(leader20Control.active_strategy==='LEGACY'&&active(pair.pf).length>=MAX_SLOTS)");
   assert.ok(sweep > 0 && sweep < slot, 'a full book cannot hide an expired trigger');
   const fn = source.slice(source.indexOf('async function sweepEntryLifecycle('), source.indexOf('async function applyB06133Selection('));
   assert.ok(!/status:"(NEW|CLAIMED|ORDERED)"/.test(fn.replace(/eq\("status","NEW"\)/g, '')), 'the sweep only ever writes REJECTED');

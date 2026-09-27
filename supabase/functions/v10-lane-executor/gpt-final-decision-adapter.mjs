@@ -1,3 +1,4 @@
+import {leaderControl} from '../_shared/leader20/runtime.mjs';
 import {positionGeneration} from '../_shared/exit-authority.mjs';
 import {readCaptureWithRecovery,emergencyDynamicPacket} from '../_shared/gpt-final-decision/capture-context.mjs';
 import {DYNAMIC_POLICY,positionDynamicState,entryFailureEvidence,entryCaptureSafety} from '../_shared/gpt-final-decision/dynamic-flow.mjs';
@@ -147,9 +148,12 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
   const fail=why=>({close:false,reason:'FD1_FINAL_UNAVAILABLE',
     state:{...step.state,pending:null,retryAfter:now+60000,last:{key:step.start.key,event:step.start.event,decision:why,at:now}}});
   try{
+    const managementControl=testHooks?.leader20Control??await leaderControl(db).catch(()=>null);
     const config=testHooks?.config??configFromControl(await readReviewControl(db).catch(()=>null),getenv),
       deepseekKey=testHooks?.deepseekKey??getenv('deepseek api'),f=meta.entryFeatures??{},
       position={id:p.id,capturePositionId:p.id,generation,symbol:p.symbol,entryPrice:Number(p.entry_price),
+        leader20:f.leader20??(managementControl?.epoch_id&&managementControl.active_strategy!=='LEGACY'?
+          {version:'LEADER20_DYNAMIC_1',scope:'HELD_POSITION',symbol:p.symbol,epoch_id:managementControl.epoch_id,generation:managementControl.generation}:null),
         entryCapture:meta.gptEntryDecision?.initial?.capture_context??meta.finalRecheck?.initial_context?.capture_context,
         finalCapture:meta.finalRecheck?.final?.capture_context??meta.entryDynamicSeed?.capture,
         peakPrice:state.peakPrice,entryAt:Date.parse(p.entry_at),lastHighAt:state.lastHighAt,stopPrice:state.stopPrice,entryFeatures:f},

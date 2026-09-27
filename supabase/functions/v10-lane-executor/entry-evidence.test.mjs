@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../../../test-support/leader20-legacy-bindings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -113,7 +114,7 @@ function host(now) {
       tradeCount:20,last10sReturn:.001,takerBuyQuoteShare:.8}),
     e1CurrentAssessment:(_s,q)=>({rawQuote:q,quote:{bid:100,ask:101,receivedAt:now-100,bookGap:false,
       sourceTier:'RECEIVED_REST_L2_100',quoteAgeMs:100},guardPassed:true,liquidityPassed:true})};
-  vm.createContext(ctx);
+  Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);
   for(const n of ['executionWindowFor','strategicDriftToRecheck','entryFreshFor','checkedEntryFresh','runE1Gate'])
     vm.runInContext(functionSource(n),ctx);
   return ctx;

@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
 // A single 3s gateway timeout on the top-of-book read used to halt V17 entirely: any throw
 // out of manageBull opens the circuit breaker. On 2026-09-09 that cost 21 minutes of
 // downtime on one "The signal has been aborted", and an open circuit makes run() return
@@ -36,7 +37,7 @@ function make({quoteResults, budget = 3}) {
     closePos: async () => ({closed: true}),
     audit: async () => {},
   };
-  Object.assign(ctx,managerBindings);ctx.classifyFailure=()=>({fatal:false});vm.createContext(ctx);
+  Object.assign(ctx,managerBindings);ctx.classifyFailure=()=>({fatal:false});Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);
   vm.runInContext(code + ';this.manage=manageLeader;', ctx);
   const p = {id: 'p', symbol: 'FORMUSDT', entry_price: 100, original_quantity: 1, entry_fee_usdt: .05,
     peak_price: 100, hard_stop_price: 97.5, entry_at: new Date(now - 60000).toISOString(), metadata: {}};

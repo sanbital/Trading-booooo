@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
 /**
  * V27 -- why a live trigger never became an order, pinned as regressions.
  *
@@ -191,7 +192,7 @@ function setupAdvancer({candles, persisted = []}) {
     // (2026-09-25) LIVE momentum chase evaluation lives in the same span; these fixtures never chase.
     LIVE_CHASE_ENABLED: true, ...liveChase,
   };
-  vm.createContext(ctx);
+  Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);
   vm.runInContext(body, ctx);
   return ctx;
 }
@@ -261,7 +262,7 @@ test('5. a triggered candidate advances before a merely watching one', () => {
   // The ranking itself, evaluated exactly as the source writes it.
   const ctx = {SETUP_STATE, setupGoverns: () => true,
     rec: (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {})};
-  vm.createContext(ctx);
+  Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);
   vm.runInContext(QUEUE.slice(QUEUE.indexOf('const stageRank='),
     QUEUE.indexOf('const advanceOrder=')) + 'this.rank=stageRank;', ctx);
   const of = (state) => ({features: {v17Setup: {state}}});

@@ -1,3 +1,4 @@
+import {LEADER20_PROMPT,leaderDecision} from '../leader20/decision-contract.mjs';
 /** GPT FINAL RECHECK (FD1-RC1): the pre-dispatch confirmation of an INITIAL GPT BUY.
  *
  * GPT stays the only strategy decision maker. This module adds no strategy gate:
@@ -87,7 +88,8 @@ export function initialContext(record,answer){
   return {version:RECHECK_VERSION,snapshotAt:num(record?.snapshot_at_ms),completedAt:num(record?.result?.completed_at_ms),
     facts:Object.fromEntries(INITIAL_KEYS.map(k=>[k,num(v[k])])),lastClose:num(record?.packet?.facts?.quality?.last_close),
     executionRef:record?.packet?.execution_ref??null,support:(answer?.support??[]).map(e=>e.key),summary:answer?.summary??null,
-    capture_context:record?.packet?.facts?.capture_context??null,dynamic_policy:record?.packet?.dynamic_policy??null};
+    capture_context:record?.packet?.facts?.capture_context??null,dynamic_policy:record?.packet?.dynamic_policy??null,
+    ...(record?.packet?.leader20?{leader20:record.packet.leader20}:{})};
 }
 /** PRE-DISPATCH snapshot from data the executor already holds (no I/O): E1's latest tape
  * observation and the quote E1 decided on. */
@@ -107,9 +109,9 @@ function bookLevel(id,m){
 }
 const RANK={CLEAR:0,SOFT:1,HARD:2};
 /** Pure. The change detector: triggered => GPT FINAL RECHECK is required before an order.
- * `force` adds non-market reasons (only AGED_REASON) decided by the caller. */
+ * `force` adds non-market reasons (AGED_REASON or LEADER20_FINAL_RECHECK) decided by the caller. */
 export function detectChange(initial,current,policy=RECHECK_POLICY,{force=[]}={}){
-  const reasons=[...force.filter(r=>r===AGED_REASON)],I=initial?.facts??{},B=current?.book??{};
+  const reasons=[...force.filter(r=>r===AGED_REASON||r==='LEADER20_FINAL_RECHECK')],I=initial?.facts??{},B=current?.book??{};
   const initMid=num(initial?.executionRef?.mid)??num(initial?.lastClose),initRefKind=num(initial?.executionRef?.mid)!==null?'BOOK_MID':
     num(initial?.lastClose)!==null?'LAST_CLOSE':null;
   const d=(a,b)=>a!==null&&b!==null?a-b:null,rel=(a,b)=>a!==null&&b>0?a/b-1:null;
@@ -304,10 +306,10 @@ export function recheckModelInput(packet){
   for(const k of FACT_OK){if(v[k]===null||v[k]===undefined)continue;(sections[FACT_DEFS[k][0]]??={})[k]=round(v[k]);}
   const risk=recheckFlags(packet);
   return {t:RECHECK_TASK,candidate_id:packet.candidate_id,symbol:packet.symbol,data_mode:packet.data_mode,
-    ...(dynamicEnabled(packet)?{dynamic_policy:packet.dynamic_policy,dynamic_as_of_ms:packet.dynamic_as_of_ms}:{}),
+    ...(dynamicEnabled(packet)?{dynamic_policy:packet.dynamic_policy,dynamic_as_of_ms:packet.dynamic_as_of_ms}:{}),...(packet.leader20?{leader20:packet.leader20}:{}),
     initial:{decision:packet.initial.decision,summary:packet.initial.summary,support:packet.initial.support,
       facts:Object.fromEntries(Object.entries(packet.initial.facts).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)])),
-      assessment:entryAssessment(packet.initial.facts??{}),capture_context:compactDynamic(packet.initial.capture_context)},
+      assessment:entryAssessment(packet.initial.facts??{}),capture_context:compactDynamic(packet.initial.capture_context,{fullPath:leaderDecision(packet)})},
     current:{facts:sections,unavailable:FACT_OK.filter(k=>v[k]===null),assessment:entryAssessment(v),...(packet.facts.capture_context?{capture_context:packet.facts.capture_context}:{})},
     dynamic_change:packet.dynamic_change??null,
     fast_recheck:packet.pre_dispatch??null,
@@ -319,7 +321,7 @@ export function recheckModelInput(packet){
 export function recheckPayload(packet){
   return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',prompt_cache_key:'boo-fd1-recheck',
     reasoning:{effort:'none'},max_output_tokens:dynamicEnabled(packet)?1800:600,
-    input:[{role:'system',content:RECHECK_PROMPT+(dynamicEnabled(packet)?DYNAMIC_PROMPT:'')},{role:'user',content:JSON.stringify(recheckModelInput(packet))}],
+    input:[{role:'system',content:RECHECK_PROMPT+(dynamicEnabled(packet)?DYNAMIC_PROMPT:'')+(leaderDecision(packet)?LEADER20_PROMPT:'')},{role:'user',content:JSON.stringify(recheckModelInput(packet))}],
     text:{verbosity:'low',format:{type:'json_schema',name:'fd1_recheck',strict:true,schema:recheckSchema(packet)}}};
 }
 /** Change values carried in the packet (the ones GPT may cite). */
@@ -334,6 +336,7 @@ export async function buildRecheckPacket({signalId,symbol,dataMode='LIVE',facts,
   ensure(detection,'RC_PACKET_INPUT');initial=initial??{facts:{},support:[]};
   const packet={version:RECHECK_VERSION,task:RECHECK_TASK,candidate_id:'r_'+(await hash(String(signalId)+':RECHECK')).slice(0,24),
     symbol:String(symbol).toUpperCase(),data_mode:dataMode,facts,
+    ...(initial.leader20?{leader20:initial.leader20}:{}),
     change:{values:changeValues(detection)},trigger_reasons:[...detection.reasons],
     initial:{decision:'BUY',summary:initial.summary??null,support:(initial.support??[]).map(k=>({key:k,value:round(initial.facts?.[k]??null)})),
       facts:{...(initial.facts??{})},capture_context:initial.capture_context??null,snapshot_at_ms:initial.snapshotAt??null,execution_ref:initial.executionRef??null},

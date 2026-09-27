@@ -1,3 +1,4 @@
+import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -121,7 +122,7 @@ function managerHarness(){
     createGatewayProtection:()=>{throw Error('native protection must be disabled in this test')},
     qv3AfterProtection:async()=>null,exchangeGateway:async c=>{gatewayCalls.push(c);throw Error('unexpected gateway')},
   };
-  Object.assign(context,managerBindings);vm.createContext(context);vm.runInContext(managerCode+';this.manage=manageLeader;',context);
+  Object.assign(context,managerBindings);Object.assign(context,leader20LegacyBindings);vm.createContext(context);vm.runInContext(managerCode+';this.manage=manageLeader;',context);
   return{position,writes,gatewayCalls,manage:context.manage,db:{from:()=>builder}};
 }
 

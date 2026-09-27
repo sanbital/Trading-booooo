@@ -3,6 +3,8 @@ import {storedDynamicReplay} from "../_shared/gpt-final-decision/stored-replay.m
 import {EXIT_AUTHORITY_VERSION,EXIT_CLASS,PROTECTION_ACTIONS,PROTECTION_ARBITRATION_VERSION,exitClass,hardSafetyState,softCandidate,approvedProtection,exitContext,legacySoftOrders,assertExitAuthority,positionGeneration} from "../_shared/exit-authority.mjs";
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
 import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume,gptArmFollowUp} from "./gpt-final-review-adapter.mjs";
+import {isLeader20,validEvent,eventExpiry} from "../_shared/leader20/campaign.mjs";
+import {leaderControl,requireEntryAuthority} from "../_shared/leader20/runtime.mjs";
 import {dryRunCoordinator,dryRunReviewPhase,liveProbe} from "./gpt-final-review-dryrun.mjs";
 import {readReviewControl} from "../_shared/gpt-final-review/supabase-store.mjs";
 import {fd1HoldTick,fd1Probe,fd1ExitProbe,HOLD_RELEASE,holdShadowEnabled,FD1_HOLD_POLICY_VERSION,TIME_REASONS as FD1_TIME_REASONS} from "./gpt-final-decision-adapter.mjs";
@@ -270,6 +272,7 @@ function retryE1Evidence(tape,q,quantity,at){
       return:tape.last10sReturn,buyShare:tape.takerBuyQuoteShare,tradeCount:tape.tradeCount}]:[]};
 }
 async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,step,payload,authorize}){
+  await requireEntryAuthority(db,s);
   if(!Number.isInteger(attemptNo)||attemptNo<1||attemptNo>IOC_RETRY_POLICY.maxAttempts)throw Error("IOC_RETRY_EXHAUSTED");
   const id=cid(attemptNo===1?"v11e":`v11r${attemptNo}`,s.id),
     rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,
@@ -284,7 +287,9 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
     await verifyExecutionLease(db);
     // Re-evaluate after durable intent/lease I/O. A slow database must not spend the
     // approval or quote budget and then send a stale order. No venue call on refusal.
-    const authority=authorize?.();
+    let generationError=null;
+    try{await requireEntryAuthority(db,s);}catch(error){generationError=String(error.message);}
+    const authority=generationError?{allowed:false,reason:generationError}:authorize?.();
     if(authority?.allowed!==true){
       const reason=authority?.reason??"IOC_DISPATCH_AUTHORITY_MISSING";
       const wr=await db.from("v11_long_regime_orders").update({state:"REJECTED",reject_reason:reason,
@@ -331,6 +336,7 @@ function signalSetup(row){
   return deserializeSetup(rec(rec(row?.features).v17Setup));
 }
 function setupGoverns(row){
+  if(isLeader20(row))return false;
   const close=N(rec(row?.features).signal5Close,NaN);
   return Number.isSafeInteger(SETUP_LIVE_CUTOVER)&&Number.isSafeInteger(close)&&close>=SETUP_LIVE_CUTOVER;
 }
@@ -782,6 +788,11 @@ function strategicDriftToRecheck(reason){
   return ["V17_ENTRY_DRIFT","ENTRY_DRIFT"].includes(String(reason||""))?null:reason;
 }
 function entryFreshFor(row,features,now,price){
+  if(isLeader20(row)){
+    if(!validEvent(row))return "LEADER20_EVENT_INVALID";
+    if(now<features.leader20.requested_at_ms||now>=eventExpiry(row))return "LEADER20_EVENT_EXPIRED";
+    return Number.isFinite(price)&&price>0?null:"INVALID_PRICE";
+  }
   if(!setupGoverns(row))return strategicDriftToRecheck(entryFresh(rec(features),now,price));
   if(rec(features)?.strategy!==STRATEGY)return "WRONG_STRATEGY";
   const state=signalSetup(row);
@@ -1078,6 +1089,7 @@ function booVerdict(s,phase,inputs,{quote,info,snapshot,pair,orders}){
 }
 async function booGate(db,s,phase,ctx){return booVerdict(s,phase,await booGateInputs(db,s),ctx)}
 async function openBull(db,s,openPositions,manual=null,attempt={},managementFailures=[]){
+await requireEntryAuthority(db,s);
 const gateway=opsGateway(db);
 const selection=rec(rec(s.features).b06133),cec=rec(rec(s.features).cec0040),selectedSetup=signalSetup(s);
 const signalSizing=rec(s.features);
@@ -1087,14 +1099,14 @@ if(signalSizing.sizingContractVersion!==SLOT_SIZING_CONTRACT.version||
   throw new Error("SIZING_CONTRACT_STALE");
 // Under V30 the B06133 stamp must be intact and taken at this trigger, but its
 // allowed/branch values are reference evidence: neither required nor rewritten.
-if(selection.version!==B06133_VERSION||Number(selection.source?.decisionAt)!==Number(selectedSetup?.triggerAt))
+if(!isLeader20(s)&&(selection.version!==B06133_VERSION||Number(selection.source?.decisionAt)!==Number(selectedSetup?.triggerAt)))
   throw new Error("B06133_SELECTION_INVALID");
 // The V30 stamp must equal what the policy recomputes from that unmodified stamp.
-if(!baselineAllowedV30(s,V30_FRONT_LIVE_VERSION,{requireAdmission:false})||!entryBranchOf(rec(s.features)))
+if(!isLeader20(s)&&(!baselineAllowedV30(s,V30_FRONT_LIVE_VERSION,{requireAdmission:false})||!entryBranchOf(rec(s.features))))
   throw new Error("V30_SELECTION_INVALID");
-if(cec.version!==CEC0040_VERSION||cec.targetVersion!==CEC0040_TARGET_VERSION||cec.ready!==true||
+if(!isLeader20(s)&&(cec.version!==CEC0040_VERSION||cec.targetVersion!==CEC0040_TARGET_VERSION||cec.ready!==true||
   Number(cec.decisionAt)!==Number(selectedSetup?.triggerAt)||
-  !["ADMIT","PROBE","REJECT"].includes(cec.action))
+  !["ADMIT","PROBE","REJECT"].includes(cec.action)))
   throw new Error("CEC0040_SELECTION_INVALID");
 // An AGED GPT BUY (past its 15 s answer validity, trigger still live) may enter only to be
 // re-decided by a forced GPT FINAL RECHECK below; it can never dispatch on its own.
@@ -1130,14 +1142,14 @@ if(active(initialPair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLO
 // This symbol already has a position: final for this candidate.
 if(initialPair.positions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()))return{entered:false,reason:"DUPLICATE_SYMBOL_OPEN",
   terminal:"SLOT_UNAVAILABLE:DUPLICATE_SYMBOL_OPEN"};
-let pf=initialPair.pf,bid=N(q?.best_bid),ask=N(q?.best_ask),sp=bid>0&&ask>0?(ask/bid-1)*10000:999;if(!(bid>0&&ask>0&&sp<=SPREAD_MAX))throw new Error(`ENTRY_SPREAD:${sp}`);const f=rec(s.features),ref=N(f.referenceClose),atr=N(f.atr);if(!(atr>0&&ref>0))throw new Error("ENTRY_FEATURES_INVALID");let filters=symbolFilters(i),step=filters.quantityStep,min=filters.minNotionalUsdt,sized=sizeEntry(ask,step,filters);if(sized.orderNotionalUsdt+1e-9<min)throw new Error("QTY_INVALID");let live=N(pf?.available_quote,NaN),avail=Math.min(N(sn.available_quote),live);if(!Number.isFinite(live))throw new Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true};// The plan already priced and budgeted itself; nothing re-derives either here.
-let limitPrice=sized.limitPrice,iocBps=sized.iocBps,gap=Math.abs(limitPrice-ref)/atr;
+let pf=initialPair.pf,bid=N(q?.best_bid),ask=N(q?.best_ask),sp=bid>0&&ask>0?(ask/bid-1)*10000:999;if(!(bid>0&&ask>0&&sp<=SPREAD_MAX))throw new Error(`ENTRY_SPREAD:${sp}`);const f=rec(s.features),ref=N(f.referenceClose),atr=N(f.atr);if(!(ref>0&&(isLeader20(s)||atr>0)))throw new Error("ENTRY_FEATURES_INVALID");let filters=symbolFilters(i),step=filters.quantityStep,min=filters.minNotionalUsdt,sized=sizeEntry(ask,step,filters);if(sized.orderNotionalUsdt+1e-9<min)throw new Error("QTY_INVALID");let live=N(pf?.available_quote,NaN),avail=Math.min(N(sn.available_quote),live);if(!Number.isFinite(live))throw new Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true};// The plan already priced and budgeted itself; nothing re-derives either here.
+let limitPrice=sized.limitPrice,iocBps=sized.iocBps,gap=(atr>0?Math.abs(limitPrice-ref)/atr:null);
 let finalFresh=checkedEntryFresh(s,f,Date.now(),limitPrice,attempt,"ADMISSION_PRICE",q);if(finalFresh)throw new Error(finalFresh);
 // Defensive: planSlotEntry already refuses anything over budget at its own limit.
 if(sized.amount*limitPrice/LEV>MAX_ORDER_MARGIN_USDT+1e-9)throw new Error("V17_LIMIT_PRICE_MARGIN_OVERFLOW");
 // V17 replaces pullback-specific ATR gap gating with a price-drift/age guard.
 // Fixed operator-authorized cutover. No request/env can move or broaden it.
-const qv3Active=Number.isSafeInteger(QV3_LIVE_CUTOVER)&&Date.now()>=QV3_LIVE_CUTOVER;
+const qv3Active=!isLeader20(s)&&Number.isSafeInteger(QV3_LIVE_CUTOVER)&&Date.now()>=QV3_LIVE_CUTOVER;
 if(qv3Active){
   let result,bars=[],evaluatedAt=Date.now();
   try{bars=await qv3Candles(s.symbol,evaluatedAt,Math.floor(evaluatedAt/60000)*60000-180000);result=qv3Entry(bars,Date.now());}
@@ -1155,7 +1167,7 @@ if(qv3Active){
 // scoped to entry only: it can refuse a V17 signal, never open one of its own, and it
 // touches no protection, exit or reconciliation path. Disabled by default.
 const v24Ctl=await v24Control(db);
-if(v24Ctl.enabled){
+if(v24Ctl.enabled&&!isLeader20(s)){
   const v24=await v24EntryGate({symbol:s.symbol,features:{...f,volumeRatio:N(f.volumeRatio),
       notionalUsdt:sized.sizedNotional,probeQuantity:sized.amount},
     quote:q,quantityStep:step,priceTick:N(i?.price_tick??i?.tick_size),now:Date.now(),
@@ -1170,7 +1182,7 @@ if(v24Ctl.enabled){
 let e1Decision={policyVersion:E1_POLICY.policyVersion,confirmationState:"DISABLED",allowed:true,
   defer:false,reject:false,reasonCodes:["E1_OPERATOR_FLAG_DISABLED"],executionEnabled:false,
   parametersValidatedByBacktest:false,activationBasis:OPERATOR_OVERRIDE.basis};
-if(E1_ENABLED){
+if(E1_ENABLED&&!isLeader20(s)){
   const e1=await runE1Gate(s,q,step,gateway,filters,!setupGoverns(s));e1Decision=e1.decision;attempt.e1=e1Decision;
   // E1's FAST-WEAK WATCH is a directional question: it waits up to E1_POLICY.watchMs
   // to see whether a 10-second slide recovers. Under the pullback policy that question
@@ -1230,7 +1242,7 @@ if(E1_ENABLED){
     if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,
       reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true,e1:e1Decision};
     limitPrice=sized.limitPrice;iocBps=sized.iocBps;
-    gap=Math.abs(limitPrice-ref)/atr;finalFresh=checkedEntryFresh(s,f,Date.now(),limitPrice,attempt,"AFTER_E1",q);if(finalFresh)throw Error(finalFresh);
+    gap=(atr>0?Math.abs(limitPrice-ref)/atr:null);finalFresh=checkedEntryFresh(s,f,Date.now(),limitPrice,attempt,"AFTER_E1",q);if(finalFresh)throw Error(finalFresh);
     if(sized.amount*limitPrice/LEV>MAX_ORDER_MARGIN_USDT+1e-9)throw Error("V17_LIMIT_PRICE_MARGIN_OVERFLOW");
     if(qv3Active){
       let result,bars=[],evaluatedAt=Date.now();
@@ -1320,7 +1332,7 @@ if(E1_ENABLED){
   if(!Number.isFinite(live))throw Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");
   if(avail<sized.sizedMargin+ENTRY_CASH_BUFFER_USDT)return{entered:false,
     reason:`ENTRY_MARGIN_INSUFFICIENT:${avail.toFixed(4)}:${sized.sizedMargin.toFixed(4)}`,releaseClaim:true,e1:e1Decision};
-  limitPrice=sized.limitPrice;iocBps=sized.iocBps;gap=Math.abs(limitPrice-ref)/atr;
+  limitPrice=sized.limitPrice;iocBps=sized.iocBps;gap=(atr>0?Math.abs(limitPrice-ref)/atr:null);
   e1Decision={...e1Decision,decisionAt:dispatchAt,quoteAgeMs:assessment.quote.quoteAgeMs,
     evaluatedPrice:ask,expectedEntryVWAP:assessment.quote.expectedEntryVWAP,
     expectedExitVWAP:assessment.quote.expectedExitVWAP,expectedCostBps:assessment.quote.expectedCostBps,
@@ -1662,7 +1674,7 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db),opts={}) {
       now=new Date(entryAt),entryPolicy=intent.request_payload?.entry_execution_policy,
       entryTiming=rec(intent.request_payload?.entry_timing_policy),entryController=rec(intent.request_payload?.entry_controller),
       fillGuard=entryPolicy?.version===ENTRY_EXECUTION_POLICY_VERSION?postFillEntryGuard(f,z.avg):null,
-      pos=await db.from("v11_long_regime_positions").insert({signal_id:row.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:row.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entryDynamicSeed:{version:DYNAMIC_VERSION,capture:intent.request_payload?.entry_final_recheck?.dispatch_capture??null,seeded_at_ms:now.getTime()},entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,v30Front:intent.request_payload?.entry_front??null,entryBranch:intent.request_payload?.entry_branch??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,gptEntryDecision:intent.request_payload?.entry_gpt_decision??null,finalRecheck:intent.request_payload?.entry_final_recheck??null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,fd1HoldPolicyVersion:FD1_HOLD_POLICY_VERSION,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFillOrders:[{intentId:intent.id,exchangeOrderId:receipt.id,quantity:receipt.quantity,price:receipt.price,fee:receipt.fee,exact:receipt.exact,filledAt:receipt.lastAt??null}],entryFeatures:f}}).select("*").single();
+      pos=await db.from("v11_long_regime_positions").insert({signal_id:row.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:row.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:isLeader20(row)?null:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entryDynamicSeed:{version:DYNAMIC_VERSION,capture:intent.request_payload?.entry_final_recheck?.dispatch_capture??null,seeded_at_ms:now.getTime()},entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,v30Front:intent.request_payload?.entry_front??null,entryBranch:intent.request_payload?.entry_branch??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,gptEntryDecision:intent.request_payload?.entry_gpt_decision??null,finalRecheck:intent.request_payload?.entry_final_recheck??null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,fd1HoldPolicyVersion:FD1_HOLD_POLICY_VERSION,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFillOrders:[{intentId:intent.id,exchangeOrderId:receipt.id,quantity:receipt.quantity,price:receipt.price,fee:receipt.fee,exact:receipt.exact,filledAt:receipt.lastAt??null}],entryFeatures:f}}).select("*").single();
     if(pos.error)throw Error(`POSITION:${pos.error.message}`);position=pos.data;
   }
   await verifyExecutionLease(db);
@@ -2383,6 +2395,8 @@ function entrySummary(e){
     protection:e?.entryProtection?.status??null};
 }
 async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComplete=true) {
+  const leader20Control=await leaderControl(db).catch(()=>null);
+  if(!leader20Control)return{entered:false,reason:"LEADER20_CONTROL_UNAVAILABLE"};
   const openNow=pair.positions;
   let entry={entered:false,reason:"V17_NO_ENTRY"};
   if(!backlogComplete)return{entered:false,reason:"CLOSED_PROTECTION_BACKLOG_INCOMPLETE"};
@@ -2390,7 +2404,7 @@ async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComp
   let lifecycleRetired=[];
   try{lifecycleRetired=await sweepEntryLifecycle(db,Date.now());}
   catch(error){console.error("ENTRY_LIFECYCLE_SWEEP_FAILED",String(error?.message??error).slice(0,200));}
-  if(active(pair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL",lifecycleRetired:lifecycleRetired.length};
+  if(leader20Control.active_strategy==='LEGACY'&&active(pair.pf).length>=MAX_SLOTS)return{entered:false,reason:"V11_SLOT_FULL",lifecycleRetired:lifecycleRetired.length};
   // Read the whole fresh candidate window in pages. A fixed query limit silently hid
   // valid BUYs behind earlier SKIPs or symbol-level execution refusals. Do not mutate
   // signal status until pagination completes, so our own claims cannot shift offsets.
@@ -2401,13 +2415,15 @@ async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComp
       .order("entry_bar_at",{ascending:false}).order("id",{ascending:false})
       .range(offset,offset+signalPageSize-1);
     if(page.error)throw Error(`SIGNALS:${page.error.message}`);
-    signalRows.push(...(page.data??[]));
+    signalRows.push(...(page.data??[]).filter(row=>leader20Control.active_strategy==='LEADER20_DYNAMIC_1'?isLeader20(row):
+      leader20Control.active_strategy==='LEGACY'&&!isLeader20(row)));
     if((page.data??[]).length<signalPageSize)break;
   }
 const openSymbols=new Set(openNow.map(x=>String(x.symbol).toUpperCase())),closedProtectionSymbols=typeof blockedSymbols==="undefined"?new Set():blockedSymbols,
   quarantinedSymbols=typeof pair==="undefined"?new Set():new Set((pair.quarantines??[]).map(x=>String(x.symbol).toUpperCase())),eligible=signalRows.filter(x=>!openSymbols.has(String(x.symbol).toUpperCase())),
   ranked=eligible.filter(x=>!closedProtectionSymbols.has(String(x.symbol).toUpperCase())&&!quarantinedSymbols.has(String(x.symbol).toUpperCase()))
     .sort((a,b)=>Date.parse(b.entry_bar_at)-Date.parse(a.entry_bar_at)||N(rec(a.features).rank,999)-N(rec(b.features).rank,999));
+if(leader20Control.active_strategy==='LEADER20_DYNAMIC_1')ranked.sort((a,b)=>Date.parse(a.entry_bar_at)-Date.parse(b.entry_bar_at)||N(rec(a.features).rank,999)-N(rec(b.features).rank,999));
 // One symbol never occupies more than one place in the queue. The list is already
 // freshest-bar-first, so the first row for a symbol is its freshest candidate and
 // every later one is superseded. Retiring them terminally (rather than leaving them
@@ -2491,7 +2507,13 @@ const stageRank=(row)=>{
 };
 const advanceOrder=[...stillFresh].sort((a,b)=>
   stageRank(b)-stageRank(a)||Date.parse(b.entry_bar_at)-Date.parse(a.entry_bar_at));
+if(leader20Control.active_strategy==='LEADER20_DYNAMIC_1')advanceOrder.sort((a,b)=>Date.parse(a.entry_bar_at)-Date.parse(b.entry_bar_at));
 for(const row of advanceOrder){
+  if(isLeader20(row)){
+    try{await requireEntryAuthority(db,row);if(validEvent(row)&&Date.now()<eventExpiry(row))executable.push(row);}
+    catch(error){entry={entered:false,reason:String(error.message)};}
+    continue;
+  }
   // B06133 is defined at the completed-1m re-acceleration decision point.  A
   // legacy direct-entry row has no such timestamp and therefore cannot bypass
   // the new selector.

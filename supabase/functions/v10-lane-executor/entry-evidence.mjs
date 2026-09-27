@@ -1,5 +1,6 @@
 /** Pure boundary adapters. Missing evidence is never converted into approval. */
 import {LIVE_CHASE_MODE,liveChaseTimingValid} from '../_shared/leader-live-chase.mjs';
+import {isLeader20,validEvent,eventExpiry} from '../_shared/leader20/campaign.mjs';
 const number = (value) => typeof value === 'number' ||
   (typeof value === 'string' && value.trim() !== '') ? Number(value) : NaN;
 const stamp = (value) => Number.isSafeInteger(number(value)) && number(value) > 0;
@@ -33,6 +34,9 @@ function continuationTimingValid(row, policy) {
 
 /** A setup's trigger clock replaces, rather than resets, the legacy signal clock. */
 export function entryExecutionWindow(row, governed, legacyTtlMs, policy) {
+  if(isLeader20(row))return validEvent(row)?{valid:true,basis:'LEADER20_REVIEW_EVENT',
+    featureAsOf:row.features.leader20.requested_at_ms,startsAt:row.features.leader20.requested_at_ms,expiresAt:eventExpiry(row)}:
+    {valid:false,reason:'LEADER20_EVENT_INVALID'};
   const close = number(row?.features?.signal5Close);
   const invalid = (reason) => ({valid:false, reason, featureAsOf:stamp(close)?close:null});
   if (!stamp(close) || !stamp(legacyTtlMs)) return invalid('SIGNAL_STALE_OR_FUTURE');

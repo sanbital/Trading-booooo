@@ -16,6 +16,7 @@ import {configFromControl} from '../_shared/gpt-final-review/coordinator.mjs';
 import {gptRecheckConfig} from './gpt-final-review-adapter.mjs';
 import {nilTicket,NIL_E1,NIL_DISPATCH_QUOTE,NIL_SIGNAL,NIL_DISPATCH_AT} from './recheck-nil-fixture.mjs';
 import {resumeReviewTimeouts} from '../_shared/gpt-final-decision/timeout-recovery.mjs';
+import {isLeader20} from '../_shared/leader20/campaign.mjs';
 export {RECHECK_VERSION,postRecheckSafety};
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 let testHooks=null;
@@ -59,7 +60,7 @@ export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,pur
   const capture=live?await (testHooks?.capture??readCaptureWithRecovery)(s.symbol,captured,{now}):null;
   const at=asOf??now(),snapshot=preDispatchSnapshot({at,rawQuote,e1,capture});
   const aged=sequence===1&&(ticket?.aged===true||(Number.isFinite(ticket?.validUntil)&&at>=ticket.validUntil-RECHECK_POLICY.initialAgeMarginMs));
-  const detection=detectChange(ticket?.initial,snapshot,RECHECK_POLICY,{force:aged?[AGED_REASON]:[]});
+  const detection=detectChange(ticket?.initial,snapshot,RECHECK_POLICY,{force:[...(aged?[AGED_REASON]:[]),...(isLeader20(s)?['LEADER20_FINAL_RECHECK']:[])]});
   const record={version:RECHECK_VERSION,recheck_sequence:sequence,initial_gpt_decision:ticket?.decision??null,initial_gpt_at:ticket?.initial?.completedAt??null,
     initial_snapshot_at:ticket?.initial?.snapshotAt??null,initial_snapshot_hash:ticket?.snapshotHash??null,
     initial_context:ticket?.initial??null,pre_dispatch_snapshot:snapshot,pre_dispatch_at:at,

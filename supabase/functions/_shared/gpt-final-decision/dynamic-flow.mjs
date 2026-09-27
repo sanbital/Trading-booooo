@@ -86,7 +86,7 @@ export function dispatchDynamicSafety({reviewed, latest, at, btc, btcRequired = 
     {ok: true, decision: 'BUY_NOW', reason: null, delta, current, reviewed: original};
 }
 /** Original buckets remain in the journal; models get horizons and critical segments. */
-export function compactDynamic(c) {
+export function compactDynamic(c,{fullPath=false}={}) {
   if (c?.status !== 'AVAILABLE') return c ?? {status: 'UNAVAILABLE', reason: 'MISSING'};
   const p = c.trajectory ?? [], indices = new Set([0, p.length - 1]);
   for(let i=Math.max(0,p.length-6);i<p.length;i++)indices.add(i);
@@ -100,9 +100,10 @@ export function compactDynamic(c) {
   const fields=['end_ms','mid','d_mid_bps','spread_bps','buy_share_5s','net_taker_quote_5s','aggressive_buy','aggressive_sell',
     'bid_depth_25_usdt','ask_depth_25_usdt','imbalance','trade_count','arrival_rate','ask_book_net_5s','bid_book_net_5s',
     'buy_impact_450_bps','sell_impact_450_bps','drawdown_from_sampled_peak'];
+  const columns=fullPath?[...new Set(p.flatMap(x=>Object.keys(x)))].sort():['end_ms','d_mid_bps','net_taker_quote_5s','high_renewal','imbalance','d_bid_depth_25_pct','d_ask_depth_25_pct'];
   return {...summary, representation: 'COMPACT_WITH_ORIGINAL_BUCKET_INDEX',
-    ordered_path_columns:['end_ms','d_mid_bps','net_taker_quote_5s','high_renewal','imbalance','d_bid_depth_25_pct','d_ask_depth_25_pct'],
-    ordered_path:p.map(x=>[x.end_ms,x.d_mid_bps,x.net_taker_quote_5s,x.high_renewal,x.imbalance,x.d_bid_depth_25_pct,x.d_ask_depth_25_pct]),
+    ordered_path_columns:columns,
+    ordered_path:p.map(x=>columns.map(k=>fullPath?(x[k]??null):x[k])),
     latest_six_range:[Math.max(0,p.length-6),p.length-1],
     critical_segments: [...indices].filter(i => i >= 0).sort((a,b) => a-b).map(i => ({index: i, ...Object.fromEntries(fields.filter(k=>Object.hasOwn(p[i],k)).map(k=>[k,p[i][k]]))})),
     raw_bucket_count: p.length};
