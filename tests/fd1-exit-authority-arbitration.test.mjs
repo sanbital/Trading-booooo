@@ -6,7 +6,7 @@ import {computeFacts} from '../supabase/functions/_shared/gpt-final-decision/fac
 import {validateCapture120,CAPTURE_VERSION} from '../supabase/functions/_shared/gpt-final-decision/capture-context.mjs';
 import {holdStep,initialHoldState} from '../supabase/functions/_shared/gpt-final-decision/hold.mjs';
 import {src} from '../development/gpt-final-decision/tests/fixtures.mjs';
-import {finalFields} from '../test-support/arbitration-fixtures.mjs';
+import {finalFields,advisoryWire} from '../test-support/arbitration-fixtures.mjs';
 const now=Date.now(),end=Math.floor((now-6000)/5000)*5000,positionId='actual-fixture',generation=positionId+':entry';
 const trajectory=Array.from({length:24},(_,i)=>{
  const t=end-(23-i)*5000;
@@ -31,7 +31,7 @@ test(id+' actual parallel advice → refresh → FINAL → hold state, with full
   const body=JSON.parse(init.body),isDS=String(url).includes('deepseek'),input=JSON.parse(isDS?body.messages[1].content:body.input[1].content);
   if(!input.independent_reviews){if(isDS)advisory=input;else first=input;if(++entered===2)ready();await overlap;}
   assert.equal(input.capture_context.trajectory.length,24);
-  if(isDS)return Response.json({model:'deepseek-flash',usage:{prompt_tokens:1000,completion_tokens:100},choices:[{finish_reason:'stop',message:{content:JSON.stringify(advice(input,ds))}}]});
+  if(isDS)return Response.json({model:'deepseek-flash',usage:{prompt_tokens:1000,completion_tokens:100},choices:[{finish_reason:'stop',message:{content:JSON.stringify(advisoryWire(input,advice(input,ds)))}}]});
   calls++;
   if(input.independent_reviews){assert.ok(input.position.exit_context.latest_refresh);finalSchema=body.text.format.schema;}
   const d=input.independent_reviews?final:'HOLD',wire={t:'HOLD',c:input.candidate_id,d,reasons:d==='EXIT'?[{r:'GPT_JUDGMENT',e:['return_5m']}]:[],support:['return_5m'],n:'Fresh evidence reviewed',
