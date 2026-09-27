@@ -1,3 +1,4 @@
+import {advisoryWire} from '../test-support/arbitration-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {dualEntryDecision,revalidateArbitration,DUAL_VERSION} from '../supabase/functions/_shared/gpt-final-decision/dual.mjs';
@@ -26,7 +27,7 @@ function dsAnswer(input,preference){const k=Object.keys(evidenceCatalog(input)).
  task:input.t,candidate_id:input.candidate_id,snapshot_hash:input.snapshot.snapshot_hash,decision_preference:preference,
  confidence:.8,thesis_state:'WEAKENING',bullish_evidence:[],bearish_evidence:[k],risk_flags:['POSSIBLE_EXHAUSTION'],
  trajectory_interpretation:'Use supplied ordered observations; absent flow remains unknown',strongest_counterargument:'Trend may persist',recommended_action:preference,reason:'Independent evidence review'};}
-function dsResponse(a){return Response.json({model:'deepseek-flash',usage:{prompt_tokens:1000,completion_tokens:200},choices:[{finish_reason:'stop',message:{content:JSON.stringify(a)}}]});}
+function dsResponse(a,input=null){if(input)a=advisoryWire(input,a);return Response.json({model:'deepseek-flash',usage:{prompt_tokens:1000,completion_tokens:200},choices:[{finish_reason:'stop',message:{content:JSON.stringify(a)}}]});}
 for(const final of ['BUY','SKIP'])test('independent parallel FIRST; DeepSeek SKIP can yield FINAL '+final,async()=>{
  let firstInput,dsInput,finalInput,release;const barrier=new Promise(r=>release=r);let entered=0;
  const fetchFn=async(url,init)=>{
@@ -34,7 +35,7 @@ for(const final of ['BUY','SKIP'])test('independent parallel FIRST; DeepSeek SKI
   if(input.independent_reviews){assert.equal(entered,2);finalInput=input;return gptResponse(input,final);}
   if(ds)dsInput=input;else firstInput=input;
   if(++entered===2)release();await barrier;
-  return ds?dsResponse(dsAnswer(input,'SKIP')):gptResponse(input,'BUY');
+  return ds?dsResponse(dsAnswer(input,'SKIP'),input):gptResponse(input,'BUY');
  };
  const r=await dualEntryDecision(await packet(),{apiKey:'fixture',deepseekKey:'fixture',fetchFn,now:()=>T,snapshotAtMs:T,deadlineMs:T+15000});
  assert.deepEqual(firstInput,dsInput);assert.equal(firstInput.independent_reviews,undefined);
@@ -51,7 +52,7 @@ for(const condition of ['agree','missing','timeout','mismatch','fabricated'])tes
   if(!ds){gpt++;if(input.independent_reviews)seen=input;return gptResponse(input);}
   const a=dsAnswer(input,'BUY');if(condition==='mismatch')a.snapshot_hash='f'.repeat(64);
   if(condition==='fabricated')a.bearish_evidence=['facts.invented.sell_pressure'];
-  return dsResponse(a);
+  return dsResponse(a,input);
  };
  const r=await dualEntryDecision(await packet(),{apiKey:'fixture',deepseekKey:condition==='missing'?null:'fixture',fetchFn,now:()=>T,snapshotAtMs:T,
   ...(condition==='timeout'?{counterCall:async()=>({valid:false,available:false,attempted:true,error:'DEEPSEEK_TIMEOUT'})}:{})});
@@ -85,7 +86,7 @@ test('production citation contract can review all twelve independent claims with
  const fetchFn=async(url,init)=>{
   const b=JSON.parse(init.body),ds=String(url).includes('deepseek'),input=JSON.parse(ds?b.messages[1].content:b.input[1].content);
   if(ds){const a=dsAnswer(input,'SKIP'),keys=Object.keys(evidenceCatalog(input)).filter(k=>k.startsWith('facts.')).slice(0,12);
-   a.bullish_evidence=keys.slice(0,6);a.bearish_evidence=keys.slice(6);return dsResponse(a);}
+   a.bullish_evidence=keys.slice(0,6);a.bearish_evidence=keys.slice(6);return dsResponse(a,input);}
   if(!input.independent_reviews)return gptResponse(input);
   const schema=b.text.format.schema.properties.arbitration.properties;
   const keys=[...input.independent_reviews.deepseek.answer.bullish_evidence,...input.independent_reviews.deepseek.answer.bearish_evidence].map(k=>'initial.'+k);
@@ -102,7 +103,7 @@ test('FINAL normalizes redundant considered from adopted and rejected evidence',
  let cited=null;
  const fetchFn=async(url,init)=>{
   const b=JSON.parse(init.body),ds=String(url).includes('deepseek'),input=JSON.parse(ds?b.messages[1].content:b.input[1].content);
-  if(ds){const a=dsAnswer(input,'BUY');a.bullish_evidence=a.bearish_evidence;a.bearish_evidence=[];cited='initial.'+a.bullish_evidence[0];return dsResponse(a);}
+  if(ds){const a=dsAnswer(input,'BUY');a.bullish_evidence=a.bearish_evidence;a.bearish_evidence=[];cited='initial.'+a.bullish_evidence[0];return dsResponse(a,input);}
   if(!input.independent_reviews)return gptResponse(input,'BUY');
   const raw=await gptResponse(input,'BUY').json(),wire=JSON.parse(raw.output[0].content[0].text);
   wire.arbitration={...wire.arbitration,considered:[],adopted:[cited],rejected:[]};
@@ -122,7 +123,7 @@ test('invalid advisory schema preserves bounded diagnostic wire, never a valid a
 for(const final of ['HOLD','PROTECT','EXIT'])test('DeepSeek EXIT cannot command a close; HOLD FINAL may choose '+final,async()=>{
  const fetchFn=async(url,init)=>{
   const b=JSON.parse(init.body),ds=String(url).includes('deepseek'),input=JSON.parse(ds?b.messages[1].content:b.input[1].content);
-  if(ds)return dsResponse(dsAnswer(input,'EXIT'));
+  if(ds)return dsResponse(dsAnswer(input,'EXIT'),input);
   return gptResponse(input,input.independent_reviews?final:'HOLD');
  };
  const r=await dualEntryDecision(await packet('HOLD'),{apiKey:'fixture',deepseekKey:'fixture',fetchFn,now:()=>T});

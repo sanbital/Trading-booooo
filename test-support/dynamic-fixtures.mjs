@@ -23,8 +23,7 @@ export function dynamicWire(w,input){
  return {...w,...common,why_buy_now:{summary:'Continuing demand with stable liquidity',
   horizons:Object.fromEntries(HORIZONS.map(s=>['s'+s,{summary:'Direction assessed',evidence:['dynamics.horizons.s'+s+'.return']}])),
   flow:['dynamics.horizons.s30.net_taker_flow'],orderbook:['dynamics.horizons.s30.bid_liquidity_change']},
-  why_not_wait:'Evidence supports continuation',...(w.t==='RECHECK'?{invalidation:'Loss of flow support'}:{}),
-  dual_confidence_degraded:input.independent_reviews?.deepseek?.valid!==true};
+  why_not_wait:'Evidence supports continuation',...(w.t==='RECHECK'?{invalidation:'Loss of flow support'}:{})};
 }
 export function dynamicMarketFixture(inner){
  const previous=globalThis.Deno?.env?.get;

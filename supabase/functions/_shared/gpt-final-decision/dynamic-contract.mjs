@@ -20,7 +20,8 @@ The reason must explain why entering now is preferable to waiting; never substit
 If the full trajectory is unavailable, incomplete or stale, ENTRY/RECHECK must WAIT or SKIP. A fresh quote does not refresh a trajectory.
 For an existing position, unavailable trajectory means DATA_DEGRADED, never an automatic HOLD or EXIT.
 Keep the native hard stop and last approved protection. Consider emergency tape/book evidence, last valid capture age and price drift.
-If DeepSeek is unavailable, set dual_confidence_degraded, reduce confidence and require clear propulsion to BUY; otherwise WAIT.
+If the server reports DeepSeek unavailable or invalid, reduce confidence and require clear propulsion to BUY; otherwise WAIT.
+Advisor validity and dual confidence status are server-owned; never generate them.
 Use multi-axis weakness for entry failure and loss of thesis. A single negative bucket or normal winner pullback does not require EXIT.
 Time elapsed may schedule a review but never supplies an exit reason. Protection can only rise.
 For same-symbol re-entry, use history.new_high_since_prev_exit, price_vs_prev_peak and price_vs_prev_exit together with NEW acceleration,
@@ -36,8 +37,7 @@ export function dynamicWireProperties(task) {
   return {...common,why_buy_now:obj({summary:prose,
     horizons:obj(Object.fromEntries(HORIZONS.map(s=>['s'+s,obj({summary:prose,evidence:citations})]))),
     flow:citations,orderbook:citations}),why_not_wait:prose,
-    ...(task==='RECHECK'?{confidence:{type:'number'},invalidation:prose}:{}),
-    dual_confidence_degraded:{type:'boolean'}};
+    ...(task==='RECHECK'?{confidence:{type:'number'},invalidation:prose}:{})};
 }
 export const dynamicEnabled = packet => packet?.dynamic_policy === DYNAMIC_VERSION;
 export function extendDynamicSchema(schema, task, packet) {
