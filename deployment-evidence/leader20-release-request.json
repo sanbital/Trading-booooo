@@ -11,5 +11,6 @@
   "activate_strategy": false,
   "change_budgets": false,
   "validation_orders": false,
-  "authorization": "User explicitly approved deployment and operational verification on 2026-09-27."
+  "authorization": "User explicitly approved deployment and operational verification on 2026-09-27.",
+  "observer_migration_applied_version": "20260927130630"
 }

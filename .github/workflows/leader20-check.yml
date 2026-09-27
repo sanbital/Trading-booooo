@@ -6,7 +6,7 @@ on:
       - 'supabase/functions/_shared/gpt-final-decision/**'
       - 'supabase/functions/v10-lane-executor/**'
       - 'supabase/functions/v10-lane-signal-generator/**'
-      - 'supabase/migrations/20260927121708_leader20_campaigns.sql'
+      - 'supabase/migrations/*leader20*.sql'
       - 'tests/leader20*'
       - 'ops/leader20/**'
       - '.github/workflows/leader20-check.yml'
