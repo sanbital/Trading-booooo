@@ -203,7 +203,10 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   // separate portions of the deadline. A slow advisor must not starve the authority.
   const fast=reviewTier==='FAST'&&packet.task==='HOLD'&&dynamicEnabled(packet);
   const preparedAt=now(),remainingAtStart=deadline-preparedAt;
-  const finalReserveMs=dynamicEnabled(packet)?4000:0,completionReserveMs=dynamicEnabled(packet)?250:0;
+  const completionReserveMs=dynamicEnabled(packet)?Math.min(250,Math.max(0,Math.floor(remainingAtStart*.1))):0;
+  // On short-lived snapshots keep both independent opinions, but bound their
+  // shared wait to 20% of usable time; FINAL receives up to four seconds.
+  const finalReserveMs=dynamicEnabled(packet)?Math.min(4000,Math.max(0,Math.floor((remainingAtStart-completionReserveMs)*.8))):0;
   const preliminaryMs=dynamicEnabled(packet)?Math.max(0,remainingAtStart-finalReserveMs-completionReserveMs):Infinity;
   const firstMs=Math.min(preliminaryMs,Math.max(1,Math.min(fast?1500:dynamicEnabled(packet)?4000:6000,remainingAtStart-2500,Math.floor((remainingAtStart-1500)*.65))));
   const advisoryMs=Math.min(preliminaryMs,Math.max(1,Math.min(fast?3500:6000,remainingAtStart-2200,Math.floor((remainingAtStart-1200)*.75))));
