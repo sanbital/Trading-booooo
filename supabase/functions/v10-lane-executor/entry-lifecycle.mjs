@@ -94,6 +94,7 @@ export function gptTerminalReason(review){
 export function expiredTriggerReason(note){
   const n=note&&typeof note==='object'?note:null,last=String(n?.reason??'');
   if(n?.technicalFailure)return 'STALE:TRIGGER_WINDOW_CLOSED';
+  if(last==='GPT_REVIEW_RECOVERY_EXHAUSTED')return 'STALE:TIMEOUT_RECOVERY_EXHAUSTED';
   if(!last)return 'STALE:TRIGGER_WINDOW_CLOSED';
   const cls=terminalClassOf(last);
   const buy=n?.gptDecision==='BUY'?'GPT_BUY_NOT_EXECUTED:':'';

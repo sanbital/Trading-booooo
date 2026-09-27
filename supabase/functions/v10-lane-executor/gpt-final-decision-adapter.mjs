@@ -137,7 +137,7 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
       const emergency=await deepseekEmergency(r,{p,packet:row.record.packet,generation,now});
       if(emergency)return {state:row.state,...emergency,refresh_error:null};
     }
-    return {state:row.state,decision:r.decision,valid:false,authority:null,completed_at_ms:r.completed_at_ms,
+    return {state:row.state,decision:r.decision,valid:false,error:r.error,authority:null,completed_at_ms:r.completed_at_ms,
       snapshot_at_ms:r.final_snapshot_at_ms,snapshot_hash:null,refresh_error:r.arbitration?.refresh_error??null};};
   let step;
   try{step=await holdStep(prior,{now,price:bid,peak:state.peakPrice,timeCandidate,softTrigger,dynamics,positionId:p.id,generation,answerOf,clock:testHooks?()=>now:Date.now});}
@@ -228,7 +228,7 @@ export async function fd1ExitProbe(db,{symbol,runId,apiKey,fetchFn=fetch}){
  * signals, no order, no position write). Entry: the production FD1 engine on a fixture
  * trigger at the current minute. Hold: a fixture position with a pending TIME exit
  * candidate. Both call the real API once. Journal rows are DRYRUN only. */
-export async function fd1Probe(db,{symbol,apiKey,runId,fetchFn=fetch,engine,store=new SupabaseReviewStore(db)}){
+export async function fd1Probe(db,{symbol,apiKey,runId,fetchFn=fetch,engine,store=new SupabaseReviewStore(db),simulateEntryTimeout=false}){
   const liveConfig=configFromControl(await readReviewControl(db),getenv);
   if(!authorized(liveConfig,apiKey))return {error:'NOT_AUTHORIZED',orderCalls:0};
   const MIN=60000,trigger=Math.floor(Date.now()/MIN)*MIN;
@@ -238,13 +238,21 @@ export async function fd1Probe(db,{symbol,apiKey,runId,fetchFn=fetch,engine,stor
   const {FinalReviewCoordinator}=await import('../_shared/gpt-final-review/coordinator.mjs');
   const s={id:'fd1-probe-'+symbol+'-'+trigger+'-'+String(runId).slice(0,20),symbol,status:'NEW',features:{strategy:'LEADER_MOMENTUM_V17',
     referenceClose:last,dayReturn:null,rank:null,v17Setup:{state:'TRIGGERED',triggerAt:trigger},exitPolicy:{}}};
-  const c=new FinalReviewCoordinator({config:{...liveConfig,source:'DRYRUN'},store,apiKey:()=>apiKey,fetchFn,purpose:'DRYRUN',engine,baseline:()=>true});
-  const t0=Date.now(),first=await c.consider(s);await Promise.all([...c.pending.values()]);const second=await c.consider(s);
+  let injected=false;
+  const probeEngine=simulateEntryTimeout?{...engine,async call(packet,options){
+    if(!injected){injected=true;return {valid:false,decision:'ABSTAIN',error:'API_TIMEOUT',attempted:false,
+      origin:'ORDER_FREE_TIMEOUT_FIXTURE',completed_at_ms:Date.now(),api_cost_usd:0};}
+    return engine.call.call(this,packet,options);
+  }}:engine;
+  const c=new FinalReviewCoordinator({config:{...liveConfig,source:'DRYRUN'},store,apiKey:()=>apiKey,fetchFn,purpose:'DRYRUN',engine:probeEngine,baseline:()=>true});
+  const t0=Date.now(),first=await c.consider(s);await c.waitReady();const second=await c.consider(s);
   const row=second.jobKey?await store.get(second.jobKey):null,res=row?.record?.result,pk=row?.record?.packet;
   const entry={fixture:true,triggerAt:trigger,first:first.reason,final:second.reason,decision:second.decision??null,allowed:second.allowed===true,
     elapsedMs:Date.now()-t0,latencyMs:res?.latency_ms??null,costUsd:res?.api_cost_usd??null,error:res?.error??null,
     arbitration:res?.arbitration??null,quality:pk?.facts?.quality??null,sourceErrors:pk?.source_errors??null,answer:res?.answer??null,jobKey:second.jobKey??null,
+    timeoutRecovery:row?.record?.timeout_recovery??null,valid:res?.valid===true,
     wouldOrder:second.allowed===true?'NEXT_STEP_IS_EXISTING_ORDER_GUARDS (not executed: probe)':'NO_ORDER'};
+  if(simulateEntryTimeout)return {entry,timeoutFixture:true,injected,hold:null};
   const h0=Date.now(),hold=await runHoldReview({apiKey,deepseekKey:getenv('deepseek api'),fetchFn,position:{id:'fd1-probe-position-'+trigger,symbol,entryPrice:last*.99,peakPrice:last*1.01,
     entryAt:Date.now()-50*MIN,lastHighAt:Date.now()-46*MIN,stopPrice:last*.99*.99,entryFeatures:{referenceClose:last*.99}},
     event:'TIME_EXIT_CANDIDATE:V17_MOMENTUM_STALE',timeCandidate:'V17_MOMENTUM_STALE',stopStage:'RISK_CUT'});

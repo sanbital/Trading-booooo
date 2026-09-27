@@ -41,6 +41,7 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   // not dropped: it may enter the order path only to be re-decided by a forced GPT FINAL
   // RECHECK on fresh data (never dispatched on the aged answer). See coordinator.check().
   agedRecheck:true,
+  timeoutRecovery:true,
   model:MODEL,
   // The binding covers the ENTRY prompt and the dual-AI arbitration addendum.
   promptText:PROMPTS.ENTRY+'\n['+DUAL_VERSION+']'+ARBITRATION_PROMPT+DYNAMIC_PROMPT,
@@ -49,9 +50,9 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   // Same-symbol trade memory reader (symbol, beforeMs) => closed trades; injected by the
   // executor adapter (DB). Absent or failing => the memory facts are unknown, never a block.
   history:null,
-  async prepare(identity,{fetchFn,now,deadlineMs}){
+  async prepare(identity,{fetchFn,now,deadlineMs,afterEndMs=-Infinity}){
     const asOf=now(),ms=Math.max(200,Math.min(2500,deadlineMs-asOf));
-    const [{src,errors},history]=await Promise.all([readSources(identity.symbol,asOf,{mode:'LIVE',fetchFn,ms,now,deadlineMs:deadlineMs-8000}),
+    const [{src,errors},history]=await Promise.all([readSources(identity.symbol,asOf,{mode:'LIVE',fetchFn,ms,now,deadlineMs:deadlineMs-8000,afterEndMs}),
       readHistory(this.history,identity,Math.min(ms,1500))]);
     const captured=now();
     const facts=computeFacts(src,{asOf:captured,referenceClose:identity.reference_close,dayReturn:identity.day_return,rank:identity.rank,

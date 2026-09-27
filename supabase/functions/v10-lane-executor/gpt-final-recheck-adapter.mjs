@@ -84,7 +84,8 @@ export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,pur
   const proceed=recheckAllows(final,now());
   const reason=proceed?'GPT_FINAL_RECHECK_BUY':`GPT_FINAL_RECHECK_${record.final_gpt_decision}${final.error?':'+final.error:''}`;
   if(purpose==='PRODUCTION')logRow(db,s,record,proceed?'FINAL_BUY_TO_ORDER_CHECKS':'NO_ORDER_'+record.final_gpt_decision);
-  return {proceed,decision:proceed?'BUY_NOW':record.final_gpt_decision==='SKIP'?'SKIP':'WAIT',reason,record};
+  return {proceed,decision:proceed?'BUY_NOW':record.final_gpt_decision==='SKIP'?'SKIP':'WAIT',reason,record,
+    reviewRetryPending:final.retryable===true};
 }
 /** Wall-clock decision latency from the initial GPT answer to the order intent. */
 export function withOrderTiming(record,at=Date.now()){

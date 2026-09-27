@@ -32,6 +32,7 @@ import {DYNAMIC_PROMPT,extendDynamicSchema,validateDynamicWire,dynamicEnabled} f
 import {CATEGORIES,categoriesFor,riskFlags,SUPPORT_UP,SUPPORT_TEXT,TREND_SUPPORT,validateShape,JUDGMENT,EXECUTION_SAFETY} from './contract.mjs';
 import {callDecision,hash,MODEL} from './api.mjs';
 import {dualEntryDecision,DUAL_VERSION,ARBITRATION_PROMPT} from './dual.mjs';
+import {TIMEOUT_RECOVERY,canRecoverTimeout,isReviewTimeout} from './timeout-recovery.mjs';
 export const RECHECK_VERSION='GPT_FINAL_RECHECK_FD1_RC4';
 export const RECHECK_TASK='RECHECK';
 export const RECHECK_POLICY=Object.freeze({
@@ -349,7 +350,7 @@ function authorized(c,apiKey){return c?.mode==='ENFORCE'&&c.modeValid!==false&&c
  * @returns {decision,valid,error,answer,latency_ms,api_cost_usd,snapshot_at_ms,completed_at_ms,valid_until_ms,job_key,attempted}
  */
 export async function runFinalRecheck({signal,ticket,detection,preDispatch,store,config,apiKey,deepseekKey,fetchFn=fetch,now=Date.now,
-  purpose='PRODUCTION',readFresh=readSources,dataMode='LIVE',asOf=null,sequence=1,policy=RECHECK_POLICY}){
+  purpose='PRODUCTION',readFresh=readSources,dataMode='LIVE',asOf=null,sequence=1,policy=RECHECK_POLICY,review=dualEntryDecision}){
   const started=now();
   const out=(o)=>({version:RECHECK_VERSION,decision:'ABSTAIN',valid:false,error:null,answer:null,latency_ms:null,api_cost_usd:null,
     snapshot_at_ms:null,completed_at_ms:now(),valid_until_ms:null,job_key:null,attempted:false,started_at_ms:started,...o});
@@ -365,8 +366,24 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
     key=await hash({version:RECHECK_VERSION,identity,purpose});
     record={version:RECHECK_VERSION,kind:'FD1_FINAL_RECHECK',purpose,recheck_sequence:sequence,api_approval_ref:config.approvalRef,identity,reserved_usd:0.10,
       source_commit:RECHECK_VERSION,prompt_hash:await hash(RECHECK_PROMPT+ARBITRATION_PROMPT),detection,packet:null,result:null};
-    let claimed;
-    try{claimed=await store.claim(key,record,config);}
+    let claimed,attempt=1;
+    try{
+      // A sequence with a final answer remains single-use. Only a completed timeout
+      // may have a separately reserved child, on a later cycle with fresh E1/book.
+      while(true){
+        claimed=await store.claim(key,record,config);
+        if(claimed.created)break;
+        const old=claimed.row;
+        if(dataMode!=='LIVE'||asOf!==null||old?.state!=='DONE'||!isReviewTimeout(old.record?.result))break;
+        const nextKey=await hash({version:TIMEOUT_RECOVERY.version,timeout_after:key});
+        const child=await store.get(nextKey);
+        if(attempt>=TIMEOUT_RECOVERY.maxAttempts||(!child&&!canRecoverTimeout(old.record.result,{now:now(),deadline,attempt})))
+          return out({error:'RC_TIMEOUT_RECOVERY_EXHAUSTED',job_key:key});
+        record={...record,timeout_recovery:{version:TIMEOUT_RECOVERY.version,attempt:++attempt,parent_job_key:key,
+          previous_error:old.record.result.error,after_end_ms:old.record.packet?.facts?.capture_context?.end_ms??null}};
+        key=nextKey;
+      }
+    }
     catch(e){return out({error:/API_BUDGET_EXHAUSTED/.test(String(e?.message??e))?'RC_BUDGET_EXHAUSTED':'RC_CLAIM_FAILED',job_key:key});}
     // The durable per-candidate cap: an existing recheck for this BUY is never repeated or reused.
     if(!claimed.created)return out({error:'RC_LIMIT_REACHED',job_key:key});
@@ -375,7 +392,8 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
   let result;
   try{
     const at=asOf??now();
-    const {src,errors}=await readFresh(String(signal.symbol).toUpperCase(),at,{mode:dataMode,fetchFn,ms:policy.freshReadMs,now,deadlineMs:deadline-8000});
+    const {src,errors}=await readFresh(String(signal.symbol).toUpperCase(),at,{mode:dataMode,fetchFn,ms:policy.freshReadMs,now,deadlineMs:deadline-8000,
+      afterEndMs:record.timeout_recovery?.after_end_ms??-Infinity});
     const captured=asOf??now();
     const facts=computeFacts(src,{asOf:captured,referenceClose:f.referenceClose,dayReturn:f.dayReturn,rank:f.rank});
     const judgments=(()=>{try{return JSON.parse(ticket.identityJson).judgments;}catch{return modelJudgments(f);}})();
@@ -383,10 +401,12 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
     record.packet=await buildRecheckPacket({signalId:signal.id,symbol:signal.symbol,dataMode,facts,initial,detection,judgments,
       currentRef:currentRef?{bid:currentRef.bid,ask:currentRef.ask,mid:currentRef.mid,at:captured}:null,preDispatch});
     record.packet.source_errors=errors;record.packet.snapshot_hash=await hash({...record.packet,snapshot_hash:''});
+    if(record.timeout_recovery?.after_end_ms!=null&&!(record.packet.facts.capture_context?.end_ms>record.timeout_recovery.after_end_ms))
+      throw Error('RC_RETRY_CAPTURE_NOT_ADVANCED');
     record.snapshot_at_ms=asOf===null?captured:now();
     const remaining=deadline-now();
     if(remaining<=0)throw Error('RC_TRIGGER_EXPIRED');
-    result=await dualEntryDecision(record.packet,{apiKey,deepseekKey,fetchFn,now,deadlineMs:Math.min(deadline,record.snapshot_at_ms+policy.answerMaxAgeMs),
+    result=await review(record.packet,{apiKey,deepseekKey,fetchFn,now,deadlineMs:Math.min(deadline,record.snapshot_at_ms+policy.answerMaxAgeMs),
       snapshotAtMs:record.snapshot_at_ms,inputPayload:recheckPayload,validate:validateRecheck,
       refreshPacket:asOf===null?async ms=>{
         const next=await readFresh(String(signal.symbol).toUpperCase(),now(),{mode:dataMode,fetchFn,ms,now}),captured=now();
@@ -410,7 +430,9 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
   const common={job_key:key,attempted:result.attempted===true,api_cost_usd:result.api_cost_usd??null,latency_ms:result.latency_ms??null,
     snapshot_at_ms:snap,completed_at_ms:result.completed_at_ms??now(),valid_until_ms:validUntil,answer:result.answer??null,
     current_ref:record.packet?.current_ref??null,request_id:result.request_id??null,arbitration:result.arbitration??null,
-    capture_context:record.packet?.facts?.capture_context??null,dynamic_policy:record.packet?.dynamic_policy??null,dynamic_audit:result.dynamic_audit??null};
+    capture_context:record.packet?.facts?.capture_context??null,dynamic_policy:record.packet?.dynamic_policy??null,dynamic_audit:result.dynamic_audit??null,
+    retryable:dataMode==='LIVE'&&asOf===null&&canRecoverTimeout(result,{now:now(),deadline,attempt:record.timeout_recovery?.attempt??1}),
+    timeout_recovery:record.timeout_recovery??null};
   if(!result.valid)return out({...common,decision:result.decision==='WAIT'?'WAIT':'ABSTAIN',error:result.error??'RC_INVALID'});
   if(validUntil===null||now()>=validUntil)return out({...common,error:'RC_EXPIRED'});
   return out({...common,decision:result.decision,valid:true});

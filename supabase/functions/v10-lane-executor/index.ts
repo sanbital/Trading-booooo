@@ -1256,7 +1256,8 @@ if(E1_ENABLED){
   if(!recheck.proceed){
     if(recheck.decision==="WAIT"){
       await audit(db,null,"BULL","BULL","ENTRY_DEFER",recheck.reason,{signalId:s.id,symbol:s.symbol,decision:"WAIT",finalRecheck:recheck.record});
-      return{entered:false,decision:"WAIT",reason:recheck.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,finalRecheck:recheck.record};
+      return{entered:false,decision:"WAIT",reason:recheck.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,finalRecheck:recheck.record,
+        reviewRetryPending:recheck.reviewRetryPending===true};
     }
     await audit(db,null,"BULL","BULL","ENTRY_REJECT",recheck.reason,{signalId:s.id,symbol:s.symbol,stage:"GPT_FINAL_RECHECK",finalAdmission:false,finalRecheck:recheck.record});
     const terminal=await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:recheck.reason.slice(0,500),
@@ -2584,6 +2585,7 @@ const noteRest=async(from,reason)=>{for(const r of queued.slice(from))
 // reason. Every slot still empty at the end is accounted for (unusedSlotAccounting).
 const runDeadline=Date.now()+ENTRY_RUN_BUDGET_MS,triggerOf=new Map(triggered.map(t=>[String(t.row.id),t.state]));
 const ledger=[],entries=[],refusals=[];
+let reviewRetryPending=false;
 let view=capacityInputs(pair,null),cap=admissionCapacity(view,ledger),stop=null,unreached=0,lastEntered=null;
 const initialCapacity=cap;
 for(const [index,s] of queued.entries()){
@@ -2617,6 +2619,7 @@ for(const [index,s] of queued.entries()){
         booAdmission:attempt.booAdmission??null,booPredispatch:attempt.booPredispatch??null})
       .catch(()=>console.error("V17_ENTRY_OUTCOME_AUDIT_FAILED",s.id));
     if(entry?.releaseClaim===true){
+      reviewRetryPending=reviewRetryPending||entry.reviewRetryPending===true;
       // The released candidate carries the refusal it came back with (its window-close label).
       const released={...rec(cl.data.features),entryLifecycle:mergeLifecycleNote(rec(cl.data.features).entryLifecycle,
         lifecycleNote({at:Date.now(),stage:"EXECUTION",reason:entry.reason,gptDecision:"BUY"}))};
@@ -2669,8 +2672,8 @@ const unusedSlots=unusedSlotAccounting(cap,{stop,refusals,unreached}),rest=unrea
 let followUpArmed=false;
 if(rest.length){try{followUpArmed=gptArmFollowUp(db,rest)===true;}catch{/* scheduling only */}}
 const capacity={version:ENTRY_CAPACITY_VERSION,initial:initialCapacity,final:cap,unusedSlots};
-if(lastEntered)return {...lastEntered,entered:true,entries,entryCount:entries.length,capacity,remainingGptBuys:rest.length,followUpArmed};
-return {...entry,capacity,remainingGptBuys:rest.length,followUpArmed};
+if(lastEntered)return {...lastEntered,entered:true,entries,entryCount:entries.length,capacity,remainingGptBuys:rest.length,followUpArmed,reviewRetryPending};
+return {...entry,capacity,remainingGptBuys:rest.length,followUpArmed,reviewRetryPending};
 }
 
 async function requireLeaderEntryControls(db){
@@ -3268,11 +3271,12 @@ Deno.serve(async req=>{
       return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,probe:await liveProbe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",
         runId:String(body.runId??crypto.randomUUID()),evaluate:evaluateB06133,fetchInputs:fetchB06133Inputs})});
     }
-    if(mode==="fd1-probe"){
+    if(mode==="fd1-probe"||mode==="fd1-timeout-probe"){
       // ORDER-FREE: FD1 entry + hold decisions on live data; no lease, no signal/position/order write.
       const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{1,24}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
       return res(200,{ok:true,revision:REVISION,patch:PATCH,orderCalls:0,sizing:{targetMarginUsdt:MARGIN,leverage:Number(LEV),maxSlots:MAX_SLOTS},
-        probe:await fd1Probe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()),engine:{...FD1_ENTRY_ENGINE,deepseekKey:()=>env("deepseek api")}})});
+        probe:await fd1Probe(db,{symbol,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()),
+          simulateEntryTimeout:mode==="fd1-timeout-probe",engine:{...FD1_ENTRY_ENGINE,deepseekKey:()=>env("deepseek api")}})});
     }
     if(mode==="fd1-recheck-probe"){
       // ORDER-FREE: INITIAL BUY fixture -> deterioration -> change detector -> real GPT FINAL

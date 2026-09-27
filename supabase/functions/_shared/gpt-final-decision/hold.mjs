@@ -9,6 +9,7 @@ import {FD_VERSION} from './contract.mjs';
 import {dualEntryDecision,DUAL_VERSION} from './dual.mjs';
 import {DYNAMIC_VERSION,DYNAMIC_POLICY,positionDynamicState,compactDynamic,dynamicDelta} from './dynamic-flow.mjs';
 import {emergencyDynamicPacket} from './capture-context.mjs';
+import {isReviewTimeout} from './timeout-recovery.mjs';
 export const FD1_HOLD_POLICY_VERSION='FD1_HOLD_EXIT_AUTHORITY_2';
 export const TIME_REASONS=Object.freeze(['V17_MOMENTUM_STALE','V17_MAX_HOLD']);
 export const HOLD_POLICY=Object.freeze({holdTtlMs:15*60_000,minGapMs:5*60_000,deteriorationMinGapMs:60_000,maxReviews:30,
@@ -34,6 +35,7 @@ export function nextEvent(st,{now,price,peak,timeCandidate,softTrigger,dynamics}
  }
  if(s.retryAfter&&now<s.retryAfter)return {state:s,event:null};
  if(s.reviews>=P.maxReviews)return {state:s,event:null,exhausted:true};
+ if(s.timeoutRetryEvent){const event=s.timeoutRetryEvent;s.timeoutRetryEvent=null;return {state:s,event};}
  if(dynamics?.observation&&elapsed>=DYNAMIC_POLICY.periodicReviewMs)return {state:s,event:'DYNAMIC_PERIODIC_REVIEW'};
  if(s.protectUntil&&now>=s.protectUntil){s.protectUntil=null;return {state:s,event:'PROTECTION_REASSESSMENT'};}
  if(softTrigger?.active){
@@ -119,7 +121,9 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dyn
    }
    // No usable answer (timeout, invalid, ABSTAIN, budget or provider outage): protection is
    // neither raised nor lowered. Hard safety is unaffected and keeps executing on its own.
-   st.retryAfter=now+(st.dynamicTracker?.status==='DATA_DEGRADED'?DYNAMIC_POLICY.missingRetryMs:P.deteriorationMinGapMs);st.softArmed=true;
+   const timeout=isReviewTimeout(a)||a?.state!=='DONE'&&age>P.timeAnswerWaitMs;
+   st.timeoutRetryEvent=timeout?pending.event:null;
+   st.retryAfter=now+(timeout||st.dynamicTracker?.status==='DATA_DEGRADED'?DYNAMIC_POLICY.missingRetryMs:P.deteriorationMinGapMs);st.softArmed=true;
    return {close:false,reason:unapplied?ignored:age>P.timeAnswerWaitMs?'FD1_FINAL_TIMEOUT':'FD1_FINAL_UNAVAILABLE',state:st,
      protectApproval:{verdict:'KEEP_LAST_APPROVED_PROTECTION',standing:Number(st.protectLevel)||null,
        candidate:Number(pending.softLevel)||null,candidateKey:pending.softKey??null,at:now}};
@@ -129,6 +133,7 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dyn
  const n=nextEvent(st,{now,price,peak,timeCandidate,softTrigger,dynamics},P);st=n.state;
  if(n.exhausted)return {close:false,reason:'FD1_REVIEW_LIMIT',state:st};
  if(n.event){
+  st.timeoutRetryEvent=null;
   const key=await hash({v:FD1_HOLD_POLICY_VERSION,positionId:String(positionId),generation:st.generation,event:n.event,at:Math.floor(now/1000)});
   // The exact candidate offered to this review is bound to the claim, so a later PROTECT can
   // only approve the level that was actually judged.

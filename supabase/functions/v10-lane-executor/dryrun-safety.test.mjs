@@ -16,6 +16,15 @@ test('dry run uses the rollback-only CEC preview and an isolated coordinator',()
 test('modes are routed only behind the executor token check',()=>{
   const serve=src.slice(src.indexOf('Deno.serve('));const authAt=serve.indexOf('if(!(await auth(db,req)))');
   assert.ok(authAt>0&&serve.indexOf('mode==="gpt-dryrun"')>authAt&&serve.indexOf('mode==="ops-readiness"')>authAt);
+  assert.ok(serve.indexOf('mode==="fd1-timeout-probe"')>authAt);
+});
+
+test('injected timeout probe remains an isolated order-free DRYRUN',()=>{
+  const source=readFileSync(new URL('./gpt-final-decision-adapter.mjs',import.meta.url),'utf8');
+  const probe=source.slice(source.indexOf('export async function fd1Probe('));
+  for(const re of forbidden)assert.ok(!re.test(probe),'FD1 probe contains '+re);
+  assert.match(probe,/purpose:'DRYRUN'/);assert.match(probe,/ORDER_FREE_TIMEOUT_FIXTURE/);
+  assert.match(probe,/if\(simulateEntryTimeout\)return/);
 });
 test('recovery lock timeout is retryable and all other recovery errors stay fatal',()=>{
   const fn=body('async function attemptOpsRecovery(','function x1TopObservation(');

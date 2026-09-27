@@ -11,7 +11,7 @@ async function get(fetchFn,path,ms){
 const q=o=>new URLSearchParams(Object.fromEntries(Object.entries(o).map(([k,v])=>[k,String(v)])));
 /** @returns src for computeFacts, plus per-source errors. Never throws for a single source. */
 export async function readSources(symbol,asOf,{mode='LIVE',fetchFn=fetch,ms=3000,btcCache=null,now=Date.now,positionId=null,
-  deadlineMs=Infinity,captureSleep}={}){
+  deadlineMs=Infinity,captureSleep,afterEndMs=-Infinity}={}){
   if(!/^[\p{L}\p{N}_]{1,60}USDT$/u.test(symbol))throw Error('SYMBOL_INVALID');
   const end=Math.floor(asOf/MIN)*MIN-1,end5=Math.floor(asOf/(5*MIN))*5*MIN-1,errors={};
   const safe=async(name,fn)=>{try{return await fn();}catch(e){errors[name]=String(e?.message??e).slice(0,60);return null;}};
@@ -33,7 +33,7 @@ export async function readSources(symbol,asOf,{mode='LIVE',fetchFn=fetch,ms=3000
     live?readCaptureWithRecovery(symbol,asOf,{fetchFn,positionId,now}):Promise.resolve(null),
     live?readMarketSensor(asOf,{fetchFn,timeoutMs:Math.min(350,ms)}):Promise.resolve(null)]);
   if(live){
-    captureContext=await captureForInference(symbol,captureContext,{fetchFn,now,positionId,deadlineMs,
+    captureContext=await captureForInference(symbol,captureContext,{fetchFn,now,positionId,deadlineMs,afterEndMs,
       ...(captureSleep?{sleep:captureSleep}:{})});
     if(captureContext?.pre_inference_refresh){
       const refreshAt=now();
