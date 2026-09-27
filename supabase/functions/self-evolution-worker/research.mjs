@@ -7,8 +7,20 @@ import {metrics,calibrate,wilson} from '../_shared/self-evolution/statistics.mjs
 const compactDecision=d=>{const r=d.record?.result??{},a=r.arbitration??{};return {id:d.decision_id,stage:d.stage,at:d.snapshot_at,policy_version:d.policy_version,
  packet:d.record?.packet,first:a.first?.answer??null,deepseek:a.deepseek?.answer??null,final:r.answer??null,decision:r.decision,valid:r.valid,error:r.error,
  agreement:a.deepseek_agreement,arbitration_reason:a.arbitration_reason};};
+const deepseekPeak=at=>{const d=new Date(at),day=d.getUTCDay(),h=d.getUTCHours();return day>=1&&day<=5&&((h>=1&&h<4)||(h>=6&&h<10));};
+const reserveCost=(provider,input)=>{const bytes=new TextEncoder().encode(JSON.stringify(input)).length,inputTokens=Math.ceil(bytes/3),
+ raw=provider==='gpt'?(inputTokens*.75+2400*4.5)/1e6:(inputTokens*.3+2400*1.2)/1e6;
+ return Math.max(.001,Math.min(.25,Math.ceil(raw*1.25*1e6)/1e6));};
+const actualCost=(provider,result,at=Date.now())=>{if(provider==='gpt'){const n=Number(result?.cost_usd);return Number.isFinite(n)&&n>=0?n:0;}
+ const u=result?.usage??{},hit=Number(u.prompt_cache_hit_tokens??u.prompt_tokens_details?.cached_tokens??0)||0,
+ prompt=Number(u.prompt_tokens??0)||0,miss=Number(u.prompt_cache_miss_tokens??Math.max(0,prompt-hit))||0,out=Number(u.completion_tokens??0)||0,
+ mult=deepseekPeak(at)?1:.5;return (hit*.006+miss*.3+out*1.2)*mult/1e6;};
 export function researchCaller(store,keys){return async(provider,opts)=>{const key=await hash({provider,kind:opts.kind,input:opts.input,version:REVIEW_VERSION});
- return store.cached(key,async()=>{await store.reserve(1,.06);return researchCall(provider,{...opts,apiKey:keys[provider]});});};}
+ return store.cached(key,async()=>{const reserved=reserveCost(provider,opts.input),reservation=await store.reserve(provider,opts.kind,reserved);
+  try{const result=await researchCall(provider,{...opts,apiKey:keys[provider]}),actual=actualCost(provider,result);let budget_settlement_error=null;
+   try{if(!await store.settle(reservation,actual,true))budget_settlement_error='SETTLE_REJECTED';}catch(e){budget_settlement_error=String(e?.message??e).slice(0,120);}
+   return {...result,cost_usd:actual,budget_reserved_usd:reserved,budget_settlement_error};
+  }catch(e){try{await store.settle(reservation,0,false);}catch{}throw e;}});};}
 export async function tradeReview(store,id,keys){
  const p=await store.trade(id);if(p.state!=='CLOSED')throw Error('TRADE_NOT_CLOSED');
  const existing=await store.read(store.table('evolution_reviews').select('trade_id').eq('trade_id',id).maybeSingle());if(existing)return {duplicate:true};
