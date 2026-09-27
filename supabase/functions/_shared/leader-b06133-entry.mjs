@@ -17,7 +17,7 @@ export const B06133_RULE = Object.freeze({
 const MINUTE = 60_000;
 const BTC_INTERVAL = 15 * MINUTE;
 // Absolute end: JS '$' alone also matches before a final newline.
-const VALID_SYMBOL = /^[A-Z0-9]{1,60}USDT$(?![\s\S])/;
+const VALID_SYMBOL = /^[\p{L}\p{N}]{1,60}USDT$(?![\s\S])/u;
 const valid = value => value != null && Number.isFinite(Number(value));
 const tri = value => value === true || value === false ? value : null;
 

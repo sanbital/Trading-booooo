@@ -58,3 +58,14 @@ test('W malformed or missing completed candles stay unknown with the original fo
  // Existing BTC duplicate deduplication stays exactly the same.
  assert.deepEqual(evaluateB06133({features,...good,btcBars:[...good.btcBars,good.btcBars[0]],decisionAt:T}),expected);
 });
+
+test('Unicode contracts retain safe percent-encoded public micro and candle requests',async()=>{
+ const urls=[],fetchFn=async u=>{urls.push(new URL(u));return {ok:true,json:async()=>[],text:async()=>'[]'};};
+ for(const symbol of ['哈基米USDT','牛来USDT']){
+  await fetchB06133Inputs(symbol,T,fetchFn);await readMicro(symbol,{fetchFn});
+  assert.ok(urls.some(u=>u.searchParams.get('symbol')===symbol));
+ }
+ for(const symbol of ['牛来/USDT','牛来%USDT','牛来&USDT','牛来USDT\n','牛来😀USDT']){
+  await assert.rejects(()=>readMicro(symbol,{fetchFn}),/SYMBOL_INVALID/);
+ }
+});

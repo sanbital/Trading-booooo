@@ -24,6 +24,7 @@ test('Leader20 migration and transactional campaign lifecycle',async t=>{
     create function public.doa_capture_rpc(text,jsonb default '{}') returns jsonb language sql as
       'select jsonb_build_object(''enabled'',true,''watch'',jsonb_build_array(jsonb_build_object(''symbol'',''OLDUSDT'',''roles'',jsonb_build_array(''TRADE_CANDIDATE''))))';`);
   await db.exec(await readFile(new URL('../supabase/migrations/20260927121708_leader20_campaigns.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../supabase/migrations/20260927131311_leader20_unicode_symbols.sql',import.meta.url),'utf8'));
   const q=async(sql,args=[]) => (await db.query(sql,args)).rows;
   const rpc=async(name,args=[]) => (await q(`select public.${name}(${args.map((_,i)=>'$'+(i+1)).join(',')}) as result`,args))[0].result;
   const makeEpoch=async(prefix='C')=>{
@@ -36,6 +37,14 @@ test('Leader20 migration and transactional campaign lifecycle',async t=>{
     assert.equal((await rpc('doa_capture_rpc',['watch',{}])).watch[0].symbol,'OLDUSDT');
     await assert.rejects(rpc('leader20_publish_epoch',[await makeEpoch(),null]),/OBSERVATION_DISABLED/);
     assert.equal((await q("select count(*)::int n from pg_class where relname like 'leader20_%' and relkind='r' and relrowsecurity"))[0].n,6);
+  });
+  await t.test('real Binance Unicode names satisfy campaign and member constraints',async()=>{
+    await db.exec("begin");
+    try {
+      await db.exec("insert into leader20_campaigns(symbol) values ('哈基米USDT')");
+      assert.equal((await q("select symbol from leader20_campaigns where symbol='哈基米USDT'"))[0].symbol,'哈基米USDT');
+      await assert.rejects(q("insert into leader20_campaigns(symbol) values ('BAD/USDT')"),/check constraint/);
+    } finally { await db.exec("rollback"); }
   });
   await t.test('epoch publication is complete, atomic and compare-and-swap fenced',async()=>{
     await db.exec('update leader20_control set observation_enabled=true');

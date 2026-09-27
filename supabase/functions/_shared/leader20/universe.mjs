@@ -17,7 +17,7 @@ export const nextBoundary = at => epochBoundary(at) + EPOCH_MS;
 export function coinContract(s) {
   return s?.status === 'TRADING' && s.contractType === 'PERPETUAL' &&
     s.quoteAsset === 'USDT' && s.marginAsset === 'USDT' && s.underlyingType === 'COIN' &&
-    typeof s.symbol === 'string' && /^[A-Z0-9]{1,24}USDT$/.test(s.symbol);
+    typeof s.symbol === 'string' && /^[\p{L}\p{N}]{1,24}USDT$/u.test(s.symbol);
 }
 
 /** A complete exchange snapshot is required. No volume/momentum admission threshold. */

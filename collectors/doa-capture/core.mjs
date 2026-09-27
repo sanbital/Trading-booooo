@@ -1,6 +1,6 @@
 export const VERSION = 'DOA-CAPTURE-6-MARKET-SENSOR';
 export function transportFresh(e,receivedAt){const at=Number(e.E??e.T);return Number.isSafeInteger(at)&&Number.isSafeInteger(receivedAt)&&at<=receivedAt+1000&&receivedAt-at<=10000;}
-export const normalizeSymbol=value=>{const s=String(value??'').trim().toUpperCase();return /^[A-Z0-9]{1,24}USDT$/.test(s)?s:null;};
+export const normalizeSymbol=value=>{const s=String(value??'').trim().toUpperCase();return /^[\p{L}\p{N}]{1,24}USDT$/u.test(s)?s:null;};
 export const iso = n => new Date(n).toISOString();
 export function streamURLs(symbol){
   const s=symbol.toLowerCase();
