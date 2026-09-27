@@ -45,7 +45,7 @@ jobs:
           set -euo pipefail
           test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
           supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-before.json
-          node --input-type=module -e 'import fs from "node:fs";let x=JSON.parse(fs.readFileSync("release-evidence/functions-before.json"));x=x.functions??x;const r=JSON.parse(fs.readFileSync("deployment-evidence/leader20-capacity-request.json"));if(r.monthly_ai_usd!==40||r.daily_ai_usd!==1.25||r.activate_strategy||r.validation_orders)throw Error("SCOPE");for(const [slug,version]of Object.entries(r.expected_versions)){const f=x.find(f=>f.slug===slug);if(f?.version!==version||f.verify_jwt!==false||f.status!=="ACTIVE")throw Error("CONCURRENT_DEPLOY:"+slug);}'
+          node --input-type=module -e 'import fs from "node:fs";let x=JSON.parse(fs.readFileSync("release-evidence/functions-before.json"));x=x.functions??x;const r=JSON.parse(fs.readFileSync("deployment-evidence/leader20-capacity-request.json"));if(r.monthly_ai_usd!==45||r.daily_ai_usd!==1.25||r.activate_strategy||r.validation_orders)throw Error("SCOPE");for(const [slug,version]of Object.entries(r.expected_versions)){const f=x.find(f=>f.slug===slug);if(f?.version!==version||f.verify_jwt!==false||f.status!=="ACTIVE")throw Error("CONCURRENT_DEPLOY:"+slug);}'
           for slug in doa-capture-ingest v10-lane-executor v10-lane-signal-generator self-evolution-worker; do
             mkdir -p "release-evidence/before-$slug" "release-evidence/after-$slug"
             supabase functions download "$slug" --project-ref "$SUPABASE_PROJECT_REF" --use-api --workdir "$PWD/release-evidence/before-$slug"
