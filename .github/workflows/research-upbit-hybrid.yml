@@ -1,0 +1,52 @@
+name: Research Upbit Hybrid Protection
+on:
+  push:
+    branches: [research/upbit-24h-20260820]
+    paths:
+      - "research/upbit_hybrid_protection_replay.py"
+      - ".github/workflows/research-upbit-hybrid.yml"
+permissions:
+  contents: write
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: research/upbit-24h-20260820
+          fetch-depth: 0
+      - name: Export production BUY signals
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p research validation
+          psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 --csv -c "
+            select id,market,created_at,entry_low,entry_high,stop_price,target_1,target_2,
+                   coalesce(snapshot#>>'{lob,pattern}','') as pattern,failed_gate_count,estimated_cost_pct
+            from public.scanner_candidates
+            where exchange='upbit' and decision='BUY' and created_at>=now()-interval '24 hours'
+            order by created_at;
+          " > research/upbit_candidates_24h.csv
+          psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 -At -c "
+            with b as (
+              select sum(coalesce(executed_funds_quote,0))::numeric funds,sum(coalesce(paid_fee_quote,0))::numeric fee
+              from public.trading_orders where exchange='upbit' and side='BUY' and created_at>=now()-interval '30 days'
+              and state in ('APPLIED','EXCHANGE_DONE','EXCHANGE_PARTIAL_CANCELLED') group by position_id
+            ), cfg as (select * from public.trading_settings where id=1)
+            select json_build_object('buy_fee_bps',coalesce((select percentile_cont(.5) within group(order by fee/funds)*10000 from b where funds>0),5),'cost_buffer_upbit_bps',(select lob_profit_protect_cost_buffer_bps_upbit from cfg));
+          " > research/upbit_execution_context.json
+      - name: Replay hybrid arms
+        run: |
+          set -euo pipefail
+          python research/upbit_hybrid_protection_replay.py --candidates research/upbit_candidates_24h.csv --context research/upbit_execution_context.json --json validation/upbit-24h-hybrid-protection.json --md validation/upbit-24h-hybrid-protection.md
+          cat validation/upbit-24h-hybrid-protection.md
+      - name: Persist report
+        run: |
+          set -euo pipefail
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add validation/upbit-24h-hybrid-protection.json validation/upbit-24h-hybrid-protection.md
+          git commit -m "research: persist Upbit hybrid protection [skip ci]" || exit 0
+          git push origin HEAD:research/upbit-24h-20260820
