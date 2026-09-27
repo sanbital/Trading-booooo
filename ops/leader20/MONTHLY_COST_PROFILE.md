@@ -1,5 +1,11 @@
 # Monthly cost profile
 
+## Current authorization, 2026-09-28
+
+The user increased the combined AI and incremental-storage planning envelope to USD 100/month: AI USD 95 per UTC calendar month and USD 3.00 per UTC day, plus USD 5 incremental storage planning allowance. The USD 0.25 upfront job reservation, 100 review jobs/day limit, exposure-aware protection reserve, prior cost history, and no-auto-overrun monthly ledger remain. The approval reference is `USER-APPROVED-2026-09-28-MONTHLY100-AI95-STORAGE5`. If measured runway predicts a budget interruption, report the measured costs and shortfall; never silently raise the cap. This change is already applied in production under migration `20260927232129_leader20_monthly_100_ai_95_budget`. The previous USD 50 profile below is historical and its budget amounts are superseded.
+
+## Previous authorization, 2026-09-27
+
 User authorization, 2026-09-27: AI plus incremental storage must stay within USD 50/month. Existing server fees are separate; optimize Fly and storage as well. The earlier proposed USD 5,000/day increase was never applied and is superseded.
 
 - AI: USD 45 per UTC calendar month, USD 1.25 per UTC day, 100 review jobs/day maximum. A review job may call GPT FIRST, DeepSeek and GPT FINAL, so jobs are not individual provider requests. Claims are serialized across the monthly ledger; completed known costs settle in full, unknown costs keep the reservation. Provider request byte/output limits bound one three-provider job below its USD 0.25 reservation at the configured price cards.
