@@ -1,0 +1,274 @@
+name: Protection arbitration release (AI_PROTECTION_ARBITRATION_1)
+# Deploys the arbitrated protection path to production. Push-triggered on the development
+# branch, the same shape as the existing official FD1 release.
+#
+# It changes NO trading control: not the mode, circuit, GPT mode, API budget, margin,
+# leverage or slot count, and it places no order. It asserts the money-management contract
+# is byte-identical to the deployed baseline and that production settings are unchanged
+# before and after. The audit migrations are already applied; it verifies them read-only.
+on:
+  push:
+    branches: [claude/ai-protection-arbitration-hs2okp]
+  workflow_dispatch:
+    inputs:
+      expected_executor_version_before:
+        description: "Current production v10-lane-executor version (pins against concurrent deploys)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-v10-lane-executor
+  cancel-in-progress: false
+
+env:
+  # v10-lane-executor v107, verified byte-identical to this commit across all 67 bundle files.
+  DEPLOYED_BASELINE: d06528b40d0bd637206aae5338e0ed99a4cd7af5
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prove money management and hard-safety sources are unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-evidence
+          git diff --check
+          git merge-base --is-ancestor "$DEPLOYED_BASELINE" HEAD
+          # Sizing, leverage, slots, entry/exit execution safety and native protection are
+          # outside this change. Byte-identical to the deployed baseline, no exceptions.
+          git diff --quiet "$DEPLOYED_BASELINE" HEAD -- \
+            supabase/functions/_shared/leader-slot-sizing.mjs \
+            supabase/functions/_shared/leader-momentum-v17.mjs \
+            supabase/functions/_shared/leader-exit-review.mjs \
+            supabase/functions/_shared/leader-entry-protection.mjs \
+            supabase/functions/_shared/leader-protection-adapter.mjs \
+            supabase/functions/_shared/leader-native-protection.mjs \
+            supabase/functions/_shared/leader-entry-settlement.mjs \
+            supabase/functions/_shared/leader-exit-settlement.mjs \
+            supabase/functions/_shared/leader-db-only-reconciliation.mjs \
+            supabase/functions/_shared/leader-entry-control.mjs \
+            supabase/functions/_shared/leader-ops-isolation.mjs \
+            supabase/functions/_shared/leader-fill-evidence.mjs \
+            supabase/functions/_shared/leader-qv3-runtime.mjs \
+            supabase/functions/_shared/leader-qv3-rules.mjs \
+            supabase/functions/_shared/leader-e1-runtime.mjs \
+            supabase/functions/_shared/leader-b06133-entry.mjs \
+            supabase/functions/_shared/leader-cec0040.mjs \
+            supabase/functions/_shared/leader-pullback-reaccel.mjs \
+            supabase/functions/_shared/leader-live-chase.mjs \
+            supabase/functions/_shared/boo \
+            supabase/functions/v10-lane-executor/entry-evidence.mjs \
+            supabase/functions/v10-lane-executor/entry-ioc-retry.mjs \
+            supabase/functions/v10-lane-executor/entry-lifecycle.mjs \
+            supabase/functions/v10-lane-executor/entry-capacity.mjs \
+            supabase/functions/v10-lane-executor/entry-retry-reconciliation.mjs \
+            supabase/functions/v10-lane-executor/boo-entry-adapter.mjs \
+            supabase/functions/v10-lane-executor/v24-entry-adapter.mjs \
+            supabase/functions/v10-lane-executor/v24-leader-continuation.mjs
+          # The retestAnchor candidate engine itself is unchanged; only its authority moved.
+          grep -Fq 'targetMarginUsdt: 150' supabase/functions/_shared/leader-slot-sizing.mjs
+          grep -Fq 'leverage: 3' supabase/functions/_shared/leader-slot-sizing.mjs
+          grep -Fq 'const MAX_SLOTS=10' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'const SETUP_MAX_CONCURRENT=MAX_SLOTS' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq 'PATCH="FD1-MULTISLOT-CAPACITY-1"' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq "P142_STOP_WIDENED" supabase/functions/_shared/leader-cec0040.mjs
+          node -e "import('./supabase/functions/_shared/leader-momentum-v17.mjs').then(m=>{if(m.POLICY.marginUsdt!==150||m.POLICY.leverage!==3||m.POLICY.maxSlots!==10)process.exit(1);console.log('generator stamp',m.POLICY.marginUsdt,m.POLICY.leverage,m.POLICY.sizingContractVersion)})"
+
+      - name: Pin the arbitration invariants in the source being deployed
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Hard safety still executes before any model call, and the resident soft stop comes
+          # from the approved level, never from the deterministic candidate.
+          grep -Fq "PROTECTION_ARBITRATION_VERSION='AI_PROTECTION_ARBITRATION_1'" supabase/functions/_shared/exit-authority.mjs
+          grep -Fq "if(approved.active)residentProtection={level:approved.level" supabase/functions/v10-lane-executor/index.ts
+          grep -Fq "if(!hard.hardHit&&approved.active&&approved.crossed){" supabase/functions/v10-lane-executor/index.ts
+          test "$(grep -c 'residentProtection={level:Number(soft.level)' supabase/functions/v10-lane-executor/index.ts)" = 0
+          m=supabase/functions/v10-lane-executor/index.ts
+          python3 - "$m" <<'PY'
+          import sys
+          s=open(sys.argv[1]).read()
+          i=s.index('async function manageLeader(')
+          assert s.index('if(hardBefore.hardHit)',i) < s.index('await fd1HoldTick',i), 'hard safety must precede any AI work'
+          assert s.index('await verifyExecutionLease(db);',i) < s.index('await leaderQuote(p,ctx)',i), 'lease before quote'
+          print('manager ordering ok')
+          PY
+          # RAISE_PROTECTION binds to the reviewed candidate, and only GPT FINAL may raise.
+          grep -Fq "const reviewed=Number(pending.softLevel)" supabase/functions/_shared/gpt-final-decision/hold.mjs
+          grep -Fq "if(authority!=='GPT_FINAL_ONLY'){" supabase/functions/_shared/gpt-final-decision/hold.mjs
+          grep -Fq "KEEP_LAST_APPROVED_PROTECTION" supabase/functions/v10-lane-executor/gpt-final-decision-adapter.mjs
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.5.6
+
+      - name: Full regression and type checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/arb-pglite
+          (cd /tmp/arb-pglite && npm init -y >/dev/null && npm install --no-audit --no-fund @electric-sql/pglite@0.3.14 >/dev/null)
+          export PGLITE_MODULE=/tmp/arb-pglite/node_modules/@electric-sql/pglite/dist/index.js
+          node --test development/gpt-final-review/tests/*.test.mjs supabase/functions/_shared/*.test.mjs \
+            supabase/functions/v10-lane-executor/*.test.mjs tests/*.test.mjs | tee release-evidence/tests-release.tap
+          grep -Eq '^# fail 0$' release-evidence/tests-release.tap
+          node --test development/self-evolution/tests/*.test.mjs development/gpt-final-decision/tests/*.test.mjs \
+            tests/fd1*.test.mjs test-support/v17-entry/*.test.mjs test-support/v17-exit/*.test.mjs \
+            collectors/doa-capture/*.test.mjs | tee release-evidence/tests-decision.tap
+          grep -Eq '^# fail 0$' release-evidence/tests-decision.tap
+          deno task test:entry
+          deno test --allow-read supabase/functions/_shared/leader-slot-sizing.test.ts \
+            supabase/functions/v10-lane-executor/margin-config.test.ts
+          deno check supabase/functions/v10-lane-executor/index.ts
+          deno check supabase/functions/self-evolution-worker/index.ts
+          deno task test
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Pre-deploy production snapshot (read-only)
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          EXPECTED: ${{ inputs.expected_executor_version_before }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          test -n "$SUPABASE_ACCESS_TOKEN"; test -n "$SUPABASE_DB_URL"
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-before.json
+          python3 - <<'PY'
+          import json,os
+          x=json.load(open('release-evidence/functions-before.json'));x=x.get('functions',x) if isinstance(x,dict) else x
+          out={}
+          for slug in ('v10-lane-executor','self-evolution-worker'):
+              r=next(z for z in x if z['slug']==slug)
+              assert r['status']=='ACTIVE' and r.get('verify_jwt') is False, r
+              out[slug]=r['version']
+          want=os.environ.get('EXPECTED','')
+          if want: assert str(out['v10-lane-executor'])==want, out
+          json.dump(out,open('release-evidence/versions-before.json','w'));print(out)
+          PY
+          # Read-only. The trading contract must already be exactly what this release expects.
+          psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 -At <<'SQL' | tee release-evidence/db-before.txt
+          do $$
+          declare s public.trading_settings%rowtype; rt public.v11_long_regime_runtime%rowtype;
+          begin
+            select * into s from public.trading_settings where id=1 for share;
+            select * into rt from public.v11_long_regime_runtime where singleton=true for share;
+            if s.mode<>'LIVE_LIMITED' or s.pause_new_entries or s.emergency_liquidation or s.manual_intervention_required or
+               s.binance_futures_enabled is not true or s.binance_futures_trade_ready is not true or
+               s.binance_futures_leverage<>3 or s.binance_futures_allocation_usdt<>150 or s.max_open_positions_per_exchange<>10
+              then raise exception 'PREDEPLOY_TRADING_SETTINGS_MISMATCH'; end if;
+            if rt.live_enabled is not true or rt.circuit_open is true then raise exception 'PREDEPLOY_RUNTIME_NOT_HEALTHY'; end if;
+            if to_regclass('public.v11_protection_decisions') is null then raise exception 'PROTECTION_AUDIT_TABLE_MISSING'; end if;
+            if exists(select 1 from information_schema.role_table_grants
+              where table_name='v11_protection_decisions' and grantee='service_role'
+                and privilege_type in ('UPDATE','DELETE','TRUNCATE'))
+              then raise exception 'PROTECTION_AUDIT_NOT_APPEND_ONLY'; end if;
+          end $$;
+          select 'settings',binance_futures_allocation_usdt,binance_futures_leverage,max_open_positions_per_exchange from public.trading_settings where id=1;
+          select 'open_positions',count(*) from public.v11_long_regime_positions where state='OPEN';
+          select 'resident_protection',id,symbol,hard_stop_price,metadata->'exitAuthority'->>'residentLevel',metadata->'exitAuthority'->>'residentReason'
+            from public.v11_long_regime_positions where state='OPEN';
+          SQL
+
+      - name: Deploy executor, then the evolution worker
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy v10-lane-executor --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
+          supabase functions deploy self-evolution-worker --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
+
+      - name: Prove the deployed bundles equal this commit
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-after.json
+          python3 - <<'PY'
+          import json
+          b=json.load(open('release-evidence/versions-before.json'))
+          x=json.load(open('release-evidence/functions-after.json'));x=x.get('functions',x) if isinstance(x,dict) else x
+          out={}
+          for slug in ('v10-lane-executor','self-evolution-worker'):
+              r=next(z for z in x if z['slug']==slug)
+              assert r['status']=='ACTIVE' and r.get('verify_jwt') is False and int(r['version'])==int(b[slug])+1, r
+              out[slug]={'version':r['version'],'ezbr_sha256':r.get('ezbr_sha256')}
+          json.dump(out,open('release-evidence/versions-after.json','w'));print(json.dumps(out))
+          PY
+          for target in v10-lane-executor self-evolution-worker; do
+            mkdir -p "release-evidence/download-$target"
+            supabase functions download "$target" --project-ref "$SUPABASE_PROJECT_REF" --use-api --workdir "$PWD/release-evidence/download-$target"
+            node ops/gpt-final-review/verify-bundle-parity.mjs "release-evidence/download-$target" . "$target" | tee "release-evidence/parity-$target.json"
+          done
+          echo "source_sha=$GITHUB_SHA" | tee release-evidence/source-sha.txt
+
+      - name: Post-deploy runtime smoke test (order-free)
+        shell: bash
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          token="$(psql "$SUPABASE_DB_URL" -At --set=ON_ERROR_STOP=1 -c "select token from public.edge_internal_tokens where name='v10-lane-executor'")"
+          test -n "$token"
+          endpoint="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/v10-lane-executor"
+          curl -fsS --retry 2 -H "content-type: application/json" -H "x-v10-executor-token: $token" \
+            -d '{"mode":"ops-readiness"}' "$endpoint" > release-evidence/ops-readiness.json
+          curl -fsS --retry 2 -H "content-type: application/json" -H "x-v10-executor-token: $token" \
+            -d '{"mode":"preflight","symbol":"BTCUSDT"}' "$endpoint" > release-evidence/preflight.json
+          python3 - <<'PY'
+          import json
+          o=json.load(open('release-evidence/ops-readiness.json'));p=json.load(open('release-evidence/preflight.json'))
+          assert o['ok'] and o['patch']=='FD1-MULTISLOT-CAPACITY-1', o
+          assert o['sizing']['targetMarginUsdt']==150 and o['sizing']['leverage']==3 and o['maxSlots']==10, o
+          assert o['nativeStopEnabled'] is True, o
+          a=o['protectionArbitration']
+          assert a['version']=='AI_PROTECTION_ARBITRATION_1', a
+          assert a['candidateRaisesProtection'] is False and a['approver']=='GPT_FINAL_ONLY', a
+          assert a['lowering']=='IMPOSSIBLE' and a['onReviewerFailure']=='KEEP_LAST_APPROVED_PROTECTION', a
+          assert a['hardSafetyIndependent'] is True and a['actions']==['HOLD','RAISE_PROTECTION','EXIT'], a
+          assert o['binance']['positionsComplete'] is True and o['binance']['openOrdersComplete'] is True, o
+          assert p['ok'], p
+          print(json.dumps({'patch':o['patch'],'arbitration':a}))
+          PY
+          # Read-only: the trading contract and every open position's resident protection after deploy.
+          psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 -At <<'SQL' | tee release-evidence/db-after.txt
+          select 'settings',binance_futures_allocation_usdt,binance_futures_leverage,max_open_positions_per_exchange,mode from public.trading_settings where id=1;
+          select 'open_positions',count(*) from public.v11_long_regime_positions where state='OPEN';
+          select 'resident_protection',id,symbol,hard_stop_price,
+                 metadata->'exitAuthority'->>'residentLevel',metadata->'exitAuthority'->>'approvedSoftLevel',
+                 metadata->'exitAuthority'->>'approvedSoftSource',metadata->'exitAuthority'->>'candidateSoftLevel'
+            from public.v11_long_regime_positions where state='OPEN';
+          select 'protection_audit_rows',count(*) from public.v11_protection_decisions;
+          select 'unresolved_orders',count(*) from public.v11_long_regime_orders
+            where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED') and created_at>now()-interval '2 hours';
+          SQL
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: protection-arbitration-release
+          path: release-evidence
