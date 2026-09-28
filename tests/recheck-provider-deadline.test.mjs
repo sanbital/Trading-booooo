@@ -14,12 +14,13 @@ test('actual FINAL RECHECK persists its bounded deadline and passes the producti
  await db.exec(await read('test-support/leader20-ledger-schema.sql'));
  await db.exec(await read('supabase/migrations/20260928012054_leader20_batch_provider_ledger.sql'));
  await db.exec(await read('supabase/migrations/20260928035300_leader20_owned_provider_reservation.sql'));
- const migration=await read('supabase/migrations/20260928035826_recover_expired_gpt_review_pre_dispatch.sql');
- await db.exec(migration.match(/create or replace function public\.ai_call_transition[\s\S]*?\nend \$\$;/)[0]);
  await db.exec('update ai_provider_limits set enabled=true,monthly_usd=100,daily_usd=50');
  const rpcErrors=[];
  const rpc={async rpc(name,args){try{return {data:(await db.query(`select public.${name}(${Object.keys(args).map((k,i)=>`${k} => $${i+1}`).join(',')}) r`,Object.values(args))).rows[0].r};}catch(e){rpcErrors.push({name,code:e.code,message:e.message});return {error:{code:e.code,message:e.message}};}}};
- for(const fence of ['LIVE','EXPIRED','TERMINAL'])await t.test(fence,async()=>{
+ for(const version of ['20260928035826_recover_expired_gpt_review_pre_dispatch','20260928041107_gpt_final_recheck_dispatch_fence']){
+ const migration=await read(`supabase/migrations/${version}.sql`);
+ await db.exec(migration.match(/create or replace function public\.ai_call_transition[\s\S]*?\nend \$\$;/)[0]);
+ for(const fence of ['LIVE','EXPIRED','TERMINAL'])await t.test(`${version}:${fence}`,async()=>{
   const at=Date.now(),store=new MemoryReviewStore();let calls=0,claimedRecord;
   const claim=store.claim.bind(store);store.claim=async(key,record,config)=>{
    const r=await claim(key,record,config);claimedRecord=structuredClone(record);
@@ -28,7 +29,7 @@ test('actual FINAL RECHECK persists its bounded deadline and passes the producti
   };
   store.snapshot=async(key,owner,record)=>{await db.query('update gpt_final_entry_reviews set record=$2 where job_key=$1',[key,JSON.stringify(record)]);};
   store.transport=async key=>paidTransport(rpc,{parentKey:key,purpose:'RECHECK',fetchFn:async()=>{calls++;return Response.json({id:'offline',usage:{input_tokens:100,output_tokens:5}});}});
-  const ticket={expires:at+60000,snapshotHash:fence,identityJson:'{}',initial:{facts:{},support:[]}},
+  const ticket={expires:at+60000,snapshotHash:version+fence,identityJson:'{}',initial:{facts:{},support:[]}},
    preDispatch=preDispatchSnapshot({at,rawQuote:{best_bid:1,best_ask:1.001},e1:null});
   const result=await runFinalRecheck({signal:{id:fence,symbol:'SOONUSDT',features:{referenceClose:1}},ticket,preDispatch,
    detection:detectChange(ticket.initial,preDispatch),store,config:{mode:'ENFORCE',modeValid:true,enforceApproved:true,approvalRef:'fixture',apiBudgetUsd:100,maxCalls:100},apiKey:'offline',now:()=>at,
@@ -46,4 +47,5 @@ test('actual FINAL RECHECK persists its bounded deadline and passes the producti
    assert.equal((await db.query('select state from ai_call_ledger where parent_key=$1',[result.job_key])).rows[0].state,'SETTLED');
   }else{assert.equal(result.valid,false);assert.equal(calls,0,'expired/terminal parent never sends provider HTTP');}
  });
+ }
 });
