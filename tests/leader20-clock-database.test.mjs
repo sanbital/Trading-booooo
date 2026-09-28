@@ -121,6 +121,19 @@ test('PostgreSQL fixed cutoff, 20-member claim, duplicate admission, expiry and 
   assert.equal(status.slot_status,'DONE');assert.equal(Number(status.capture_finalize_latency_ms),5000);
   assert.equal(Number(status.deepseek_latency_ms),9000);assert.equal(Number(status.gpt_latency_ms),10000);
   assert.equal(Number(status.decision_total_latency_ms),30000);assert.equal(status.retry_count,4);
+  await load('supabase/migrations/20260928145300_clock_completion_telemetry.sql');
+  // Reproduce the persisted result of overlapping final completion transactions:
+  // all rows are DONE, but each trigger counted before its peer committed.
+  await q("update leader20_clock_slots set slot_status='AI_REVIEWING'");
+  await rpc('leader20_clock_expire');
+  assert.equal((await q('select slot_status from leader20_clock_slots'))[0].slot_status,'DONE');
+  await q("update leader20_clock_slots set slot_status='EXPIRED'");
+  await rpc('leader20_clock_expire');
+  assert.equal((await q('select slot_status from leader20_clock_slots'))[0].slot_status,'DONE');
+  await q("update gpt_final_entry_reviews set decision='BUY' where job_key='test-0'");
+  await q("update leader20_clock_slots set slot_status='AI_REVIEWING'");
+  await rpc('leader20_clock_expire');
+  assert.equal((await q('select slot_status from leader20_clock_slots'))[0].slot_status,'DECIDED');
   const sid=crypto.randomUUID();
   await q('insert into v11_long_regime_signals(id,features) values($1,$2)',[sid,{leader20:{entry_window:packet.entry_window}}]);
   await q("insert into v11_long_regime_orders(state,signal_id,intent,response_payload) values('FILLED',$1,'OPEN_LONG',$2)",
