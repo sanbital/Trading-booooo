@@ -9,6 +9,8 @@ import {lifecycleNote,mergeLifecycleNote} from './entry-lifecycle.mjs';
 import {isLeader20,validEvent,eventExpiry} from '../_shared/leader20/campaign.mjs';
 import {requireEntryAuthority} from '../_shared/leader20/runtime.mjs';
 import {triggerExpiry} from '../_shared/gpt-final-review/contract.mjs';
+import {clockExecutionSafety} from '../_shared/leader20/clock-final.mjs';
+import {sameClockCapture} from '../_shared/leader20/clock.mjs';
 const contexts=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 /** After lease release, replace only this identity's still-pending lifecycle note.
@@ -107,8 +109,15 @@ export function gptConsumeRetry(db,token){return coordinatorFor(db).consumeRetry
 export function gptFinalCheck(db,s,finalRecheck=null,retryAuthority=null,{allowAged=false}={}){
   const c=coordinatorFor(db);
   if(c.config.mode!=='ENFORCE')return {allowed:false,reason:'GPT_NOT_ENFORCING_NO_NEW_ENTRY'};
+  const clockTicket=c.tickets.get(String(s?.id));
+  if(clockTicket?.clockFinalAuthority&&finalRecheck){
+    const safety=clockExecutionSafety(clockTicket,c.identity(s),finalRecheck.dispatch_quote,c.now());
+    if(!safety.ok)return {allowed:false,reason:safety.reason};
+    if(finalRecheck.recheck_triggered||!sameClockCapture(clockTicket.initial.capture_context,finalRecheck.dispatch_capture,c.now()))
+      return {allowed:false,reason:'CLOCK_FINAL_SNAPSHOT_MISMATCH'};
+  }
   const triggered=finalRecheck?.recheck_triggered===true;
-  if(finalRecheck?.dynamic_policy===DYNAMIC_VERSION&&!allowAged){
+  if(!clockTicket?.clockFinalAuthority&&finalRecheck?.dynamic_policy===DYNAMIC_VERSION&&!allowAged){
     const proof=dispatchDynamicSafety({reviewed:finalRecheck.final?.capture_context??finalRecheck.initial_context?.capture_context,
       latest:finalRecheck.dispatch_capture,at:c.now()});
     if(!proof.ok)return {allowed:false,decision:'WAIT',reason:proof.reason,dynamic:proof};

@@ -1,5 +1,6 @@
 import {LEADER20_PROMPT} from '../leader20/decision-contract.mjs';
 import {batchFinalDecision,batchFinalPayload,BATCH_FINAL} from '../leader20/final.mjs';
+import {clockFinalAuthority,validClockFinalPacket} from '../leader20/clock-final.mjs';
 import {ECONOMY_VERSION,economyPrompt} from './economy-prompt.mjs';
 import {ENTRY_ANALYSIS,entryAnalysisDeadline,isEntryAnalysis} from './entry-analysis.mjs';
 /** FD1 ENTRY engine for the durable FinalReviewCoordinator (journal, budget ledger,
@@ -48,7 +49,9 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   // RECHECK on fresh data (never dispatched on the aged answer). See coordinator.check().
   agedRecheck:true,
   analysisDeadline:entryAnalysisDeadline,
-  requiresFinalRecheck:isEntryAnalysis,
+  requiresFinalRecheck:(packet,result,identity)=>isEntryAnalysis(packet)&&!clockFinalAuthority(packet,result,identity),
+  clockFinalAuthority,
+  reviewValidUntil:(packet,{snapshotAt,expires,ordinary})=>validClockFinalPacket(packet,snapshotAt)?Math.min(expires,packet.facts.capture_context.entry_window.expires_at_ms):ordinary,
   timeoutRecovery:true,
   reobserveWait:identity=>identity.leader20?.version!=='LEADER20_DYNAMIC_1',
   model:MODEL,
@@ -80,7 +83,12 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
     packet.snapshot_hash='';packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
     return {packet,captured};
   },
-  async packetHash(packet){return hash({...packet,snapshot_hash:''});},
+  async packetHash(packet){
+    const c=packet?.facts?.capture_context;
+    if(packet?.leader20?.entry_window&&await hash(c?.trajectory)!==c?.trajectory_hash)
+      throw Error('CLOCK_FINAL_TRAJECTORY_HASH_MISMATCH');
+    return hash({...packet,snapshot_hash:''});
+  },
   // Dual-AI (2026-09-26): () => DeepSeek key, injected by the executor adapter; absent => GPT alone.
   deepseekKey:null,
   async call(packet,{apiKey,fetchFn,now,deadlineMs,identity}){
