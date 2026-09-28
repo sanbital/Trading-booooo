@@ -1,3 +1,4 @@
+import {clockCaptureValid} from '../leader20/clock.mjs';
 import {trajectoryDynamics,bucketDynamics} from './trajectory.mjs';
 import {entryCaptureSafety,DYNAMIC_POLICY} from './dynamic-flow.mjs';
 import {hash} from './snapshot-hash.mjs';
@@ -9,7 +10,7 @@ const finiteOrNull=v=>v===null||Number.isFinite(v);
 function unavailable(reason){return {version:CAPTURE_VERSION,status:'UNAVAILABLE',reason,valid:false,causal:false,complete:false,bucket_count:0};}
 export function contextForModel(c,now=Date.now()){
  if(c?.status!=='AVAILABLE')return c;
- if(c.end_ms>now||now-c.end_ms>=10000)return unavailable('STALE_AT_MODEL_CALL');
+ if(c.entry_window?!clockCaptureValid(c,now):c.end_ms>now||now-c.end_ms>=10000)return unavailable('STALE_AT_MODEL_CALL');
  return {...c,age_ms:now-c.end_ms};
 }
 export function validateCapture(raw,asOf){
@@ -50,6 +51,7 @@ export async function readCaptureWithRecovery(symbol,asOf,{now=Date.now,read=rea
   capture=await read(symbol,at,{...options,timeoutMs,rpc:method==='RAW_RECONSTRUCTION'?'doa_gpt_capture_context_v3':'doa_context_for_role_v1'});
   const safety=entryCaptureSafety(capture,now());
   attempts.push({method,at_ms:at,received_at_ms:now(),status:capture?.status??'UNAVAILABLE',reason:safety.reason});
+  if(capture?.reason?.startsWith('CLOCK_'))return {...capture,recovery_attempts:attempts};
   if(safety.ok&&(!safety.refresh_recommended||method!=='ROLE'))return {...capture,recovery_attempts:attempts};
  }
  return {...(capture??unavailable('READ_FAILED')),recovery_attempts:attempts};
@@ -61,6 +63,7 @@ export async function captureForInference(symbol,capture,{now=Date.now,sleep=ms=
  read=readCapture,deadlineMs=Infinity,maxWaitMs=6500,targetAgeMs=1500,afterEndMs=-Infinity,...options}={}){
  // Acquisition failures pause this attempt. A missing first read must receive
  // the same bounded refresh opportunity as a delayed, otherwise valid bucket.
+ if(capture?.entry_window&&entryCaptureSafety(capture,now()).ok)return capture;
  const started=now(),initialEnd=Number.isSafeInteger(capture?.end_ms)?capture.end_ms:afterEndMs,
   until=Math.min(deadlineMs,started+maxWaitMs);
  // The internal -Infinity sentinel must never enter a hashed/journaled packet.
@@ -119,8 +122,9 @@ export function validateCapture120(raw,asOf){
  if(raw?.status!=='AVAILABLE')return unavailable(raw?.reason??'INCOMPLETE_TRAJECTORY');
  if(raw.version!==CAPTURE_VERSION||raw.buckets!==24||raw.trajectory?.length!==24)return unavailable('INCOMPLETE_TRAJECTORY');
  const {start_ms:start,end_ms:end,ingested_at_ms:ingested}=raw;
- if(![start,end,ingested,asOf].every(Number.isSafeInteger)||end>asOf||ingested>asOf||end>ingested||asOf-end>25000||end-start<117000||end-start>123000)
+ if(![start,end,ingested,asOf].every(Number.isSafeInteger)||end>asOf||ingested>asOf||end>ingested||(!clockCaptureValid(raw,asOf)&&asOf-end>25000)||end-start<117000||end-start>123000)
   return unavailable('STALE_OR_FUTURE');
+ if(raw.entry_window&&!clockCaptureValid(raw,asOf))return unavailable('ENTRY_WINDOW_INVALID_OR_EXPIRED');
  const trajectory=[];let previous=null;
  for(const p of raw.trajectory){
   if(!p||[...POINT_KEYS,...V3_KEYS].some(k=>!Object.hasOwn(p,k)))return unavailable('INVALID_POINT');
@@ -146,5 +150,6 @@ export function validateCapture120(raw,asOf){
  if(trajectory[0].start_ms!==start||trajectory.at(-1).end_ms!==end)return unavailable('WINDOW_MISMATCH');
  return {version:CAPTURE_VERSION,status:'AVAILABLE',coverage_policy:'ALL_24_REQUIRED',position_id:raw.position_id??null,
   trajectory_started_at:start,trajectory_ended_at:end,snapshot_at:asOf,bucket_count:24,valid:true,causal:true,complete:true,
-  window_ms:end-start,age_ms:asOf-end,start_ms:start,end_ms:end,buckets:24,trajectory:bucketDynamics(trajectory),dynamics:trajectoryDynamics(trajectory)};
+  ...(raw.entry_window?{entry_window:structuredClone(raw.entry_window)}:{}),
+  ingested_at_ms:ingested,window_ms:end-start,age_ms:asOf-end,start_ms:start,end_ms:end,buckets:24,trajectory:bucketDynamics(trajectory),dynamics:trajectoryDynamics(trajectory)};
 }

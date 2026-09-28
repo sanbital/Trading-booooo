@@ -1,3 +1,4 @@
+import {captureDisposition} from './clock.mjs';
 import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue} from './core.mjs';
 import {randomUUID} from 'node:crypto';
 import {summarizeCapture} from './context.mjs';
@@ -7,6 +8,7 @@ const expected=process.env.PROTOCOL_SHA256;
 if(endpoint!=='https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/doa-capture-ingest' || !/^[a-f0-9]{64}$/.test(token||'') || !/^[a-f0-9]{64}$/.test(expected||'')) throw Error('INVALID_CONFIG');
 const worker_id=randomUUID(), states=new Map(), budget=new WeightBudget(), queue=new Map(), seen=new Map();
 let windows=[],deadline=0,lastControl=0,lastWatch=0,lastFlush=0,busyRest=false,stop=false,restFailures=0,wsGaps=0,coverageRefreshes=0,backoffUntil=0;
+let clockWindow=null;
 let production=false,universe=new Set(),universeAt=0,unavailableSymbols={};
 const boot=Date.now();
 const log=(event,extra={})=>console.log(JSON.stringify({event,at:iso(Date.now()),version:VERSION,...extra}));
@@ -59,7 +61,7 @@ function openSocket(s){
       s.lastTradeAt=now;
     }
     if(e.e==='forceOrder')s.flow.liquidation+=Number(e.o.ap||e.o.p)*Number(e.o.z);
-    if(e.e==='kline' && e.k.x){const k=e.k;s.lastCandle=closedCandle(e,now);if(s.candles)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k.t),payload:{open:+k.o,high:+k.h,low:+k.l,close:+k.c,quote_volume:+k.q,taker_buy_quote:+k.Q,exchange_at:iso(+e.E),available_at:iso(now),source:'WS_CLOSED',complete:true}});}
+    if(e.e==='kline' && e.k.x){const k=e.k;s.lastCandle=closedCandle(e,now);if(s.candles&&captureDisposition(s.roles,clockWindow,now).persist)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k.t),payload:{open:+k.o,high:+k.h,low:+k.l,close:+k.c,quote_volume:+k.q,taker_buy_quote:+k.Q,exchange_at:iso(+e.E),available_at:iso(now),source:'WS_CLOSED',complete:true}});}
     }catch(e){wsGaps++;retire();log('STREAM_GAP',{symbol:s.symbol,stream:'market',reason:e.message,event_ids:eventIds});}});
     marketWs.addEventListener('error',retire);marketWs.addEventListener('close',retire);
   }
@@ -68,6 +70,7 @@ async function watch(){
   const out=await api('watch');if(stop)return;
   if(out.reason==='LEASE_BUSY'){log('LEASE_WAIT');return false;}
   if(out.protocol_sha256!==expected)throw Error('PROTOCOL_MISMATCH');
+  clockWindow=out.entry_window??null;
   deadline=Date.parse(out.ends_at);lastControl=Date.now();windows=out.windows;production=out.production_enabled===true;
   if(Date.now()-universeAt>900000){
     const info=await publicGet('/fapi/v1/exchangeInfo',1);
@@ -76,7 +79,7 @@ async function watch(){
   }
   unavailableSymbols={};
   const desired=new Map(out.watch.map(x=>({...x,symbol:normalizeSymbol(x.symbol)})).filter(x=>{
-    if(x.symbol&&universe.has(x.symbol))return true;
+    if(x.symbol&&universe.has(x.symbol))return captureDisposition(x.roles,clockWindow,Date.now()).connect;
     unavailableSymbols[x.symbol??'INVALID']='NOT_ACTIVE_USDM_PERPETUAL';return false;
   }).map(x=>[x.symbol,x]));
   for(const [symbol,s] of states)if(!desired.has(symbol)){s.socket?.close();s.marketSocket?.close();states.delete(symbol);}
@@ -85,7 +88,7 @@ async function watch(){
     const s=states.get(w.symbol)||connect(w.symbol,w.candles);
     if(w.candles && !s.candles)s.needBackfill=true;s.candles=w.candles;s.roles=w.roles??[];
   }
-  for(const s of states.values())for(const row of s.ring)if(production||inWindow(Date.parse(row.at),windows,s.symbol))enqueue(row);
+  for(const s of states.values())for(const row of s.ring)if((production||inWindow(Date.parse(row.at),windows,s.symbol))&&captureDisposition(s.roles,clockWindow,Date.parse(row.at)).persist)enqueue(row);
 }
 async function recover(){
   if(busyRest || stop)return;busyRest=true;
@@ -98,7 +101,7 @@ async function recover(){
       if(s.book.last===null){const generation=s.bookGeneration,socket=s.socket;
         const snap=await publicGet('/fapi/v1/depth?symbol='+s.symbol+'&limit=1000',20);
         if(snap && snapshotStillCurrent(s,generation,socket)){try{s.book.snapshot(snap,Date.now());}catch(e){s.book.reset();s.bookGeneration++;throw e;}return;}}
-      if(s.needBackfill){const rows=await publicGet('/fapi/v1/klines?symbol='+s.symbol+'&interval=1m&limit=65',2);if(rows){for(const k of rows)if(+k[6]<Date.now() && +k[0]>=boot-120000)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k[0]),payload:{open:+k[1],high:+k[2],low:+k[3],close:+k[4],quote_volume:+k[7],taker_buy_quote:+k[10],available_at:iso(Date.now()),source:'REST_CLOSED_BACKFILL',complete:true}});s.needBackfill=false;return;}}
+      if(s.needBackfill&&captureDisposition(s.roles,clockWindow,Date.now()).persist){const rows=await publicGet('/fapi/v1/klines?symbol='+s.symbol+'&interval=1m&limit=65',2);if(rows){for(const k of rows)if(+k[6]<Date.now() && +k[0]>=boot-120000)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k[0]),payload:{open:+k[1],high:+k[2],low:+k[3],close:+k[4],quote_volume:+k[7],taker_buy_quote:+k[10],available_at:iso(Date.now()),source:'REST_CLOSED_BACKFILL',complete:true}});s.needBackfill=false;return;}}
     }
   }catch(e){restFailures++;log('RECOVERY_ERROR',{reason:e.message});}finally{busyRest=false;}
 }
@@ -115,7 +118,7 @@ function bucket(now){
       ...btcCandleFields(btc,now),watch_roles:s.roles??[],sector_return_1m:null,sector_map_version:null,maker_fee_bps:null,taker_fee_bps:null,funding_cashflow:null,
       source:'BINANCE_USDM_DIFF_AGGTRADE',version:VERSION}};
     s.lastBucket=now;s.ring.push(row);s.ring=s.ring.filter(x=>Date.parse(x.at)>=now-240000);
-    if(production||inWindow(Date.parse(row.at),windows,s.symbol))enqueue(row);
+    if((production||inWindow(Date.parse(row.at),windows,s.symbol))&&captureDisposition(s.roles,clockWindow,now).persist)enqueue(row);
     s.book.add=0;s.book.remove=0;s.book.bidAdd=0;s.book.bidRemove=0;s.flow.reset();
     emitted=true;
   }
@@ -130,7 +133,8 @@ async function flush(){
     pending.metrics.live_contexts=Object.fromEntries([...states].map(([symbol,s])=>[symbol,summarizeCapture(s.ring,Date.now())]));
     pending.metrics.watch_roles=Object.fromEntries([...states].map(([symbol,s])=>[symbol,s.roles??[]]));
     pending.metrics.unavailable_symbols=unavailableSymbols;
-    pending.metrics.production_continuous=production;
+    pending.metrics.production_continuous=production&&!clockWindow;
+    pending.metrics.entry_window=clockWindow;
     for(const [k] of selected)queue.delete(k);
   }
   const out=await api('ingest',pending);lastControl=Date.now();pending=null;
@@ -147,6 +151,10 @@ const timer=setInterval(()=>{
   if(stop || now>=deadline || now-lastControl>90000 || (!production&&now-boot>14*86400000) || process.memoryUsage().rss>230000000){clearInterval(timer);for(const s of states.values()){s.socket?.close();s.marketSocket?.close();}log('STOPPED',{reason:stop?'CONTROL_OR_SIGNAL':now>=deadline?'DEADLINE':now-lastControl>90000?'CONTROL_STALE':'RESOURCE_CAP'});setTimeout(()=>process.exit(stop?0:1),1000);return;}
   try{
     if(bucket(now))bucketFlushDue=true;
+    // Disconnect candidate streams locally at the boundary; do not wait for the next watch poll.
+    for(const [symbol,s] of states)if(!captureDisposition(s.roles,clockWindow,now).connect){
+      s.socket?.close();s.marketSocket?.close();states.delete(symbol);
+    }
     for(const s of states.values())if((!s.socket && now>=s.bookReconnectAt)||(!s.marketSocket && now>=s.marketReconnectAt))openSocket(s);
     void recover();
     if(!watchTask&&now-lastWatch>=15000){lastWatch=now;watchTask=watch().catch(e=>log('CONTROL_ERROR',{reason:e.message})).finally(()=>{watchTask=null;});}

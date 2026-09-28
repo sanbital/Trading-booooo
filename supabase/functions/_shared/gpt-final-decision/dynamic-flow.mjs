@@ -1,3 +1,4 @@
+import {clockCaptureValid} from '../leader20/clock.mjs';
 /** Dynamic evidence integrity and review scheduling. Never chooses a strategic exit. */
 export const DYNAMIC_VERSION = 'DYNAMIC_FLOW_LIFECYCLE_1';
 export const HORIZONS = Object.freeze([5, 15, 30, 60, 120]);
@@ -14,8 +15,9 @@ const unavailable = (reason, extra = {}) => ({ok: false, decision: 'WAIT', reaso
 export function entryCaptureSafety(c, at, {btc = null, btcRequired = false, policy = DYNAMIC_POLICY} = {}) {
   if (!validTime(at)) return unavailable('DYNAMIC_CLOCK_INVALID');
   if (c?.status !== 'AVAILABLE') return unavailable('DYNAMIC_' + (c?.reason ?? 'UNAVAILABLE'));
-  const age = at - c.end_ms;
-  if (!validTime(c.end_ms) || age < 0 || age >= Math.min(10000, policy.absoluteAgeMs))
+  const age = at - c.end_ms, fixed=clockCaptureValid(c,at);
+  if(c.entry_window&&!fixed)return unavailable('DYNAMIC_ENTRY_WINDOW_INVALID_OR_EXPIRED');
+  if (!validTime(c.end_ms) || age < 0 || !fixed && age >= Math.min(10000, policy.absoluteAgeMs))
     return unavailable('DYNAMIC_TRAJECTORY_STALE_OR_FUTURE', {trajectory_age_ms: finite(age) ? age : null});
   const p = c.trajectory;
   if (c.buckets !== policy.buckets || !Array.isArray(p) || p.length !== policy.buckets ||
@@ -46,7 +48,7 @@ export function entryCaptureSafety(c, at, {btc = null, btcRequired = false, poli
   if (HORIZONS.some(s => !finite(c.dynamics?.horizons?.['s' + s]?.return) ||
       !finite(c.dynamics?.horizons?.['s' + s]?.net_taker_flow))) return unavailable('DYNAMIC_HORIZONS_INCOMPLETE');
   if (btcRequired && !entryCaptureSafety(btc, at, {policy}).ok) return unavailable('DYNAMIC_BTC_UNAVAILABLE');
-  return {ok: true, reason: null, trajectory_age_ms: age, refresh_recommended: age > policy.normalAgeMs,
+  return {ok: true, reason: null, trajectory_age_ms: age, refresh_recommended: !fixed && age > policy.normalAgeMs,
     trajectory_end_ms: c.end_ms, trajectory_hash: c.trajectory_hash ?? null};
 }
 /** Sign changes and multi-axis deterioration request another judgment, never a SELL. */
