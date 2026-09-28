@@ -1,0 +1,11 @@
+{
+  "policy": "TOP20_CLOCK_BOOK_BOOTSTRAP_1",
+  "baseline_collector_commit": "8962aad867310b6dd97c588bd993aea51703286a",
+  "expected_versions": {"v10-lane-executor": 150, "v10-lane-signal-generator": 44},
+  "default_weight_limit": 100,
+  "clock_weight_limit": 600,
+  "max_exchange_weight_fraction": 0.25,
+  "capture_seconds": 120,
+  "slot_seconds": 600,
+  "validation_orders": false
+}

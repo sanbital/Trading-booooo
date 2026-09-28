@@ -1,4 +1,5 @@
 import {captureDisposition} from './clock.mjs';
+import {exchangeMinuteWeight,restWeightLimit,recoveryOrder} from './bootstrap.mjs';
 import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue} from './core.mjs';
 import {randomUUID} from 'node:crypto';
 import {summarizeCapture} from './context.mjs';
@@ -9,6 +10,8 @@ if(endpoint!=='https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/doa-capture
 const worker_id=randomUUID(), states=new Map(), budget=new WeightBudget(), queue=new Map(), seen=new Map();
 let windows=[],deadline=0,lastControl=0,lastWatch=0,lastFlush=0,busyRest=false,stop=false,restFailures=0,wsGaps=0,coverageRefreshes=0,backoffUntil=0;
 let clockWindow=null;
+let exchangeWeightLimit=null;
+const currentRestLimit=()=>restWeightLimit(clockWindow,[...states.values()],Date.now(),exchangeWeightLimit);
 let production=false,universe=new Set(),universeAt=0,unavailableSymbols={};
 const boot=Date.now();
 const log=(event,extra={})=>console.log(JSON.stringify({event,at:iso(Date.now()),version:VERSION,...extra}));
@@ -18,7 +21,7 @@ async function api(action,extra={}){
   const out=await r.json();if(!out.enabled&&out.reason!=='LEASE_BUSY'){stop=true;log('CONTROL_STOP',{reason:out.reason});}return out;
 }
 async function publicGet(path,weight){
-  if(Date.now()<backoffUntil || !budget.claim(weight,Date.now()))return null;
+  if(Date.now()<backoffUntil || !budget.claim(weight,Date.now(),currentRestLimit()))return null;
   const r=await fetch('https://fapi.binance.com'+path,{signal:AbortSignal.timeout(8000)});
   if(r.status===418 || r.status===429){backoffUntil=Date.now()+Math.max(60000,Number(r.headers.get('retry-after')||60)*1000);stop=true;throw Error('RATE_LIMIT_STOP');}
   if(!r.ok)throw Error('PUBLIC_HTTP_'+r.status);
@@ -74,7 +77,7 @@ async function watch(){
   deadline=Date.parse(out.ends_at);lastControl=Date.now();windows=out.windows;production=out.production_enabled===true;
   if(Date.now()-universeAt>900000){
     const info=await publicGet('/fapi/v1/exchangeInfo',1);
-    if(info?.symbols){universe=new Set(info.symbols.filter(x=>x.status==='TRADING'&&x.contractType==='PERPETUAL'&&x.quoteAsset==='USDT').map(x=>x.symbol));universeAt=Date.now();}
+    if(info?.symbols){universe=new Set(info.symbols.filter(x=>x.status==='TRADING'&&x.contractType==='PERPETUAL'&&x.quoteAsset==='USDT').map(x=>x.symbol));universeAt=Date.now();exchangeWeightLimit=exchangeMinuteWeight(info);}
     if(!universe.size)throw Error('ACTIVE_UNIVERSE_UNAVAILABLE');
   }
   unavailableSymbols={};
@@ -93,13 +96,16 @@ async function watch(){
 async function recover(){
   if(busyRest || stop)return;busyRest=true;
   try{
-    for(const s of [...states.values()].sort((a,b)=>Number(!a.roles?.includes('OPEN_POSITION'))-Number(!b.roles?.includes('OPEN_POSITION')))){
+    for(const s of recoveryOrder(states.values())){
       if(s.socket?.readyState!==WebSocket.OPEN)continue;
+      if(Date.now()-(s.lastRestAttemptAt??0)<1000)continue;
       if(s.book.needsCoverageRefresh(Date.now())){
         s.book.reset();s.bookGeneration++;coverageRefreshes++;log('COVERAGE_BOUNDARY_RESYNC',{symbol:s.symbol});
       }
       if(s.book.last===null){const generation=s.bookGeneration,socket=s.socket;
+        s.lastRestAttemptAt=Date.now();
         const snap=await publicGet('/fapi/v1/depth?symbol='+s.symbol+'&limit=1000',20);
+        if(snap)s.depthSnapshots=(s.depthSnapshots??0)+1;
         if(snap && snapshotStillCurrent(s,generation,socket)){try{s.book.snapshot(snap,Date.now());}catch(e){s.book.reset();s.bookGeneration++;throw e;}return;}}
       if(s.needBackfill&&captureDisposition(s.roles,clockWindow,Date.now()).persist){const rows=await publicGet('/fapi/v1/klines?symbol='+s.symbol+'&interval=1m&limit=65',2);if(rows){for(const k of rows)if(+k[6]<Date.now() && +k[0]>=boot-120000)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k[0]),payload:{open:+k[1],high:+k[2],low:+k[3],close:+k[4],quote_volume:+k[7],taker_buy_quote:+k[10],available_at:iso(Date.now()),source:'REST_CLOSED_BACKFILL',complete:true}});s.needBackfill=false;return;}}
     }
@@ -135,6 +141,10 @@ async function flush(){
     pending.metrics.unavailable_symbols=unavailableSymbols;
     pending.metrics.production_continuous=production&&!clockWindow;
     pending.metrics.entry_window=clockWindow;
+    pending.metrics.rest_weight_limit=currentRestLimit();
+    pending.metrics.exchange_weight_limit=exchangeWeightLimit;
+    pending.metrics.rest_weight_used_60s=budget.used.filter(x=>x[0]>Date.now()-60000).reduce((sum,x)=>sum+x[1],0);
+    pending.metrics.depth_snapshots=Object.fromEntries([...states].map(([symbol,s])=>[symbol,s.depthSnapshots??0]));
     for(const [k] of selected)queue.delete(k);
   }
   const out=await api('ingest',pending);lastControl=Date.now();pending=null;
