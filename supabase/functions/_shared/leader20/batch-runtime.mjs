@@ -22,6 +22,18 @@ export async function batchControl(db){
  if(['42P01','PGRST205'].includes(r.error?.code))return {enabled:false};
  if(r.error||!r.data)throw Error('BATCH_CONTROL_UNAVAILABLE');return r.data;
 }
+// Only completion is retried: the paid model call remains outside this loop.
+// SQL preserves the first result, owner, original expiry and a 30-second wait cap.
+export async function finishEntryBatch(db,batch,result,{sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
+ for(let attempt=0;attempt<32;attempt++){
+  const done=await db.rpc('leader20_batch_finish',{p_id:batch.id,p_owner:batch.owner,p_result:result});
+  if(done.error)throw Error('BATCH_FINISH:'+done.error.message);
+  if(done.data?.pending!==true)return done.data;
+  if(done.data.reason!=='ACCOUNT_SNAPSHOT_STALE_OR_INCOMPLETE')throw Error('BATCH_FINISH_UNEXPECTED_PENDING');
+  if(attempt===31)return {...done.data,reason:'BATCH_FINISH_RETRY_LIMIT'};
+  await sleep(1000);
+ }
+}
 export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,apiKey=globalThis.Deno?.env?.get('deepseek api')}={}){
  const capacity=await db.rpc('leader20_batch_capacity');
  if(capacity.error)throw Error('BATCH_CAPACITY_UNAVAILABLE');
@@ -51,7 +63,6 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,apiKey=gl
  const started=await db.rpc('leader20_batch_start',{p_id:batch.id,p_owner:batch.owner});
  if(started.error||!started.data.allowed)return {created:true,reason:started.data?.reason??'BATCH_DISPATCH_REFUSED'};
  const result=await callBatch(packet,{apiKey,fetchFn:transport,now});
- const done=await db.rpc('leader20_batch_finish',{p_id:batch.id,p_owner:batch.owner,p_result:result});
- if(done.error)throw Error('BATCH_FINISH:'+done.error.message);
- return {...done.data,created:true,batch_id:batch.id};
+ const done=await finishEntryBatch(db,batch,result);
+ return {...done,created:true,batch_id:batch.id};
 }
