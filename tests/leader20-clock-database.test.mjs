@@ -116,11 +116,31 @@ test('PostgreSQL fixed cutoff, 20-member claim, duplicate admission, expiry and 
   await q("update leader20_batches set state='DISPATCHED' where id=$1",[batch.id]);
   await q("update leader20_batches set state='DONE',result=$2 where id=$1",[batch.id,{completed_at_ms:slot+19000,latency_ms:9000}]);
   for(let i=0;i<20;i++)await q("insert into gpt_final_entry_reviews(job_key,purpose,record,api_started_at,api_completed_at,completed_at,decision) values($1,'PRODUCTION',$2,$3,$4,$4,'WAIT')",
-   ['test-'+i,{packet:{leader20:{batch_id:batch.id,entry_window:packet.entry_window}}},iso(slot+20000),iso(slot+30000)]);
+   ['test-'+i,{packet:{symbol:`C${i}USDT`,leader20:{batch_id:batch.id,entry_window:packet.entry_window}}},iso(slot+20000),iso(slot+30000)]);
   const status=(await q('select * from leader20_clock_slots where slot_at=$1',[iso(slot)]))[0];
   assert.equal(status.slot_status,'DONE');assert.equal(Number(status.capture_finalize_latency_ms),5000);
   assert.equal(Number(status.deepseek_latency_ms),9000);assert.equal(Number(status.gpt_latency_ms),10000);
   assert.equal(Number(status.decision_total_latency_ms),30000);assert.equal(status.retry_count,4);
+  await load('supabase/migrations/20260928145300_clock_completion_telemetry.sql');
+  await db.exec('savepoint partial_completion');
+  await q("delete from gpt_final_entry_reviews where job_key='test-19'");
+  await q("insert into gpt_final_entry_reviews(job_key,purpose,record,completed_at,api_started_at,api_completed_at,decision) select 'same-symbol-retry',purpose,record,completed_at,api_started_at,api_completed_at,decision from gpt_final_entry_reviews where job_key='test-0'");
+  await q("update leader20_clock_slots set slot_status='AI_REVIEWING'");
+  await rpc('leader20_clock_expire');
+  assert.equal((await q('select slot_status from leader20_clock_slots'))[0].slot_status,'AI_REVIEWING');
+  await db.exec('rollback to savepoint partial_completion');
+  // Reproduce the persisted result of overlapping final completion transactions:
+  // all rows are DONE, but each trigger counted before its peer committed.
+  await q("update leader20_clock_slots set slot_status='AI_REVIEWING'");
+  await rpc('leader20_clock_expire');
+  assert.equal((await q('select slot_status from leader20_clock_slots'))[0].slot_status,'DONE');
+  await q("update leader20_clock_slots set slot_status='EXPIRED'");
+  await rpc('leader20_clock_expire');
+  assert.equal((await q('select slot_status from leader20_clock_slots'))[0].slot_status,'DONE');
+  await q("update gpt_final_entry_reviews set decision='BUY' where job_key='test-0'");
+  await q("update leader20_clock_slots set slot_status='AI_REVIEWING'");
+  await rpc('leader20_clock_expire');
+  assert.equal((await q('select slot_status from leader20_clock_slots'))[0].slot_status,'DECIDED');
   const sid=crypto.randomUUID();
   await q('insert into v11_long_regime_signals(id,features) values($1,$2)',[sid,{leader20:{entry_window:packet.entry_window}}]);
   await q("insert into v11_long_regime_orders(state,signal_id,intent,response_payload) values('FILLED',$1,'OPEN_LONG',$2)",
