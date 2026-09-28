@@ -192,7 +192,9 @@ test('slots are an entry ceiling, never a reason to stop scanning',async t=>{
  });
  await t.test('TEST D: AVAILABLE=0 -> only new entry capture stops; every holding keeps capturing',async()=>{
   const w=await arm(['HBARUSDT','SOONUSDT','QNTUSDT'],0);const cap=await h.capacity();
-  assert.equal(cap.open_positions,3);assert.equal(cap.available,0);assert.equal(cap.reason,'NO_ENTRY_CAPACITY');
+  assert.equal(cap.open_positions,3);assert.equal(cap.available,0);
+  assert.equal(cap.reason,'NO_ENTRY_CAPACITY','the reason string deployed callers compare against is unchanged');
+  assert.equal(cap.capacity_detail,'INSUFFICIENT_MARGIN');
   assert.equal(w.entry_capture.enabled,false);
   assert.deepEqual(symbolsOf(w),['BTCUSDT','HBARUSDT','QNTUSDT','SOONUSDT'],
    'three independent position captures plus the sensor their exit evidence cites');
@@ -272,6 +274,8 @@ test('capacity follows every fill, and concurrent BUY candidates cannot overbook
   assert.equal(after.reserved_slots,2);
   assert.equal(after.available_for_new_entry,0,'no third position can be opened');
   assert.equal(after.available,2,'but the capture and the paid review of the two live candidates stay funded');
+  assert.equal(after.reason,null,'reservations never present the account as out of capacity');
+  assert.equal(after.capacity_detail,'ENTRY_SLOTS_RESERVED');
   assert.equal((await reserve('XRPUSDT')).reason,'NO_ENTRY_CAPACITY');
  });
  await t.test('a reservation is never a permanent hold: it expires, releases and is auditable',async()=>{

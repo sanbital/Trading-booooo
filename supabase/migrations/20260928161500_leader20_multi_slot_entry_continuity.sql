@@ -211,18 +211,22 @@ begin
  slots:=greatest(0,least(max_slots-open_count-pending_entries,by_margin));
  for_new:=greatest(0,least(max_slots-open_count-pending_entries-reserved,
   greatest(0,floor((greatest(0,s.available_quote-(pending_entries+reserved)*cost)-buffer)/cost)::integer)));
- reason:=case when slots>0 then null
-  when max_slots-open_count-pending_entries<1 then 'MAX_SLOTS_REACHED'
-  when pending_entries>0 and greatest(0,floor((s.available_quote-buffer)/cost)::integer)>0 then 'PENDING_CAPITAL_RESERVED'
-  else 'NO_ENTRY_CAPACITY' end;
+ -- `reason` keeps exactly the strings the deployed bundles and SQL compare against
+ -- ('NO_ENTRY_CAPACITY', 'ACCOUNT_SNAPSHOT_*', null when funded). The finer cause travels
+ -- separately so no downstream comparison changes behaviour.
+ reason:=case when slots>0 then null else 'NO_ENTRY_CAPACITY' end;
  return jsonb_build_object('available',slots,'available_for_new_entry',for_new,'certain',true,
+  'capacity_detail',case when slots>0 then case when for_new<1 then 'ENTRY_SLOTS_RESERVED' else 'ENTRY_CAPACITY_AVAILABLE' end
+   when max_slots-open_count-pending_entries<1 then 'MAX_SLOTS_REACHED'
+   when pending_entries>0 and greatest(0,floor((s.available_quote-buffer)/cost)::integer)>0 then 'PENDING_CAPITAL_RESERVED'
+   else 'INSUFFICIENT_MARGIN' end,
   'available_by_margin',by_margin,'held',to_jsonb(held),'open_positions',open_count,
   'reserved_slots',reserved,'pending_entry_orders',pending_entries,'pending_orders',exposure_pending,
   'max_slots',max_slots,'target_margin_per_slot',cost,'cash_buffer',buffer,
   'available_quote',free,'futures_available_margin',s.available_quote,'snapshot_at',s.captured_at,
   'open_symbols',(select coalesce(jsonb_agg(symbol order by symbol),'[]'::jsonb)
    from (select unnest(db_open) symbol union select unnest(live_open)) x),
-  'reason',case when for_new<1 and slots>0 then coalesce(reason,'ENTRY_SLOTS_RESERVED') else reason end);
+  'reason',reason);
 end $$;
 
 -- Atomically take one entry slot. Concurrent BUY candidates serialize on the existing

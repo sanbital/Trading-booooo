@@ -86,6 +86,11 @@ creates one — and it never admits an order: `leader20_reserve_entry_slot` refu
 | `available` | slots the **account** can fund, counting open positions and unresolved entry orders | Top20 entry capture, paid ENTRY/RECHECK admission, batch claim/finish |
 | `available_for_new_entry` | `min(available_by_margin, max_slots − open − reservations)` — how many **more** positions may be opened | slot reservation, i.e. every order |
 
+`reason` keeps exactly the strings deployed callers compare against (`NO_ENTRY_CAPACITY`,
+`ACCOUNT_SNAPSHOT_*`, `null` when funded); the finer cause travels separately as
+`capacity_detail` (`ENTRY_CAPACITY_AVAILABLE` / `ENTRY_SLOTS_RESERVED` / `MAX_SLOTS_REACHED` /
+`PENDING_CAPITAL_RESERVED` / `INSUFFICIENT_MARGIN`), so no existing comparison changes behaviour.
+
 Soft reservations are deliberately **not** subtracted from `available`: a reserved candidate must
 be able to pay for its own FINAL RECHECK, and tearing the capture down mid-window cannot be undone.
 Only `available == 0` stops new entry capture; open-position capture, protection, HOLD/EXIT and
