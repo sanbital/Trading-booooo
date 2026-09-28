@@ -24,9 +24,16 @@ const baseline=(await query(`select c.clock_capture_enabled,c.watch_limit,d.prot
 const protocol=createHash('sha256').update(fs.readFileSync('collectors/doa-capture/PROTOCOL.md')).digest('hex');
 if(baseline.clock_capture_enabled||baseline.watch_limit!==10||baseline.collector_commit!==request.baseline_collector_commit||baseline.protocol_sha256!==protocol)throw Error('BASELINE_CHANGED');
 evidence.before=baseline;save();
-const baselineDirectory=process.env.RUNNER_TEMP+'/clock-baseline';
-run('git',['worktree','add','--detach',baselineDirectory,request.baseline_main]);
 for(const slug of Object.keys(request.expected_versions)){
+ const baselineDirectory=process.env.RUNNER_TEMP+'/clock-baseline-'+slug;
+ run('git',['worktree','add','--detach',baselineDirectory,request.baseline_main]);
+ // Independently deployed bundles can retain older, unused shared modules.
+ // Compare those files with their audited exact source revision, never skip them.
+ for(const [path,revision] of Object.entries(request.baseline_source_overrides?.[slug]??{})){
+  if(!/^supabase\/functions\/_shared\/[a-z0-9-]+\/[a-z0-9-]+\.mjs$/.test(path)||!/^[a-f0-9]{40}$/.test(revision))throw Error('BASELINE_SOURCE_REFERENCE');
+  run('git',['merge-base','--is-ancestor',revision,request.baseline_main]);
+  fs.writeFileSync(baselineDirectory+'/'+path,run('git',['show',revision+':'+path]));
+ }
  const out=`release-evidence/before-${slug}`;fs.mkdirSync(out,{recursive:true});
  run('supabase',['functions','download',slug,'--project-ref',project,'--use-api','--workdir',out]);
  evidence['baseline-'+slug]=JSON.parse(run('node',['ops/gpt-final-review/verify-bundle-parity.mjs',out,baselineDirectory,slug,'--normalize-line-endings']));save();

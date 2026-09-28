@@ -43,3 +43,11 @@ executor/generator type checks passed. The opt-in migration was applied as
 `20260928114749_leader20_clock_capture_top20.sql`. Post-migration clock mode was
 still disabled with watch_limit=10, and anonymous access to the new raw reader
 and batch claim was denied. Activation is recorded by the release workflow.
+
+Release baseline audit: executor v148 contains 81 files and generator v43 contains
+15 files. The executor retains `leader20/batch-runtime.mjs` and `leader20/batch.mjs`
+from `ee2d0b44c23ac8aa687dd19a5d142bb542071f49`; the generator has their later main
+versions. All 96 downloaded files matched their recorded sources after CRLF/LF
+normalization, including both explicitly pinned older executor files. No source
+file is excluded from parity verification. Initial attempts stopped at this
+pre-deployment comparison and did not activate the clock or replace the collector.
