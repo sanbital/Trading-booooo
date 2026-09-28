@@ -21,7 +21,7 @@ Stopped high renewal, lower highs, deteriorating net flow, shrinking bids and fa
 For each why_buy_now horizon, cite an exact numeric path under dynamics.horizons.s5/s15/s30/s60/s120.
 why_buy_now.flow and .orderbook cite exact numeric paths relative to capture_context (e.g. dynamics.horizons.s30.net_taker_flow).
 The reason must explain why entering now is preferable to waiting; never substitute a long-term trend for missing dynamic evidence.
-If the full trajectory is unavailable, incomplete or stale, ENTRY/RECHECK must WAIT or SKIP. A fresh quote does not refresh a trajectory.
+If the full trajectory is unavailable, incomplete or stale, ENTRY/RECHECK must WAIT or SKIP. A fresh quote does not refresh a trajectory. Exception: entry_window explicitly identifies a fixed clock capture; use that unchanged two-minute path until expires_at_ms, and judge current execution using the fresh quote. No new path is collected between entry windows.
 For an existing position, unavailable trajectory means DATA_DEGRADED, never an automatic HOLD or EXIT.
 Keep the native hard stop and last approved protection. Consider emergency tape/book evidence, last valid capture age and price drift.
 For ENTRY/RECHECK with advisor_valid=false, BUY requires confidence >= ${DYNAMIC_POLICY.singleModelBuyConfidence} and propulsion_direction ACCELERATING or STABLE.

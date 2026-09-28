@@ -1,3 +1,4 @@
+import {slotFloor} from './clock.mjs';
 import {buildBatch,callBatch} from './batch.mjs';
 import {paidTransport} from './paid-transport.mjs';
 import {hash} from '../gpt-final-decision/snapshot-hash.mjs';
@@ -35,13 +36,19 @@ export async function finishEntryBatch(db,batch,result,{sleep=ms=>new Promise(re
  }
 }
 export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,apiKey=globalThis.Deno?.env?.get('deepseek api')}={}){
+ if(ctl.clock_capture_enabled){
+  const phase=now()-slotFloor(now());
+  if(phase<1000||phase>=30000)return {created:false,reason:'CLOCK_BATCH_NOT_DUE'};
+  const current=await batchControl(db);
+  if(Date.parse(current.last_periodic_slot)>=slotFloor(now()))return {created:false,reason:'NOT_DUE'};
+ }
  const capacity=await db.rpc('leader20_batch_capacity');
  if(capacity.error)throw Error('BATCH_CAPACITY_UNAVAILABLE');
  if(capacity.data.available<1){
   const marked=await db.rpc('leader20_batch_note_full');if(marked.error)throw Error('BATCH_CAPACITY_NOTE');
   return {created:false,reason:capacity.data.reason};
  }
- const members=await db.from('leader20_members').select('symbol,rank').eq('epoch_id',ctl.epoch_id).lte('rank',10).order('rank');
+ const members=await db.from('leader20_members').select('symbol,rank').eq('epoch_id',ctl.epoch_id).lte('rank',ctl.clock_capture_enabled?20:10).order('rank');
  if(members.error)throw Error('BATCH_MEMBERSHIP_READ');
  const at=now();
  const rows=await Promise.all(members.data.map(async m=>{

@@ -2,7 +2,8 @@ import {validateCapture120} from '../gpt-final-decision/capture-context.mjs';
 import {entryCaptureSafety} from '../gpt-final-decision/dynamic-flow.mjs';
 import {hash} from '../gpt-final-decision/snapshot-hash.mjs';
 
-export const BATCH_VERSION = 'TOP10_DEEPSEEK_BATCH_3';
+export const BATCH_VERSION = 'TOP20_DEEPSEEK_BATCH_1';
+export const LEGACY_BATCH_VERSION = 'TOP10_DEEPSEEK_BATCH_3';
 export const EVIDENCE_FORMAT = 'ROW_COLUMN_ZERO_BASED_V1';
 export const BATCH_MODEL = 'deepseek-flash';
 export const BATCH_INTERVAL_MS = 600000;
@@ -59,8 +60,9 @@ export function checkGrounding(result,batch,symbol){
 
 /** @param {any[]} rows @param {{asOf:number,epochId:string,generation:number,held?:string[]}} options */
 export async function buildBatch(rows, {asOf, epochId, generation, held = []}) {
-  if (!Number.isSafeInteger(asOf) || !Array.isArray(rows) || rows.length !== 10 ||
-      new Set(rows.map(r => r.symbol)).size !== rows.length) throw Error('BATCH_TOP10_IDENTITY');
+  if (!Number.isSafeInteger(asOf) || !Array.isArray(rows) || ![10,20].includes(rows.length) ||
+      new Set(rows.map(r => r.symbol)).size !== rows.length) throw Error('BATCH_TOP20_IDENTITY');
+  const version=rows.length===20?BATCH_VERSION:LEGACY_BATCH_VERSION;
   const checked = rows.map(row => {
     const c = validateCapture120(row.capture, asOf), safety = entryCaptureSafety(c, asOf);
     return {row, c, safety};
@@ -83,10 +85,10 @@ export async function buildBatch(rows, {asOf, epochId, generation, held = []}) {
     symbols.push({id:row.symbol, rank:row.rank, data_version,review_ref:data_version.slice(0,16),
       state:blocked ? 'BLOCKED' : 'READY', blocked_reason:blocked,
       time_origin_ms, last_ms:original?.end_ms ?? null,
-      ingested_at_ms:original?.ingested_at_ms ?? null,market_context:row.market_context??null, matrix});
+      ingested_at_ms:original?.ingested_at_ms ?? null,entry_window:original?.entry_window??null,market_context:row.market_context??null, matrix});
   }
-  const packet = {version:BATCH_VERSION, as_of_ms:asOf, epoch_id:epochId, generation, columns, symbols};
-  return {...packet, batch_hash:await hash({version:BATCH_VERSION,epochId,generation,
+  const packet = {version, ...(rows.find(r=>r.capture?.entry_window)?{entry_window:rows.find(r=>r.capture?.entry_window).capture.entry_window}:{}), as_of_ms:asOf, epoch_id:epochId, generation, columns, symbols};
+  return {...packet, batch_hash:await hash({version,epochId,generation,
     versions:symbols.map(s=>[s.id,s.data_version])})};
 }
 
@@ -132,7 +134,7 @@ export function batchPayload(batch) {
     evidence_columns:batch.columns.flatMap((field,column_index)=>EVIDENCE_FIELDS.has(field)?[{column_index,field}]:[]),
     symbols:batch.symbols.map(({data_version,review_ref,...s})=>({...s,data_version:review_ref}))};
   const replay=batch.version==='TOP10_FROZEN_REPLAY_1'?'\nThis is an order-free historical replay. Each symbol has its own source_as_of_ms. Judge each only at that clock; do not compare ages between independent snapshots.':'';
-  return {model:BATCH_MODEL,thinking:{type:'disabled'},max_tokens:2400,stream:false,
+  return {model:BATCH_MODEL,thinking:{type:'disabled'},max_tokens:batch.symbols.length>10?4800:2400,stream:false,
     response_format:{type:'json_object'},messages:[{role:'system',content:BATCH_PROMPT+replay},
       {role:'user',content:JSON.stringify(wire)}]};
 }

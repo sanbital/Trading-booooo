@@ -1,0 +1,12 @@
+{
+  "policy": "TOP20_CLOCK_CAPTURE_1",
+  "release_attempt": 2,
+  "baseline_main": "a94642a47be989baa25aa70785fb4bc7ba9839dc",
+  "baseline_collector_commit": "c7c1d688fb26432ef238924db91a69221d129200",
+  "expected_versions": {"v10-lane-executor": 148, "v10-lane-signal-generator": 43},
+  "watch_limit": 20,
+  "capture_seconds": 120,
+  "slot_seconds": 600,
+  "change_provider_caps": false,
+  "validation_orders": false
+}

@@ -222,8 +222,10 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   const analysis=isEntryAnalysis(packet);
   const started=now(),requestedDeadline=Math.min(Number.isFinite(deadlineMs)?deadlineMs:started+15000,
     analysis?started+ENTRY_ANALYSIS.maxMs:Infinity);
-  const deadline=!analysis&&dynamicEnabled(packet)&&packet.facts?.capture_context?.status==='AVAILABLE'?
-    Math.min(requestedDeadline,packet.facts.capture_context.end_ms+DYNAMIC_POLICY.absoluteAgeMs-1):requestedDeadline;
+  const captureWindow=packet.facts?.capture_context?.entry_window;
+  const deadline=captureWindow?Math.min(requestedDeadline,captureWindow.expires_at_ms):
+    !analysis&&dynamicEnabled(packet)&&packet.facts?.capture_context?.status==='AVAILABLE'?
+      Math.min(requestedDeadline,packet.facts.capture_context.end_ms+DYNAMIC_POLICY.absoluteAgeMs-1):requestedDeadline;
   const invalid=error=>({valid:false,decision:'ABSTAIN',answer:null,wire:null,error,attempted:false,completed_at_ms:now(),api_cost_usd:0});
   if(dynamicEnabled(packet)&&packet.task!=='HOLD'){
     const integrity=entryCaptureSafety(packet.facts?.capture_context,started);
@@ -327,8 +329,7 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
       preparation_ms:preparedAt-started,preliminary_ms:preliminaryCompletedAt-preparedAt,
       first_timeout_ms:firstMs,advisory_timeout_ms:advisoryMs,final_reserved_ms:finalReserveMs,
       final_available_ms:Math.max(0,remaining),final_ms:now()-finalStartedAt,completion_reserved_ms:completionReserveMs,
-      expired_during_inference:entryCaptureSafety(capture,started).ok&&
-        now()-capture.end_ms>=DYNAMIC_POLICY.absoluteAgeMs}};
+      expired_during_inference:entryCaptureSafety(capture,started).ok&&!entryCaptureSafety(capture,now()).ok}};
   return {...final,...(!accepted?{valid:false,decision:finalDecision,answer:null,error:final.error??'FD_ARBITRATION_EXPIRED'}:{}),
     dynamic_audit:dynamicAudit,
     dual:{version:DUAL_VERSION,authority:'GPT_FINAL_ONLY',audit_ref:'arbitration'},arbitration:audit,final_packet:current.packet,final_snapshot_at_ms:current.snapshot_at_ms,

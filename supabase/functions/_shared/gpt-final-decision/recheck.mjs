@@ -1,3 +1,4 @@
+import {sameClockCapture} from '../leader20/clock.mjs';
 import {LEADER20_PROMPT,leaderDecision} from '../leader20/decision-contract.mjs';
 import {ECONOMY_VERSION} from './economy-prompt.mjs';
 /** GPT FINAL RECHECK (FD1-RC1): the pre-dispatch confirmation of an INITIAL GPT BUY.
@@ -460,9 +461,9 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
     record.packet.source_errors=errors;record.packet.snapshot_hash=await hash({...record.packet,snapshot_hash:''});
     record.snapshot_at_ms=asOf===null?captured:now();
     if(record.packet.facts.capture_context?.reason==='INFERENCE_CAPTURE_NOT_READY')throw Error('DYNAMIC_INFERENCE_CAPTURE_NOT_READY');
-    if(record.timeout_recovery?.after_end_ms!=null&&!(record.packet.facts.capture_context?.end_ms>record.timeout_recovery.after_end_ms))
+    if(record.timeout_recovery?.after_end_ms!=null&&!sameClockCapture(initial?.capture_context,record.packet.facts.capture_context,now())&&!(record.packet.facts.capture_context?.end_ms>record.timeout_recovery.after_end_ms))
       throw Error('RC_RETRY_CAPTURE_NOT_ADVANCED');
-    if(f.leader20?.batch_advice&&!(record.packet.facts.capture_context?.end_ms>initial?.capture_context?.end_ms))
+    if(f.leader20?.batch_advice&&!sameClockCapture(initial?.capture_context,record.packet.facts.capture_context,now())&&!(record.packet.facts.capture_context?.end_ms>initial?.capture_context?.end_ms))
       throw Error('RC_BATCH_CAPTURE_NOT_ADVANCED');
     if(store.snapshot)await store.snapshot(key,owner,record);
     const remaining=deadline-now();
