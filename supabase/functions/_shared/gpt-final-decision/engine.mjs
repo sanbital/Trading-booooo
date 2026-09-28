@@ -94,7 +94,7 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   revalidate(result,packet){
     if(result?.raw_response?.model!==MODEL||!result.raw_response.wire)throw Error('FD_NO_STORED_WIRE');
     if(result.review_route===BATCH_FINAL){
-      if(packet?.leader20?.batch_advice?.decision!=='PASS')throw Error('BATCH_ADVICE_MISSING');
+      if(packet?.leader20?.batch_advice?.id!==packet.symbol)throw Error('BATCH_ADVICE_MISSING');
       return validateDecision(result.raw_response.wire,packet);
     }
     return revalidateArbitration(result,packet);

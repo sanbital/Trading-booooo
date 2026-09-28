@@ -59,15 +59,17 @@ export async function readCaptureWithRecovery(symbol,asOf,{now=Date.now,read=rea
  * Never changes event timestamps and never substitutes a partial trajectory. */
 export async function captureForInference(symbol,capture,{now=Date.now,sleep=ms=>new Promise(r=>setTimeout(r,ms)),
  read=readCapture,deadlineMs=Infinity,maxWaitMs=6500,targetAgeMs=1500,afterEndMs=-Infinity,...options}={}){
- if(capture?.status!=='AVAILABLE')return capture;
- const started=now(),initialEnd=capture.end_ms,until=Math.min(deadlineMs,started+maxWaitMs);
+ // Acquisition failures pause this attempt. A missing first read must receive
+ // the same bounded refresh opportunity as a delayed, otherwise valid bucket.
+ const started=now(),initialEnd=Number.isSafeInteger(capture?.end_ms)?capture.end_ms:afterEndMs,
+  until=Math.min(deadlineMs,started+maxWaitMs);
  const ready=c=>entryCaptureSafety(c,now()).ok&&c.end_ms>afterEndMs&&now()-c.end_ms<=targetAgeMs;
  if(ready(capture))return capture;
  const attempts=[];let current=capture;
  for(let i=0;i<32&&now()+350<until;i++){
   // Most DB buckets arrive about one second after the five-second boundary.
   // Poll only inside the bounded acquisition budget, not the inference lifetime.
-  const delay=Math.min(1000,Math.max(100,initialEnd+6000-now()),until-now()-350);
+  const delay=Math.min(1000,Math.max(100,Number.isFinite(initialEnd)?initialEnd+6000-now():500),until-now()-350);
   const before=now();await sleep(delay);
   if(now()<=before)break; // A frozen replay/test clock must not start a live wait loop.
   const at=now();current=await read(symbol,at,{...options,timeoutMs:Math.min(350,until-at)});

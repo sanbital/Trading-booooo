@@ -9,7 +9,8 @@ export function isReviewTimeout(result){
 /** Acquisition delay is recoverable, but is not a provider timeout or a market opinion. */
 export function isReviewRecoverable(result){
   return isReviewTimeout(result)||result?.valid!==true&&['DYNAMIC_INFERENCE_CAPTURE_NOT_READY','RETRY_CAPTURE_NOT_ADVANCED',
-    'RC_RETRY_CAPTURE_NOT_ADVANCED'].includes(result?.error);
+    'RC_RETRY_CAPTURE_NOT_ADVANCED','RC_BATCH_CAPTURE_NOT_ADVANCED',
+    'DYNAMIC_TRAJECTORY_STALE_OR_FUTURE'].includes(result?.error);
 }
 /** A missing intermediate capture must never erase the last reviewed bucket. */
 export function reviewedCaptureEnd(record){

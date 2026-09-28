@@ -38,18 +38,25 @@ test('ambiguous provider timeout is retained, never refunded or automatically re
 test('batch PASS gets one independent GPT FINAL with original latest 24 buckets and no FIRST',async()=>{
  const facts=computeFacts(src(T),{asOf:T});facts.capture_context=validCapture(T);
  const packet=await buildDecisionPacket({task:'ENTRY',subjectId:'batch-final',symbol:'QNTUSDT',dataMode:'LIVE',facts});
- packet.leader20={version:'LEADER20_DYNAMIC_1',batch_advice:{id:'QNTUSDT',decision:'PASS',valid:true,grounding:'SYMBOL_CELLS_VERIFIED_V1',last_ms:T-6000,reason:'buy flow'}};
+ packet.dynamic_policy='DYNAMIC_FLOW_LIFECYCLE_1';packet.dynamic_as_of_ms=T;
+ packet.leader20={version:'LEADER20_DYNAMIC_1',batch_advice:{id:'QNTUSDT',decision:'PASS',valid:true,grounding:'SYMBOL_CELLS_VERIFIED_V2',last_ms:T-6000,reason:'buy flow'}};
  let calls=0;
  const r=await batchFinalDecision(packet,{apiKey:'fixture',now:()=>T,call:async(p,o)=>{
   calls++;const payload=o.payloadFn(p),input=JSON.parse(payload.input[1].content);
-  assert.deepEqual(input.original_latest_capture,facts.capture_context);
-  assert.equal(input.original_latest_capture.trajectory.length,24);
+  assert.equal(input.capture_context.ordered_path.length,24);
+  assert.equal(input.original_latest_capture,undefined,'full evidence is supplied once');
   assert.equal(input.deepseek_prior_review.last_ms,T-6000);
   assert.match(payload.input[0].content,/independent final BUY\/WAIT\/SKIP/);
   return {valid:true,decision:'SKIP'};
  }});
  assert.equal(calls,1);assert.equal(r.decision,'SKIP');assert.equal(r.requires_final_recheck,true);
- packet.leader20.batch_advice.last_ms=T-90000;
+ for(const [decision,valid] of [['WAIT',true],['SKIP',true],['BLOCKED',false]]){
+  packet.leader20.batch_advice={...packet.leader20.batch_advice,decision,valid};
+  const independent=await batchFinalDecision(packet,{apiKey:'fixture',now:()=>T,call:async()=>({valid:true,decision:'BUY'})});
+  assert.equal(independent.decision,'BUY','advisor opinion cannot veto GPT');
+  assert.equal(independent.requires_final_recheck,true,'fixture BUY never grants direct dispatch authority');
+ }
+ packet.leader20.batch_advice.last_ms=T-600000;
  const stale=await batchFinalDecision(packet,{apiKey:'fixture',now:()=>T,call:async()=>{throw Error('must not call');}});
  assert.equal(stale.valid,false);
 });

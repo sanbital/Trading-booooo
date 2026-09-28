@@ -4,6 +4,7 @@ import {isLeader20} from './campaign.mjs';
 import {POLICY, STRATEGY} from '../leader-momentum-v17.mjs';
 import {validateCapture120} from '../gpt-final-decision/capture-context.mjs';
 import {entryCaptureSafety} from '../gpt-final-decision/dynamic-flow.mjs';
+import {hash} from '../gpt-final-decision/snapshot-hash.mjs';
 
 export async function leaderControl(db) {
   const r = await db.from('leader20_control').select('*').eq('singleton', true).maybeSingle();
@@ -42,6 +43,11 @@ export async function generateLeader20(db, ctl, {now = Date.now, fetchFn = fetch
     } catch (e) { refreshError = String(e.message); }
   }
   const batchMode=await batchControl(db);
+  // Observation/candidate housekeeping continues even while a batch is not due.
+  if(batchMode.enabled){
+    const observed=await db.rpc('leader20_schedule');
+    if(observed.error)throw Error('LEADER20_OBSERVATION_FAILED');
+  }
   const batchOutcome=batchMode.enabled?await runEntryBatch(db,ctl,{now,fetchFn}):null;
   const scheduled = batchMode.enabled?{data:batchOutcome}:await db.rpc('leader20_schedule');
   if (scheduled.error) throw Error('LEADER20_SCHEDULE_FAILED');
@@ -63,6 +69,9 @@ export async function generateLeader20(db, ctl, {now = Date.now, fetchFn = fetch
       if (member.error) throw Error('MEMBERSHIP_READ');
       const ref = capture.trajectory.at(-1).mid;
       const features = {strategy: STRATEGY, routeAuthority: LEADER20, rank: member.data.rank,
+        execution_snapshot:{captured_at_ms:now(),end_ms:capture.end_ms,start_ms:capture.start_ms,
+          complete:capture.complete,causal:capture.causal,bucket_count:capture.bucket_count,
+          trajectory_hash:await hash(capture.trajectory)},
         rankBasis: 'ROLLING_24H', rolling24hChangePercent: member.data.price_change_percent,
         referenceClose: ref, atr: null, atrBasis: 'NOT_USED_BY_LEADER20',
         exitPolicy: {stopPct: POLICY.stopPct, trailArmPct: POLICY.trailArmPct, trailGapPct: POLICY.trailGapPct,

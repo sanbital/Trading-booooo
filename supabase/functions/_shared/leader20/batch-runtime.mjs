@@ -2,6 +2,21 @@ import {buildBatch,callBatch} from './batch.mjs';
 import {paidTransport} from './paid-transport.mjs';
 import {hash} from '../gpt-final-decision/snapshot-hash.mjs';
 
+// Closed one-minute candles supply current 1m/5m momentum. The source close
+// timestamp travels with the evidence; missing candles remain explicitly unknown.
+export async function batchMomentum(symbol,at,fetchFn=fetch){
+ try{
+  const end=Math.floor(at/60000)*60000-1;
+  const r=await fetchFn('https://fapi.binance.com/fapi/v1/klines?'+new URLSearchParams({symbol,interval:'1m',limit:'6',endTime:String(end)}),
+   {signal:AbortSignal.timeout(2000)});
+  if(!r.ok)throw Error('HTTP');const rows=await r.json();
+  if(!Array.isArray(rows)||rows.length!==6||rows.some((x,i)=>!Number.isFinite(Number(x[4]))||Number(x[4])<=0||
+   !Number.isSafeInteger(x[6])||x[6]>at||i>0&&x[6]-rows[i-1][6]!==60000)||at-rows[5][6]>90000)throw Error('CAUSAL_CANDLES');
+  return {status:'AVAILABLE',closed_at_ms:rows[5][6],return_1m:Number(rows[5][4])/Number(rows[4][4])-1,
+   return_5m:Number(rows[5][4])/Number(rows[0][4])-1};
+ }catch{return {status:'UNAVAILABLE',reason:'MOMENTUM_SOURCE_UNAVAILABLE'};}
+}
+
 export async function batchControl(db){
  const r=await db.from('leader20_batch_control').select('*').eq('singleton',true).maybeSingle();
  if(['42P01','PGRST205'].includes(r.error?.code))return {enabled:false};
@@ -20,7 +35,7 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,apiKey=gl
  const rows=await Promise.all(members.data.map(async m=>{
   try{
    const r=await db.rpc('doa_context_for_role_v1',{p_symbol:m.symbol,p_as_of:new Date(at).toISOString(),p_role:'TRADE_CANDIDATE',p_position_id:null});
-   if(r.error)throw Error('CAPTURE_READ');return {...m,capture:r.data};
+   if(r.error)throw Error('CAPTURE_READ');return {...m,capture:r.data,market_context:await batchMomentum(m.symbol,at,fetchFn)};
   }catch{return {...m,capture:{status:'UNAVAILABLE',reason:'CAPTURE_READ'}};}
  }));
  const packet=await buildBatch(rows,{asOf:at,epochId:ctl.epoch_id,generation:ctl.generation,held:capacity.data.held});
