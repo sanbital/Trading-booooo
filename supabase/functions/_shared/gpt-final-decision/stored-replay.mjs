@@ -8,7 +8,7 @@ import {baselinePolicy} from '../self-evolution/policy.mjs';
 import {SupabaseReviewStore,readReviewControl} from '../gpt-final-review/supabase-store.mjs';
 import {configFromControl} from '../gpt-final-review/coordinator.mjs';
 export async function prepareStoredReplay(record){
- const packet=structuredClone(record.packet);
+ const packet=structuredClone(record.result?.final_packet??record.packet);
  if(!packet||!['ENTRY','HOLD','RECHECK'].includes(packet.task))throw Error('REPLAY_PACKET_MISSING');
  const at=record.result?.final_snapshot_at_ms??record.snapshot_at_ms??packet.dynamic_as_of_ms??packet.position?.valuation?.snapshot_at_ms;
  if(!Number.isSafeInteger(at))throw Error('REPLAY_TIMESTAMP_MISSING');
@@ -24,11 +24,12 @@ export async function storedDynamicReplay(db,{sourceJobKey,runId,apiKey,deepseek
  if(!/^[a-f0-9]{64}$/.test(sourceJobKey))throw Error('REPLAY_JOB_KEY');
  const source=await db.from('gpt_final_entry_reviews').select('record,purpose,created_at,signal_id').eq('job_key',sourceJobKey).maybeSingle();
  if(source.error||source.data?.purpose!=='PRODUCTION')throw Error('REPLAY_SOURCE_NOT_PRODUCTION');
- if(source.data.record.packet?.task==='RECHECK'&&!source.data.record.packet.initial?.capture_context&&source.data.signal_id){
+ const selected=source.data.record.result?.final_packet??source.data.record.packet;
+ if(selected?.task==='RECHECK'&&!selected.initial?.capture_context&&source.data.signal_id){
   const prior=await db.from('gpt_final_entry_reviews').select('record').eq('signal_id',source.data.signal_id)
     .eq('purpose','PRODUCTION').lt('created_at',source.data.created_at).order('created_at',{ascending:false}).limit(10);
   const entry=prior.data?.find(x=>x.record?.packet?.task==='ENTRY');
-  if(entry)source.data.record.packet.initial={...source.data.record.packet.initial,capture_context:entry.record.packet.facts.capture_context??null};
+  if(entry)selected.initial={...selected.initial,capture_context:entry.record.packet.facts.capture_context??null};
  }
  const {packet,at,safety}=await prepareStoredReplay(source.data.record);
  const key=await hash({version:'DYNAMIC_CONTINUITY_REPLAY_2',sourceJobKey,runId});

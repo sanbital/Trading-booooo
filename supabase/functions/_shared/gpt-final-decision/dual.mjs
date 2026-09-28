@@ -99,7 +99,9 @@ export async function frozenReview(packet,{snapshotAtMs,inputPayload=payloadFor,
     priority:'HARD_SAFETY_OVERRIDES_ALL_MODELS',account_and_exchange_truth:'NOT_IN_MODEL_SNAPSHOT_RECONCILED_BY_EXECUTOR'};
   market.execution_state={phase:copy.task==='RECHECK'?'PRE_DISPATCH':copy.task==='HOLD'?'OPEN_POSITION_REVIEW':'PRE_ADMISSION',
     book_reference:copy.current_ref??copy.execution_ref??copy.position?.valuation??null,
-    pre_dispatch:copy.pre_dispatch??null,deterministic_exit_candidate:copy.position?.deterministic_exit_candidate??null,
+    pre_dispatch:copy.task==='RECHECK'&&market.fast_recheck&&copy.pre_dispatch?
+      {reference:'fast_recheck',meaning:'Same complete pre-dispatch observation, including its separately timed capture; supplied once'}:
+      copy.pre_dispatch??null,deterministic_exit_candidate:copy.position?.deterministic_exit_candidate??null,
     execution_permission:'NONE_UNTIL_FINAL_AND_EXECUTOR_SAFETY_CHECKS'};
   const capture=copy.facts?.capture_context??{status:'UNAVAILABLE'},trajectoryHash=await hash(capture.trajectory??null);
   const identity={symbol:copy.symbol,task:copy.task,candidate_id:copy.candidate_id,snapshot_at_ms:snapshotAtMs,

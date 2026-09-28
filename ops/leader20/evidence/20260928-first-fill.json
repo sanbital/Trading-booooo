@@ -1,0 +1,245 @@
+{
+  "checked_at": "2026-09-28T01:59:13.300846Z",
+  "baseline_main": "e104c14896d1fc5a5e2d1e8498e1e7f39e4e2066",
+  "executor": {
+    "version": 138,
+    "sha256": "d4f6e09ab921f6e55606b376c29b03598a28b3040897ef412a5e0992cc08b479",
+    "files_compared": 81,
+    "files_matching": 81
+  },
+  "former_block": {
+    "symbol": "ONEUSDT",
+    "source_job": "bf2e751e5fa63ed13de2921e2feee2b14805669f5bdb7e054e83deb0d90483f1",
+    "created_at": "2026-09-28T00:55:12.161Z",
+    "error": "FD_REQUEST_COST_BOUND",
+    "request_bytes": 177265,
+    "gpt_bound_bytes": 130000,
+    "deepseek_bound_bytes": 90000
+  },
+  "replay": {
+    "job_key": "d52a923ae0359d691910683e2c995e6f13466180dc44b7308e4400daaec31209",
+    "purpose": "DRYRUN",
+    "order_calls": 0,
+    "decision": "WAIT",
+    "valid": true,
+    "error": null,
+    "latency_ms": 5979,
+    "capture": {
+      "ok": true,
+      "reason": null,
+      "trajectory_hash": "03691bf4c91d685cae35228308b24e07c90b5cd0e5462808db20871c0edd0f11",
+      "trajectory_age_ms": 1303,
+      "trajectory_end_ms": 1790556915117,
+      "refresh_recommended": false
+    },
+    "final_capture_age_ms": 7282,
+    "gpt_snapshot_hash": "44c448716ecb5d24a8e317b1f85c059605a85b0cc31c7bbc5a3d65f76a3794b8",
+    "deepseek_snapshot_hash": "44c448716ecb5d24a8e317b1f85c059605a85b0cc31c7bbc5a3d65f76a3794b8",
+    "gpt_first": {
+      "request_bytes": 81850,
+      "usage": {
+        "input_tokens": 31963,
+        "total_tokens": 32058,
+        "output_tokens": 95,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "cost_usd": 0.02439975
+    },
+    "gpt_final": {
+      "request_bytes": 118269,
+      "usage": {
+        "input_tokens": 41025,
+        "total_tokens": 41682,
+        "output_tokens": 657,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "cost_usd": 0.03372525
+    },
+    "deepseek": {
+      "request_bytes": 86164,
+      "usage": {
+        "total_tokens": 35361,
+        "prompt_tokens": 35110,
+        "completion_tokens": 251,
+        "prompt_tokens_details": {
+          "cached_tokens": 1792
+        },
+        "prompt_cache_hit_tokens": 1792,
+        "prompt_cache_miss_tokens": 33318
+      },
+      "peak_uncached_cost_ceiling_usd": 0.0108342
+    },
+    "settled_usd": 0.0689592,
+    "limitations": [
+      "Historical clock; current prompts; no order authority.",
+      "Valid schema/evidence references do not prove prose semantics: DeepSeek narrative reported 0.085 instead of current buy_share 0.85198739; GPT s60 narrative said one hour. No deployment of new batch quality gate based on this replay."
+    ]
+  },
+  "natural_qnt": {
+    "checked_at": "2026-09-28 01:59:13.300846+00",
+    "job_key": "d084bd0dd287f53cea1d4248292aa953f0a0fb3aebda5d207066ffe26f08dbb6",
+    "symbol": "QNTUSDT",
+    "decision": "SKIP",
+    "valid": true,
+    "error": null,
+    "api_cost_usd": "0.0350397",
+    "capture_valid": true,
+    "buckets": 24,
+    "age_ms": 7296,
+    "ds_error": null,
+    "ds_decision": "SKIP",
+    "reason": "추세는 남아도 현재 흐름과 참여가 약해 기대값이 불리합니다"
+  },
+  "readiness": {
+    "id": 23699,
+    "status_code": 200,
+    "body": {
+      "db": {
+        "openPositions": [],
+        "unresolvedOrders": [],
+        "openPositionCount": 0,
+        "unresolvedOrderCount": 0
+      },
+      "ok": true,
+      "patch": "FD1-MULTISLOT-CAPACITY-1",
+      "sizing": {
+        "leverage": 3,
+        "targetMarginUsdt": 150
+      },
+      "binance": {
+        "positions": [],
+        "positionCount": 0,
+        "availableQuote": 331.34419204,
+        "positionsComplete": true,
+        "openOrdersComplete": true,
+        "ordersObservedAtMs": 1790560735961,
+        "ordinaryOrderCount": 0,
+        "conditionalOrderCount": 0
+      },
+      "runtime": {
+        "last_error": null,
+        "circuit_open": false,
+        "incident_kind": "INCOMPLETE_OR_STALE_SNAPSHOT",
+        "circuit_reason": null,
+        "protection_health": "FLAT",
+        "entry_block_reason": "GPT_REVIEW_PENDING",
+        "incident_generation": 129,
+        "last_cycle_completed_at": "2026-09-28T01:58:10.182+00:00"
+      },
+      "maxSlots": 10,
+      "revision": "V11-LONG-REGIME-1.0.1",
+      "gptControl": {
+        "mode": "ENFORCE",
+        "updated_at": "2026-09-27T23:21:29.40427+00:00",
+        "approval_ref": "USER-APPROVED-2026-09-28-MONTHLY100-AI95-STORAGE5",
+        "daily_cap_usd": 3,
+        "enforce_approved": true,
+        "max_calls_per_day": 100
+      },
+      "observedAt": "2026-09-28T01:58:56.077Z",
+      "holdRelease": "FD1-EXIT-HARDENING-DS-SHADOW-1",
+      "deepseekShadow": {
+        "enabled": true,
+        "authority": [],
+        "keyPresent": true
+      },
+      "failsafeRelease": "PR193_EMERGENCY_VALIDATION_1",
+      "dynamicLifecycle": {
+        "version": "DYNAMIC_FLOW_LIFECYCLE_1",
+        "missingDataState": "DATA_DEGRADED",
+        "missingDataForcesExit": false,
+        "absoluteTrajectoryAgeMs": 10000,
+        "positionCaptureIntervalMs": 5000,
+        "fullTrajectoryRequiredForEntry": true
+      },
+      "openaiKeyPresent": true,
+      "nativeStopEnabled": true,
+      "protectionArbitration": {
+        "actions": [
+          "HOLD",
+          "RAISE_PROTECTION",
+          "EXIT"
+        ],
+        "version": "AI_PROTECTION_ARBITRATION_1",
+        "approver": "GPT_FINAL_ONLY",
+        "lowering": "IMPOSSIBLE",
+        "auditTable": "v11_protection_decisions",
+        "onReviewerFailure": "KEEP_LAST_APPROVED_PROTECTION",
+        "hardSafetyIndependent": true,
+        "candidateRaisesProtection": false
+      }
+    }
+  },
+  "provider_budget": {
+    "as_of": "2026-09-28T01:58:50.351467+00:00",
+    "providers": [
+      {
+        "provider": "deepseek",
+        "limit_usd": 100,
+        "days_to_cap": 124.79127724205415,
+        "last24h_usd": 0.787832844,
+        "entry_enabled": false,
+        "remaining_usd": 98.314666856,
+        "month_used_usd": 1.685333144,
+        "run_rate_31d_usd": 24.422818164,
+        "unresolved_reserve_usd": 0
+      },
+      {
+        "provider": "openai",
+        "limit_usd": 95,
+        "days_to_cap": 4.786373332691906,
+        "last24h_usd": 11.71762665,
+        "entry_enabled": false,
+        "remaining_usd": 56.08493572,
+        "month_used_usd": 38.91506428,
+        "run_rate_31d_usd": 363.24642615,
+        "unresolved_reserve_usd": 6.75
+      }
+    ],
+    "rate_basis": "REVIEW_LEDGER_LAST24H_INCLUDING_UNRESOLVED_NOT_INVOICE"
+  },
+  "tests": {
+    "node_full": {
+      "passed": 1452,
+      "failed": 0,
+      "note": "Before final stored-replay regression case; subsequent related 13/13 including that case passed."
+    },
+    "deno": {
+      "passed": 1055,
+      "steps": 13,
+      "failed": 0
+    },
+    "edge_typecheck": "passed"
+  },
+  "monitoring": {
+    "id": "v18",
+    "interval_minutes": 10,
+    "target_thread_id": "01a0e55a-0886-7103-8b9c-4f66f5f197cd",
+    "status": "ACTIVE",
+    "cutoff": "2026-09-28T01:40:00Z",
+    "first_fill": null
+  },
+  "batch_status": {
+    "enabled": false,
+    "provider_enforcement": false,
+    "legacy_global_interval_minutes": 30,
+    "remaining_gates": [
+      "Evidence format and meaning",
+      "Selected historical counterexamples: 7/10 not forwarded",
+      "Fresh new-batch GPT final branch",
+      "Cost tails and protection allowance"
+    ]
+  }
+}
