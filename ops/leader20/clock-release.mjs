@@ -29,7 +29,7 @@ run('git',['worktree','add','--detach',baselineDirectory,request.baseline_main])
 for(const slug of Object.keys(request.expected_versions)){
  const out=`release-evidence/before-${slug}`;fs.mkdirSync(out,{recursive:true});
  run('supabase',['functions','download',slug,'--project-ref',project,'--use-api','--workdir',out]);
- run('node',['ops/gpt-final-review/verify-bundle-parity.mjs',out,baselineDirectory,slug]);
+ evidence['baseline-'+slug]=JSON.parse(run('node',['ops/gpt-final-review/verify-bundle-parity.mjs',out,baselineDirectory,slug,'--normalize-line-endings']));save();
 }
 const list=await machine();if(list.length!==1)throw Error('EXPECTED_ONE_COLLECTOR');
 const before=await machine('/'+list[0].id),cfg=before.config;
@@ -52,7 +52,7 @@ for(const slug of Object.keys(request.expected_versions)){
  run('supabase',['functions','deploy',slug,'--project-ref',project,'--no-verify-jwt','--use-api'],{stdio:'inherit'});
  const out=`release-evidence/after-${slug}`;fs.mkdirSync(out,{recursive:true});
  run('supabase',['functions','download',slug,'--project-ref',project,'--use-api','--workdir',out]);
- evidence[slug]=JSON.parse(run('node',['ops/gpt-final-review/verify-bundle-parity.mjs',out,'.',slug]));save();
+ evidence[slug]=JSON.parse(run('node',['ops/gpt-final-review/verify-bundle-parity.mjs',out,'.',slug,'--normalize-line-endings']));save();
 }
 // An in-flight entry must settle before changing strategic generation.
 let settled=false;for(let i=0;i<30;i++){
