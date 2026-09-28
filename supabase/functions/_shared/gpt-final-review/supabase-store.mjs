@@ -8,11 +8,27 @@ export class SupabaseReviewStore {
   constructor(db){this.db=db;this.ledgerModes=new Map();this.deferClaimUntilPrepared=true;}
   async get(key){const r=await this.db.from('gpt_final_entry_reviews').select('job_key,owner,state,record').eq('job_key',key).maybeSingle();
     ensure(!r.error,'REVIEW_STORE_READ');return r.data?{...r.data,key:r.data.job_key}:null;}
-  async claim(key,record,config){const r=await this.db.rpc('gpt_final_review_claim',{
-    p_job_key:key,p_record:{...record,transport_version:'AI_PROVIDER_LEDGER_1'},p_cap_usd:config.apiBudgetUsd,p_max_calls:config.maxCalls,p_reserve_usd:MAX_RESERVED_USD});
-    if(r.error&&/API_BUDGET_EXHAUSTED/.test(String(r.error.message??'')))throw Error('API_BUDGET_EXHAUSTED');
-    ensure(!r.error&&r.data?.row,'REVIEW_STORE_CLAIM');
-    this.ledgerModes.set(key,r.data.row.provider_ledger===true);return r.data;}
+  async claim(key,record,config){
+    // The RPC may commit before its response is lost. Only this invocation may
+    // recover that acknowledgement, never another worker or a completed review.
+    // The marker is journal metadata; immutable packet/identity/TTL are untouched.
+    const attemptId=crypto.randomUUID(),args={p_job_key:key,
+      p_record:{...record,transport_version:'AI_PROVIDER_LEDGER_1',claim_attempt_id:attemptId},
+      p_cap_usd:config.apiBudgetUsd,p_max_calls:config.maxCalls,p_reserve_usd:MAX_RESERVED_USD};
+    for(let attempt=0;attempt<3;attempt++){
+      let r;try{r=await this.db.rpc('gpt_final_review_claim',args);}
+      catch(error){r={error:{code:error?.code,message:`${error?.name??''}: ${error?.message??''}`}};}
+      if(r.error&&/API_BUDGET_EXHAUSTED/.test(String(r.error.message??'')))throw Error('API_BUDGET_EXHAUSTED');
+      if(!r.error&&r.data?.row){
+        const row=r.data.row,recovered=attempt>0&&r.data.created===false&&row.state==='RUNNING'&&
+          typeof row.owner==='string'&&row.owner.length>0&&row.record?.claim_attempt_id===attemptId;
+        this.ledgerModes.set(key,row.provider_ledger===true);
+        return recovered?{...r.data,created:true,recovered:true}:r.data;
+      }
+      if(!retryable(r.error)||attempt===2)throw Error('REVIEW_STORE_CLAIM');
+      await delay(100*(attempt+1));
+    }
+  }
   async transport(key,record,fetchFn=fetch){
     if(!this.ledgerModes.has(key)){
       const r=await this.db.from('gpt_final_entry_reviews').select('provider_ledger').eq('job_key',key).single();

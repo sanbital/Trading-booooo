@@ -1,0 +1,15 @@
+# Review claim acknowledgement recovery — 2026-09-28
+
+At 04:30 UTC the strict ten-minute DeepSeek batch reviewed all ten symbols in one request. QNT and ONE had invalid trade-sequence capture during candidate creation. Of the other eight ENTRY reviews, GRT and GRASS returned valid WAIT and SEI returned valid SKIP. Five journal rows (BTW, INX, IRYS, PUMP, SOON) retained their prepared packets but never obtained provider ledger rows; cron 111 closed them at 04:33 as `REVIEW_EXPIRED_BEFORE_DISPATCH`. No order or fill followed.
+
+The existing claim client makes one RPC request. If the database commits but its response is lost, the caller loses the newly generated owner. A later claim sees the existing RUNNING row and cannot continue it. This failure mode reproduces locally and is consistent with the production orphan records. Production did not retain the original client exception, so it is not proof that all five rows had exactly this cause. An observed claim response took 1,904 ms at the origin, close to the existing 2,500 ms client deadline before network overhead.
+
+The store now stamps a fresh invocation UUID in claim metadata and retries transient acknowledgement failures at most twice, with the same key and arguments. A repeated RUNNING row is resumable only within that invocation and only when its marker and durable owner match. Other workers, prior invocations, historical unmarked rows and DONE rows cannot be resumed. The existing database advisory locks, physical provider reservations, immutable deadlines and all order guards remain authoritative. No schema, pricing, budget, decision, capture, slot or protection setting changes.
+
+Validation before deployment:
+
+- Seven initial claim tests reproduced failures against the old implementation. Eight final tests cover lost responses, ten concurrent symbols, competing owners, completed rows, bounded retries, budget refusal and expiry before provider dispatch.
+- Five original production packets replayed with an injected lost claim response: five recoveries, one insert per key, unchanged packet/identity/deadline, zero paid API calls and zero orders. This is fault injection into original data, not a reproduction of the missing production network exception.
+- Full Node suite: 1,494 tests passed before adding the final deadline test; the final eight-test claim file passed. Deno: 1,055 tests plus 13 steps passed; executor and generator type checks passed.
+
+Separate unresolved issues: the 04:20 BUY queue left PUMP/SEI/SOON without FINAL RECHECK due to `CYCLE_BUDGET_RESERVE`; QNT's actual FINAL was WAIT, GRT's FINAL timed out. At 04:33 a real 5,605 ms collector interval invalidated all ten contexts, distinct from the earlier 4,402 ms timer bug. Nine recovered by 04:36 while QNT trade-stream failures remained. Neither stale BUYs nor invalid buckets are admitted by this patch. Monthly limits remain $100 per provider; the all-ten GPT-every-cycle scenario still exceeds that limit. First real fill and live position protection reconciliation remain pending.
