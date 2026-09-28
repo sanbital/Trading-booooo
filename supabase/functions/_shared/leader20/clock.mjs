@@ -12,7 +12,16 @@ export function clockCaptureValid(c,at){
   c.end_ms>=w.slot_ms && c.end_ms<w.slot_ms+1000 && c.end_ms<=at &&
   c.trajectory?.length===24 && c.trajectory.every((p,i)=>p.bucket_ms===w.slot_ms-CAPTURE_MS+(i+1)*5000);
 }
+// JSONB journals reorder object keys. Compare every value and array position,
+// without treating serialization order or a supplied hash as evidence identity.
+function sameEvidence(a,b){
+ if(a===b)return typeof a!=='number'||Number.isFinite(a);
+ if(!a||!b||typeof a!=='object'||typeof b!=='object')return false;
+ if(Array.isArray(a)||Array.isArray(b))return Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&a.every((v,i)=>sameEvidence(v,b[i]));
+ const keys=Object.keys(a);
+ return keys.length===Object.keys(b).length&&keys.every(k=>Object.hasOwn(b,k)&&sameEvidence(a[k],b[k]));
+}
 export function sameClockCapture(a,b,at){
  return clockCaptureValid(a,at)&&clockCaptureValid(b,at)&&a.entry_window.slot_ms===b.entry_window.slot_ms &&
-  a.start_ms===b.start_ms&&a.end_ms===b.end_ms&&JSON.stringify(a.trajectory)===JSON.stringify(b.trajectory);
+  sameEvidence(a.entry_window,b.entry_window)&&a.start_ms===b.start_ms&&a.end_ms===b.end_ms&&sameEvidence(a.trajectory,b.trajectory);
 }

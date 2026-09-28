@@ -261,7 +261,8 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
      baselineAllowedV30:()=>true,V30_FRONT_LIVE_VERSION:'TEST',entryBranchOf:()=> 'TEST',
      gptFilterExecutable:async(_db,candidates)=>({candidates}),gptFinalCheck:()=>({allowed:true,review:{decision:'BUY',initial:{capture_context:validCapture(state.now)}}}),
      gptBeginExecution:()=>({}),gptConfirmFirstFinality:()=>true,gptConsumeRetry:()=>true,
-     ...dynamicFlow,readCaptureWithRecovery:async()=>validCapture(state.now),markRecheckOutcome:()=>{},finalRecheckStep:async()=>({proceed:true,record:{recheck_triggered:false,final:{capture_context:validCapture(state.now)},initial_context:{capture_context:validCapture(state.now)}}}),withOrderTiming:x=>x,
+     ...dynamicFlow,readCaptureWithRecovery:async()=>validCapture(state.now),executionCapture:async()=>validCapture(state.now),executionDynamicSafety,
+     markRecheckOutcome:()=>{},finalRecheckStep:async()=>({proceed:true,record:{recheck_triggered:false,final:{capture_context:validCapture(state.now)},initial_context:{capture_context:validCapture(state.now)}}}),withOrderTiming:x=>x,
      fetchE1AggTrades:e1Tape??(async()=>({available:false,reason:'TEST_NO_TAPE'}))});
  }
  return{state,db,ctx,gateway,advance(ms=60000){state.now+=ms;state.tables.trading_account_snapshots[0].captured_at=new Clock().toISOString();}};
@@ -270,3 +271,4 @@ export function nativeFill(p,{exact=true,price=p.entry_price*.988,quantity=p.rem
  const o=p.metadata.exitProtection.orders[0];return{orderId:'exit-'+p.id,exact,quantity,funds:quantity*price,fee:.05,status:'FILLED',lastFillAt:Date.parse('2026-09-10T16:16:02.599Z'),tradeIds:['1','2','3'],
  orderEvidence:{orderId:'exit-'+p.id,clientAlgoId:o.clientId,symbol:p.symbol,side:'SELL',positionSide:'BOTH',reduceOnly:true,requestedQuantity:o.spec.params.quantity,quantity,status:'FILLED',lastAt:Date.parse('2026-09-10T16:16:02.599Z')}};
 }
+import {executionDynamicSafety} from '../../supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs';

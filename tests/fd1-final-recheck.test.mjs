@@ -22,7 +22,7 @@ import {computeFacts} from '../supabase/functions/_shared/gpt-final-decision/fac
 import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,setTestCoordinator} from '../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {IOC_RETRY_POLICY,planAggressiveIocRetry,floorStep} from '../supabase/functions/v10-lane-executor/entry-ioc-retry.mjs';
 import {budgetCovers} from '../supabase/functions/v10-lane-executor/entry-capacity.mjs';
-import {finalRecheckStep,setRecheckTestHooks,withOrderTiming} from '../supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs';
+import {finalRecheckStep,setRecheckTestHooks,withOrderTiming,executionDynamicSafety} from '../supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs';
 import {nilTicket,NIL_E1,NIL_DISPATCH_QUOTE,NIL_SIGNAL,NIL_DISPATCH_AT} from '../supabase/functions/v10-lane-executor/recheck-nil-fixture.mjs';
 import {candidate,T} from '../development/gpt-final-review/tests/helpers.mjs';
 import {RECHECK_HOOKS} from '../development/gpt-final-review/executor-hooks-recheck.mjs';
@@ -311,6 +311,7 @@ async function retryLifecycle({fills=[375],final='BUY',changed=false,expired=fal
     IOC_RETRY_POLICY,planAggressiveIocRetry,floorStep,E1_POLICY:{maxQuoteAgeMs:1000},
     gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,
     dispatchDynamicSafety,DYNAMIC_VERSION,readCaptureWithRecovery:async()=>validCapture(now),markRecheckOutcome:()=>{},
+    executionCapture:async()=>validCapture(now),executionDynamicSafety,
     Date:class extends Date{static now(){return now;}},console,
     N:(v,d=0)=>Number.isFinite(Number(v))?Number(v):d,rec:v=>v??{},withOrderTiming,
     normalizeEntryBook,fetchE1AggTrades:async(_s,startAt,endAt)=>({available:true,startAt,endAt,last10sReturn:.001,takerBuyQuoteShare:.6,tradeCount:50}),retryE1Evidence:()=>changed?WEAK:CALM,

@@ -1,4 +1,5 @@
 import {clockCaptureValid} from '../leader20/clock.mjs';
+import {clockTicketCheck} from '../leader20/clock-final.mjs';
 import {wireSchema,parseApiResponseWire} from './wire-v4.mjs';
 import {VERSION,MODEL,LIMITS,OUTPUT_SCHEMA,canonical,hash,baselineAllowed,decisionIdentity,triggerExpiry,validateAnswer,ensure} from './contract.mjs';
 import {promptFor} from './prompt.mjs';
@@ -17,6 +18,7 @@ export const AGED_RECHECK_MIN_MS=8000;
 export const RELEASE='gpt-final-review-v8-recovery-audit-20260927';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const MODES=['OFF','SHADOW','ENFORCE'];
+function freezeTicket(value){if(value&&typeof value==='object'&&!Object.isFrozen(value)){Object.values(value).forEach(freezeTicket);Object.freeze(value);}return value;}
 /** Legacy env-only configuration (tests and emergency override). */
 export function configFromEnv(get){
   const requested=String(get('GPT_FINAL_REVIEW_MODE')||'OFF').toUpperCase();
@@ -57,11 +59,15 @@ export class MemoryReviewStore {
 export class FinalReviewCoordinator {
   // Process-local capabilities: never serialized, recovered, or shared with another cycle.
   retryLifecycles=new WeakMap();
+  executionStarts=new Set();
   beginExecution(s,{supersededBy=null}={}){
     const check=this.check(s,{supersededBy});
     if(!check.allowed)return null;
+    const executionKey=String(s.id)+':'+check.review?.snapshotHash;
+    if(check.review?.clockFinalAuthority&&this.executionStarts.has(executionKey))return null;
     const token=Object.freeze({});
     this.retryLifecycles.set(token,{ticket:check.review,signal:s,startedAt:this.now(),deadline:null,used:false});
+    if(check.review?.clockFinalAuthority)this.executionStarts.add(executionKey);
     return token;
   }
   confirmFirstFinality(token,{orderId,confirmedAt,quantity}){
@@ -88,6 +94,10 @@ export class FinalReviewCoordinator {
   }
   setConfig(config){this.config=config;}
   allowDecision(){return this.engine?this.engine.allow:'PASS';}
+  reviewValidUntil(packet,snapshotAt,expires){
+    const ordinary=Math.min(expires-LIMITS.executionReserveMs,snapshotAt+LIMITS.reviewMaxAgeMs);
+    return this.engine?.reviewValidUntil?.(packet,{snapshotAt,expires,ordinary})??ordinary;
+  }
   authorized(){const c=this.config;return c.modeValid!==false&&c.approvalRef.length>0&&c.apiBudgetUsd>=MAX_RESERVED_USD&&
     Number.isInteger(c.maxCalls)&&c.maxCalls>0&&!!this.apiKey()&&(c.mode!=='ENFORCE'||c.enforceApproved===true);}
   async consider(s,{completedOnly=false}={}){
@@ -100,7 +110,8 @@ export class FinalReviewCoordinator {
     if(!this.baseline(s))return deny('BASELINE_REJECT_OR_INVALID');
     if(!this.authorized())return deny(this.config.source==='CONTROL_UNREADABLE'?'GPT_CONTROL_UNREADABLE':'GPT_REVIEW_NOT_CONFIGURED_OR_APPROVED');
     const now=this.now(),expires=this.expiry(s);
-    if(now>=expires-LIMITS.executionReserveMs)return deny('GPT_TRIGGER_EXPIRED');
+    if(now>=expires-(s?.features?.leader20?.entry_window?0:LIMITS.executionReserveMs))
+      return deny(s?.features?.leader20?.entry_window?'CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION':'GPT_TRIGGER_EXPIRED');
     let key;
     try{
       const identity=this.identity(s),identityJson=canonical(identity),binding=await this.binding;
@@ -199,7 +210,7 @@ export class FinalReviewCoordinator {
       else{const current=await this.market(record.identity,{fetchFn:this.fetchFn,now:this.now,deadlineMs});
         captured=this.now();record.packet=await buildPacket(record.identity,current,captured);}
       record.snapshot_at_ms=captured;
-      record.valid_until_ms=Math.min(record.expires_at_ms-LIMITS.executionReserveMs,captured+LIMITS.reviewMaxAgeMs);
+      record.valid_until_ms=this.reviewValidUntil(record.packet,captured,record.expires_at_ms);
       const capture=record.packet?.facts?.capture_context,afterEnd=record.after_capture_end_ms??record.timeout_recovery?.after_end_ms;
       ensure(capture?.reason!=='INFERENCE_CAPTURE_NOT_READY','DYNAMIC_INFERENCE_CAPTURE_NOT_READY');
       if(afterEnd!=null)ensure(clockCaptureValid(capture,this.now())||capture?.end_ms>afterEnd,'RETRY_CAPTURE_NOT_ADVANCED');
@@ -229,7 +240,7 @@ export class FinalReviewCoordinator {
       if(this.engine&&record.result.final_packet){
         record.packet=record.result.final_packet;
         record.snapshot_at_ms=record.result.final_snapshot_at_ms;
-        record.valid_until_ms=Math.min(deadlineMs,record.snapshot_at_ms+LIMITS.reviewMaxAgeMs);
+        record.valid_until_ms=this.reviewValidUntil(record.packet,record.snapshot_at_ms,record.expires_at_ms);
       }
     }catch(e){
       const error=['RETRY_CAPTURE_NOT_ADVANCED','DYNAMIC_INFERENCE_CAPTURE_NOT_READY','DYNAMIC_TRAJECTORY_STALE_OR_FUTURE',
@@ -268,8 +279,10 @@ export class FinalReviewCoordinator {
     if(!Number.isSafeInteger(r.snapshot_at_ms)||r.snapshot_at_ms>now||r.snapshot_at_ms<r.identity.trigger_at_ms||
       r.packet.as_of_offset_ms!==r.snapshot_at_ms-r.identity.trigger_at_ms)return deny('GPT_SNAPSHOT_TIME_INVALID');
     if(!Number.isSafeInteger(z?.completed_at_ms)||z.completed_at_ms>now||z.completed_at_ms<r.snapshot_at_ms||
-      !Number.isSafeInteger(r.valid_until_ms)||r.valid_until_ms!==Math.min(expires-LIMITS.executionReserveMs,r.snapshot_at_ms+LIMITS.reviewMaxAgeMs))
+      !Number.isSafeInteger(r.valid_until_ms)||r.valid_until_ms!==this.reviewValidUntil(r.packet,r.snapshot_at_ms,expires))
       return deny('GPT_STALE_OR_FUTURE_REVIEW');
+    if(r.packet.leader20?.entry_window&&now>=r.packet.leader20.entry_window.expires_at_ms)
+      return deny('CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION');
     // Past its own validity the answer is AGED. Without an agedRecheck engine, or too close to
     // the trigger expiry for a recheck, that is the same refusal as before.
     const aged=now>=r.valid_until_ms||z.completed_at_ms>=r.valid_until_ms;
@@ -280,11 +293,16 @@ export class FinalReviewCoordinator {
       z.wire_profile!==this.profile)
       return deny('GPT_NO_VALID_API_RESPONSE');
     const answer=this.engine?this.engine.revalidate(z,r.packet):validateAnswer(parseApiResponseWire(z.raw_response,r.packet,profileOf(this.profile).wire),r.packet);
+    const clockAuthority=this.engine?.clockFinalAuthority?.(r.packet,z,r.identity);
+    if(answer.decision==='BUY'&&this.engine?.clockFinalAuthority&&r.packet.leader20?.entry_window&&!clockAuthority)
+      return deny('CLOCK_FINAL_AUTHORITY_INVALID');
     const ticket={identityJson,decision:answer.decision,validUntil:r.valid_until_ms,expires,
       candidateId:r.packet.candidate_id,snapshotHash:r.packet.snapshot_hash,model,summary:answer.summary,
       // FINAL RECHECK: what this decision was based on (initial facts, book reference, support).
       ...(this.engine?{initial:initialContext(r,answer)}:{}),...(aged?{aged:true}:{}),
-      ...(this.engine?.requiresFinalRecheck?.(r.packet)?{requiresFinalRecheck:true}:{})};
+      ...(clockAuthority?{clockFinalAuthority:clockAuthority}:{}),
+      ...(this.engine?.requiresFinalRecheck?.(r.packet,z,r.identity)?{requiresFinalRecheck:true}:{})};
+    if(clockAuthority)freezeTicket(ticket);
     // detail: the stored answer's own reason (SKIP categories / ABSTAIN reason) for the journal.
     const detail=answer.decision==='SKIP'?(answer.reasons??[]).map(x=>x.category).join(','):
       answer.decision==='ABSTAIN'?String(answer.abstain_reason??''):'';
@@ -300,6 +318,7 @@ export class FinalReviewCoordinator {
     if(!this.authorized())return {allowed:false,reason:'GPT_REVIEW_NOT_APPROVED'};
     const t=this.tickets.get(String(s?.id)),now=this.now();
     if(!this.baseline(s)||!t||t.identityJson!==canonical(this.identity(s)))return {allowed:false,reason:'GPT_REVIEW_IDENTITY_CHANGED'};
+    if(t.clockFinalAuthority){const clock=clockTicketCheck(t,this.identity(s),now);if(!clock.ok)return {allowed:false,reason:clock.reason};}
     // A FINAL RECHECK answer supersedes the initial answer's age limit only; the trigger
     // expiry, identity and baseline above/below still bind. Its own validity is checked by the caller.
     const life=retryAuthority&&this.retryLifecycles.get(retryAuthority);
@@ -313,7 +332,7 @@ export class FinalReviewCoordinator {
     const agedEntry=allowAged===true&&this.engine?.agedRecheck===true&&
       (t.aged===true||now>=t.validUntil)&&supersededBy===null&&!life&&
       now<t.expires-LIMITS.executionReserveMs-AGED_RECHECK_MIN_MS;
-    if(!life&&!agedEntry&&((supersededBy===null&&now>=t.validUntil)||now>=t.expires-LIMITS.executionReserveMs))return {allowed:false,reason:'GPT_REVIEW_EXPIRED'};
+    if(!life&&!agedEntry&&((supersededBy===null&&now>=t.validUntil)||now>=t.expires-(t.clockFinalAuthority?0:LIMITS.executionReserveMs)))return {allowed:false,reason:'GPT_REVIEW_EXPIRED'};
     return {allowed:t.decision===this.allowDecision(),reason:'GPT_'+t.decision+(agedEntry?'_AGED_RECHECK_REQUIRED':''),review:t,
       ...(agedEntry?{aged:true}:{})};
   }

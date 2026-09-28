@@ -10,13 +10,15 @@ import {detectChange,preDispatchSnapshot,runFinalRecheck,recheckAllows,postReche
 import {computeFacts} from '../_shared/gpt-final-decision/facts.mjs';
 import {readSources} from '../_shared/gpt-final-decision/market.mjs';
 import {readCaptureWithRecovery} from '../_shared/gpt-final-decision/capture-context.mjs';
-import {entryCaptureSafety,DYNAMIC_VERSION} from '../_shared/gpt-final-decision/dynamic-flow.mjs';
+import {entryCaptureSafety,dispatchDynamicSafety,DYNAMIC_VERSION} from '../_shared/gpt-final-decision/dynamic-flow.mjs';
 import {SupabaseReviewStore,readReviewControl} from '../_shared/gpt-final-review/supabase-store.mjs';
 import {configFromControl} from '../_shared/gpt-final-review/coordinator.mjs';
 import {gptRecheckConfig} from './gpt-final-review-adapter.mjs';
 import {nilTicket,NIL_E1,NIL_DISPATCH_QUOTE,NIL_SIGNAL,NIL_DISPATCH_AT} from './recheck-nil-fixture.mjs';
 import {resumeReviewTimeouts} from '../_shared/gpt-final-decision/timeout-recovery.mjs';
-import {isLeader20} from '../_shared/leader20/campaign.mjs';
+import {isLeader20,leaderIdentity} from '../_shared/leader20/campaign.mjs';
+import {CLOCK_FINAL,clockExecutionSafety} from '../_shared/leader20/clock-final.mjs';
+import {sameClockCapture} from '../_shared/leader20/clock.mjs';
 export {RECHECK_VERSION,postRecheckSafety};
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 let testHooks=null;
@@ -41,10 +43,25 @@ function logRow(db,s,record,outcome){
 const ms=x=>Number.isFinite(Number(x))&&x!==null?new Date(Number(x)).toISOString():null;
 /** Mark a logged candidate's outcome after the post-recheck safety (evidence only). */
 export function markRecheckOutcome(db,s,record,outcome){
+  if(record?.clock_final_authority)return; // Clock execution is audited on the entry/order path, never as another AI review.
   if(testHooks?.log){const r=testHooks.log.findLast(x=>x.signal_id===String(s.id));if(r)r.outcome=outcome;return;}
   schedule((async()=>{const r=await db.from('fd1_final_recheck_log').update({outcome}).eq('signal_id',String(s.id))
     .eq('initial_snapshot_hash',record.initial_snapshot_hash??'').eq('recheck_sequence',record.recheck_sequence??1);
     if(r.error)throw Error(r.error.message);})());
+}
+/** Clock BUY reuses its exact frozen path; only legacy execution acquires a new path. */
+export function executionCapture(ticket,symbol,at,options={}){
+  return ticket?.clockFinalAuthority?Promise.resolve(ticket.initial.capture_context):
+    (testHooks?.capture??readCaptureWithRecovery)(symbol,at,options);
+}
+export function executionDynamicSafety(s,ticket,record,at){
+  if(!ticket?.clockFinalAuthority)return dispatchDynamicSafety({reviewed:record?.final?.capture_context??ticket?.initial?.capture_context,
+    latest:record?.dispatch_capture,at});
+  const safety=clockExecutionSafety(ticket,leaderIdentity(s),record?.dispatch_quote,at);
+  if(!safety.ok)return safety;
+  if(!sameClockCapture(ticket.initial.capture_context,record?.dispatch_capture,at))
+    return {ok:false,reason:'CLOCK_FINAL_SNAPSHOT_MISMATCH'};
+  return safety;
 }
 /**
  * @returns {proceed:boolean, reason:string, record:object}
@@ -53,6 +70,20 @@ export function markRecheckOutcome(db,s,record,outcome){
  */
 export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,purpose='PRODUCTION',config=null,apiKey=null,
   dataMode='LIVE',asOf=null,sequence=1,fetchFn=null}){
+  if(ticket?.clockFinalAuthority){
+    const at=asOf??now(),safety=clockExecutionSafety(ticket,leaderIdentity(s),rawQuote,at);
+    const record={version:CLOCK_FINAL,clock_final_authority:ticket.clockFinalAuthority,recheck_sequence:sequence,
+      initial_gpt_decision:'BUY',initial_gpt_at:ticket.initial.completedAt,initial_snapshot_at:ticket.initial.snapshotAt,
+      initial_snapshot_hash:ticket.snapshotHash,initial_context:ticket.initial,pre_dispatch_at:at,
+      pre_dispatch_snapshot:preDispatchSnapshot({at,rawQuote}),dispatch_quote:rawQuote,
+      dispatch_capture:ticket.initial.capture_context,dynamic_policy:DYNAMIC_VERSION,
+      recheck_triggered:false,recheck_reasons:[],deltas:{},final:null,final_gpt_decision:'BUY',
+      final_gpt_at:ticket.initial.completedAt,max_rechecks:0,execution_safety:safety};
+    return {proceed:safety.ok,decision:safety.ok?'BUY_NOW':'WAIT',
+      reason:safety.ok?'CLOCK_FINAL_BUY_TO_EXECUTION':safety.reason,record};
+  }
+  // A clock signal without a validated FINAL capability may not fall back to the legacy AI route.
+  if(s?.features?.leader20?.entry_window)return {proceed:false,decision:'WAIT',reason:'CLOCK_FINAL_AUTHORITY_INVALID',record:{recheck_triggered:false}};
   // A historical fixture (asOf) is judged at its own dispatch instant, never at the wall clock.
   // Sequence 1 only: an initial BUY that is aged, or would age before dispatch, is re-asked
   // (INITIAL_ANSWER_AGED) instead of being dispatched on or expiring at the dispatch check.

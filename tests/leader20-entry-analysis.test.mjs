@@ -9,6 +9,7 @@ import {dualEntryDecision} from '../supabase/functions/_shared/gpt-final-decisio
 import {ENTRY_ANALYSIS,entryAnalysisDeadline} from '../supabase/functions/_shared/gpt-final-decision/entry-analysis.mjs';
 import {FD1_ENTRY_ENGINE} from '../supabase/functions/_shared/gpt-final-decision/engine.mjs';
 import {FinalReviewCoordinator,MemoryReviewStore} from '../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
+import {nmrClockFinal} from '../test-support/nmr-clock-final.mjs';
 const T=1800000000200;
 async function fixture({age=1500,finalMs=16000,preliminaryMs=7000,task='ENTRY',deadlineOffset=30000}={}){
  const capture=validCapture(T);let at=capture.end_ms+age,calls=0;
@@ -60,7 +61,12 @@ test('extended analysis never applies to RECHECK or HOLD',()=>{
  assert.equal(entryAnalysisDeadline(packet,{...args,executionDeadline:T+29999}),null);
  assert.equal(entryAnalysisDeadline(packet,{...args,executionDeadline:T+30000}),T+15000);
 });
-test('durable campaign BUY cannot dispatch even if fast; delayed BUY gets a ticket only for fresh recheck',async()=>{
+test('CLOCK TOP20 frozen NMR FINAL BUY grants execution directly within its original slot',async()=>{
+ const f=await nmrClockFinal();assert.equal(f.reviewed.allowed,true,JSON.stringify(f.reviewed));
+ assert.equal(f.ticket.requiresFinalRecheck,undefined);assert.equal(f.c.check(f.s).allowed,true);
+ assert.ok(f.c.beginExecution(f.s));assert.equal(f.c.beginExecution(f.s),null,'one local execution capability');
+});
+test('LEGACY NON-CLOCK campaign BUY still needs a fresh recheck, including delayed answers',async()=>{
  for(const finalMs of [1000,16000]){
   const f=await fixture({finalMs}),s={id:'analysis',symbol:'ABCUSDT',status:'NEW',features:{leader20:f.p.leader20,
    referenceClose:1,rank:1,exitPolicy:{stopPct:.025}}};
