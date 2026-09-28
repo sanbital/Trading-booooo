@@ -32,7 +32,7 @@ try{const current=await machine('/'+before.id);if(current.instance_id!==before.i
  await machine('/'+before.id,'POST',{current_version:before.instance_id,config:{...cfg,image}},nonce);
 }finally{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}
 evidence.after=safe(await machine('/'+before.id));save();
-let stableSince=null,verified=false;
+let observingSince=null,availableSamples=0,observedSamples=0,verified=false;
 let soakError=null;
 try{
 for(let i=0;i<100;i++){
@@ -58,14 +58,28 @@ for(let i=0;i<100;i++){
   (sensor.status==='UNAVAILABLE'&&!sensor.reason)||
   (sensor.status==='AVAILABLE'&&row.sensor?.status!=='AVAILABLE'))throw Error('SENSOR_VALIDATOR_CONTRACT');
  if(row.trade_contexts?.length!==10)throw Error('WATCH_ROLE_COUNT_CHANGED');
- const good=row.qnt_trade?.status==='AVAILABLE'&&row.qnt_trade?.buckets===24&&
-  row.metrics.version==='DOA-CAPTURE-6-MARKET-SENSOR'&&row.metrics.source_commit===sha&&
+ const collectorHealthy=row.metrics.version==='DOA-CAPTURE-6-MARKET-SENSOR'&&row.metrics.source_commit===sha&&
   row.metrics.watched===11&&row.heartbeat_age_s<25&&row.metrics.order_calls===0&&row.metrics.llm_calls===0;
- if(good){stableSince??=Number(row.as_of_ms);if(Number(row.as_of_ms)-stableSince>=600000){verified=true;save();break;}}else stableSince=null;
+ if(collectorHealthy){
+  observingSince??=Number(row.as_of_ms);observedSamples++;
+  if(row.qnt_trade?.status==='AVAILABLE'){
+   if(row.qnt_trade.buckets!==24)throw Error('QNT_AVAILABLE_WITHOUT_24_BUCKETS');
+   availableSamples++;
+  }else if(row.qnt_trade?.status!=='UNAVAILABLE'||!row.qnt_trade.reason)throw Error('QNT_CONTEXT_CONTRACT');
+  // Market coverage gaps remain unavailable. Evaluate the collector over a
+  // real ten-minute window, requiring a majority of decision-ready samples
+  // and a ready final sample after any gap.
+  if(Number(row.as_of_ms)-observingSince>=600000&&observedSamples>=30&&
+    availableSamples/observedSamples>=0.6&&row.qnt_trade.status==='AVAILABLE'){
+   verified=true;save();break;
+  }
+ }else if(observingSince!==null)throw Error('COLLECTOR_HEALTH_REGRESSED');
  save();
 }
 }catch(e){soakError=e;}
-evidence.verified=verified;evidence.stable_since=stableSince;evidence.after=safe(await machine('/'+before.id));
+evidence.verified=verified;evidence.observing_since=observingSince;
+evidence.observed_samples=observedSamples;evidence.available_samples=availableSamples;
+evidence.after=safe(await machine('/'+before.id));
 const {image:oldImage,...oldConfig}=cfg,{image:newImage,...newConfig}=(await machine('/'+before.id)).config;
 if(JSON.stringify(oldConfig)!==JSON.stringify(newConfig))soakError??=Error('COLLECTOR_CONFIG_DRIFT');
 evidence.image_only_update=true;save();
