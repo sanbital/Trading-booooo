@@ -23,6 +23,7 @@ test('PostgreSQL fixed cutoff, 20-member claim, duplicate admission, expiry and 
  await load('supabase/migrations/20260928032022_leader20_campaign_execution_lifecycle.sql');
  await load('supabase/migrations/20260928040914_leader20_strict_ten_minute_batch.sql');
  await load('supabase/migrations/20260928114749_leader20_clock_capture_top20.sql');
+ await load('supabase/migrations/20260928122619_leader20_funded_capture.sql');
  const epoch=crypto.randomUUID();
  await q("insert into leader20_control(singleton,epoch_id,generation,observation_enabled,active_strategy,clock_capture_enabled) values(true,$1,3,true,'LEADER20_DYNAMIC_1',true)",[epoch]);
  await q('insert into leader20_epochs(id,next_refresh_at,snapshot) values($1,$2,$3)',[epoch,iso(slot+420000),{capture_slot_ms:slot}]);
