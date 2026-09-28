@@ -1,3 +1,4 @@
+import {clockCaptureValid} from '../leader20/clock.mjs';
 import {wireSchema,parseApiResponseWire} from './wire-v4.mjs';
 import {VERSION,MODEL,LIMITS,OUTPUT_SCHEMA,canonical,hash,baselineAllowed,decisionIdentity,triggerExpiry,validateAnswer,ensure} from './contract.mjs';
 import {promptFor} from './prompt.mjs';
@@ -198,7 +199,7 @@ export class FinalReviewCoordinator {
       record.valid_until_ms=Math.min(record.expires_at_ms-LIMITS.executionReserveMs,captured+LIMITS.reviewMaxAgeMs);
       const capture=record.packet?.facts?.capture_context,afterEnd=record.after_capture_end_ms??record.timeout_recovery?.after_end_ms;
       ensure(capture?.reason!=='INFERENCE_CAPTURE_NOT_READY','DYNAMIC_INFERENCE_CAPTURE_NOT_READY');
-      if(afterEnd!=null)ensure(capture?.end_ms>afterEnd,'RETRY_CAPTURE_NOT_ADVANCED');
+      if(afterEnd!=null)ensure(clockCaptureValid(capture,this.now())||capture?.end_ms>afterEnd,'RETRY_CAPTURE_NOT_ADVANCED');
       if(this.engine?.timeoutRecovery)ensure(entryCaptureSafety(capture,this.now()).ok,'DYNAMIC_TRAJECTORY_STALE_OR_FUTURE');
       if(deferredClaim){
         const claimed=await this.store.claim(key,record,this.config);

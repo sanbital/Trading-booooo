@@ -1,3 +1,4 @@
+import {CLOCK_VERSION,preparationSlot,SLOT_MS,CAPTURE_MS,PREWARM_MS} from './clock.mjs';
 import {hash} from '../gpt-final-review/contract.mjs';
 
 export const LEADER20 = 'LEADER20_DYNAMIC_1';
@@ -21,7 +22,7 @@ export function coinContract(s) {
 }
 
 /** A complete exchange snapshot is required. No volume/momentum admission threshold. */
-export async function selectEpoch({exchangeInfo, tickers, requestedAt, observedAt, previous = null}) {
+export async function selectEpoch({exchangeInfo, tickers, requestedAt, observedAt, previous = null, clock = false}) {
   require(time(requestedAt) && time(observedAt) && observedAt >= requestedAt && observedAt - requestedAt < 30000, 'SOURCE_TIME');
   require(Array.isArray(exchangeInfo?.symbols) && Array.isArray(tickers), 'SOURCE_SHAPE');
   require(new Set(exchangeInfo.symbols.map(x => x.symbol)).size === exchangeInfo.symbols.length, 'DUPLICATE_METADATA');
@@ -45,20 +46,23 @@ export async function selectEpoch({exchangeInfo, tickers, requestedAt, observedA
   const freshestClose = Math.max(...eligible.map(x => x.close_time));
   require(observedAt - freshestClose < 30000, 'TICKER_SOURCE_STALE');
   // Restart never moves the regular boundary. A late first installation is explicitly BOOTSTRAP.
-  const scheduled = previous ? epochBoundary(requestedAt) : requestedAt;
-  require(!previous || requestedAt >= previous.next_refresh_at_ms, 'EPOCH_NOT_DUE');
+  const slot=preparationSlot(requestedAt);
+  const scheduled = clock ? slot-CAPTURE_MS-PREWARM_MS : previous ? epochBoundary(requestedAt) : requestedAt;
+  require(clock||!previous||requestedAt>=previous.next_refresh_at_ms,'EPOCH_NOT_DUE');
+  require(!clock||requestedAt>=scheduled&&requestedAt<slot-CAPTURE_MS,'CLOCK_PREPARATION_NOT_DUE');
   require(observedAt < nextBoundary(requestedAt), 'SOURCE_CROSSED_BOUNDARY');
   const sources = {exchange_info: exchangeInfo, ticker_24hr: tickers};
-  return {strategy: LEADER20, selection_version: SELECTION_VERSION, kind: previous ? 'SCHEDULED' : 'BOOTSTRAP',
+  return {strategy: LEADER20, selection_version: clock?CLOCK_VERSION:SELECTION_VERSION, kind: previous ? 'SCHEDULED' : 'BOOTSTRAP',
     scheduled_at_ms: scheduled, requested_at_ms: requestedAt, observed_at_ms: observedAt,
-    effective_at_ms: observedAt, next_refresh_at_ms: nextBoundary(observedAt),
+    effective_at_ms: observedAt, next_refresh_at_ms: clock?scheduled+SLOT_MS:nextBoundary(observedAt),
+    ...(clock?{capture_slot_ms:slot}:{}),
     universe, expected_count: universe.length, covered_count: eligible.length, source_freshest_close_ms: freshestClose,
     members: eligible.slice(0, 20).map((x, i) => ({rank: i + 1, ...x})),
     source: 'BINANCE_FAPI_V1_EXCHANGE_INFO_AND_TICKER_24HR',
     source_hash: await hash(sources), sources};
 }
 
-export async function fetchEpoch(previous, {fetchFn = fetch, now = Date.now} = {}) {
+export async function fetchEpoch(previous, {fetchFn = fetch, now = Date.now,clock=false} = {}) {
   const requestedAt = now();
   const get = async path => {
     const r = await fetchFn('https://fapi.binance.com/fapi/v1/' + path, {signal: AbortSignal.timeout(8000)});
@@ -66,7 +70,7 @@ export async function fetchEpoch(previous, {fetchFn = fetch, now = Date.now} = {
     return r.json();
   };
   const [exchangeInfo, tickers] = await Promise.all([get('exchangeInfo'), get('ticker/24hr')]);
-  return selectEpoch({exchangeInfo, tickers, requestedAt, observedAt: now(), previous});
+  return selectEpoch({exchangeInfo, tickers, requestedAt, observedAt: now(), previous,clock});
 }
 
 /** Membership never supplies a BUY or an EXIT. Stale membership still supplies a watch. */

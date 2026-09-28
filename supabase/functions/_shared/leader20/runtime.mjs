@@ -1,3 +1,4 @@
+import {slotFloor} from './clock.mjs';
 import {LEADER20, fetchEpoch} from './universe.mjs';
 import {batchControl,runEntryBatch} from './batch-runtime.mjs';
 import {isLeader20} from './campaign.mjs';
@@ -34,14 +35,17 @@ export async function generateLeader20(db, ctl, {now = Date.now, fetchFn = fetch
     return {ok:true,diagnostic:true,...status.data};
   }
   let refreshError = null;
-  if (!epoch || now() >= Date.parse(epoch.next_refresh_at)) {
+  const phase=now()-slotFloor(now()),preparing=phase>=420000&&phase<480000;
+  const refresh=ctl.clock_capture_enabled?preparing&&(!epoch||epoch.snapshot?.capture_slot_ms!==slotFloor(now())+600000):!epoch||now()>=Date.parse(epoch.next_refresh_at);
+  if (refresh) {
     try {
-      const snapshot = await fetchEpoch(epoch ? {next_refresh_at_ms: Date.parse(epoch.next_refresh_at)} : null, {now, fetchFn});
+      const snapshot = await fetchEpoch(epoch ? {next_refresh_at_ms: Date.parse(epoch.next_refresh_at)} : null, {now, fetchFn,clock:ctl.clock_capture_enabled===true});
       const r = await db.rpc('leader20_publish_epoch', {p_snapshot: snapshot, p_previous: ctl.epoch_id ?? null});
       if (r.error) throw Error('LEADER20_EPOCH_PUBLISH:' + r.error.message);
       ctl = await leaderControl(db);
     } catch (e) { refreshError = String(e.message); }
   }
+  if(ctl.clock_capture_enabled&&(phase<1000||phase>=120000))return {ok:true,strategy:LEADER20,inserted:0,state:preparing?'PREPARING_CAPTURE':phase>=480000?'CAPTURING':'WAITING_FOR_WINDOW',refreshError};
   const batchMode=await batchControl(db);
   // Observation/candidate housekeeping continues even while a batch is not due.
   if(batchMode.enabled){
@@ -71,7 +75,7 @@ export async function generateLeader20(db, ctl, {now = Date.now, fetchFn = fetch
       const features = {strategy: STRATEGY, routeAuthority: LEADER20, rank: member.data.rank,
         execution_snapshot:{captured_at_ms:now(),end_ms:capture.end_ms,start_ms:capture.start_ms,
           complete:capture.complete,causal:capture.causal,bucket_count:capture.bucket_count,
-          trajectory_hash:await hash(capture.trajectory)},
+          trajectory_hash:await hash(capture.trajectory),...(capture.entry_window?{entry_window:capture.entry_window}:{})},
         rankBasis: 'ROLLING_24H', rolling24hChangePercent: member.data.price_change_percent,
         referenceClose: ref, atr: null, atrBasis: 'NOT_USED_BY_LEADER20',
         exitPolicy: {stopPct: POLICY.stopPct, trailArmPct: POLICY.trailArmPct, trailGapPct: POLICY.trailGapPct,
