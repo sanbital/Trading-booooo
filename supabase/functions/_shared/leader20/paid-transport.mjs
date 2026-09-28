@@ -40,7 +40,7 @@ export function paidTransport(db,{parentKey,purpose,fetchFn=fetch,now=Date.now}=
   await transition('DISPATCHED');
   const start=now();let response;
   try{response=await fetchFn(url,init);}
-  catch(e){await transition('UNKNOWN',{p_error:'TRANSPORT_OUTCOME_UNKNOWN'});throw e;}
+  catch(e){await transition('UNKNOWN',{p_error:'TRANSPORT_OUTCOME_UNKNOWN',p_latency_ms:Math.max(0,now()-start)});throw e;}
   let raw;
   try{raw=await response.clone().json();}catch{}
   const u=raw?.usage;
@@ -50,7 +50,8 @@ export function paidTransport(db,{parentKey,purpose,fetchFn=fetch,now=Date.now}=
     cached_input_tokens:u?.prompt_cache_hit_tokens??u?.prompt_tokens_details?.cached_tokens??0};
   if([usage.input_tokens,usage.output_tokens,usage.cached_input_tokens].every(x=>Number.isSafeInteger(x)&&x>=0)&&usage.cached_input_tokens<=usage.input_tokens)
    await transition('SETTLED',{p_usage:usage,p_request_id:raw.id??response.headers.get('x-request-id'),p_latency_ms:now()-start});
-  else await transition('UNKNOWN',{p_error:'USAGE_UNAVAILABLE_HTTP_'+response.status});
+  else await transition('UNKNOWN',{p_error:'USAGE_UNAVAILABLE_HTTP_'+response.status,
+   p_request_id:raw?.id??response.headers.get('x-request-id'),p_latency_ms:Math.max(0,now()-start)});
   return response;
  };
 }
