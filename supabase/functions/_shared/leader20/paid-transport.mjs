@@ -14,16 +14,27 @@ export function paidTransport(db,{parentKey,purpose,fetchFn=fetch,now=Date.now}=
   // One UTF-8 byte per token plus framing is a deliberately conservative bound.
   const reserve=((bytes+4096)*(provider==='deepseek'?.3:.75)+output*(provider==='deepseek'?1.2:4.5))/1e6;
   const version=await hash({body,sequence:sequence++}),key=await hash({parentKey,provider,version});
-  const claim=await db.rpc('ai_call_reserve',{p_key:key,p_provider:provider,p_model:body.model,
-   p_purpose:purpose,p_parent:parentKey,p_version:version,p_reserve:reserve});
+  const requestedOwner=crypto.randomUUID();let claim;
+  for(let attempt=0;attempt<3;attempt++){
+   claim=await db.rpc('ai_call_reserve_owned',{p_owner:requestedOwner,p_key:key,p_provider:provider,p_model:body.model,
+    p_purpose:purpose,p_parent:parentKey,p_version:version,p_reserve:reserve});
+   if(!claim.error)break;
+   if(attempt<2)await new Promise(resolve=>setTimeout(resolve,100*(attempt+1)));
+  }
   if(claim.error||!claim.data?.created){
-   const e=Error(claim.data?.reason??'API_CALL_ALREADY_RESERVED');
+   const e=Error(claim.error?'API_LEDGER_RESERVATION_FAILED':claim.data?.reason??'API_CALL_ALREADY_RESERVED');
    e.budget=claim.data??{reason:'API_LEDGER_RESERVATION_FAILED'};throw e;
   }
   const owner=claim.data.row.owner;
   const transition=async(state,extra={})=>{
-   const r=await db.rpc('ai_call_transition',{p_key:key,p_owner:owner,p_state:state,...extra});
-   if(r.error)throw Error('API_LEDGER_WRITE_FAILED');return r.data;
+   for(let attempt=0;attempt<3;attempt++){
+    const r=await db.rpc('ai_call_transition',{p_key:key,p_owner:owner,p_state:state,...extra});
+    if(!r.error)return r.data;
+    // These PostgreSQL errors guarantee rollback. Retry only the same ledger
+    // transition, never the provider request or an ambiguous dispatch.
+    if(!['55P03','57014','40001','40P01'].includes(r.error.code)||attempt===2)throw Error('API_LEDGER_WRITE_FAILED');
+    await new Promise(resolve=>setTimeout(resolve,100*(attempt+1)));
+   }
   };
   if(init.signal?.aborted){await transition('CANCELLED');throw Error('API_CANCELLED_BEFORE_DISPATCH');}
   await transition('DISPATCHED');

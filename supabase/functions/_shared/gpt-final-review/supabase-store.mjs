@@ -1,6 +1,8 @@
 import {ensure} from './contract.mjs';
 import {paidTransport} from '../leader20/paid-transport.mjs';
 import {MAX_RESERVED_USD} from './coordinator.mjs';
+const retryable=e=>['55P03','57014','40001','40P01'].includes(e?.code)||/abort|timeout|fetch failed/i.test(e?.message??'');
+const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 /** Writes exclusively to the review journal and its budget ledger. Never trading tables. */
 export class SupabaseReviewStore {
   constructor(db){this.db=db;this.ledgerModes=new Map();}
@@ -21,15 +23,26 @@ export class SupabaseReviewStore {
       /EXIT/.test(record.identity.event??'')?'EXIT':'HOLD':record.kind==='FD1_FINAL_RECHECK'?'RECHECK':'ENTRY';
     return paidTransport(this.db,{parentKey:key,purpose,fetchFn});
   }
-  async snapshot(key,owner,record){const r=await this.db.from('gpt_final_entry_reviews').update({record}).eq('job_key',key).eq('owner',owner).eq('state','RUNNING').select('job_key').maybeSingle();
-    ensure(!r.error&&r.data,'REVIEW_SNAPSHOT_CAS');}
+  async snapshot(key,owner,record){
+    for(let attempt=0;attempt<3;attempt++){
+      const r=await this.db.from('gpt_final_entry_reviews').update({record}).eq('job_key',key).eq('owner',owner).eq('state','RUNNING').select('job_key').maybeSingle();
+      if(!r.error&&r.data)return;
+      if(!retryable(r.error)||attempt===2)throw Error('REVIEW_SNAPSHOT_CAS');
+      await delay(100*(attempt+1));
+    }
+  }
   /** RUNNING -> DONE once, by the claiming owner; settles the reservation to known cost. */
   async complete(key,owner,record){
     if(record.result?.dynamic_audit)record={...record,result:{...record.result,dynamic_audit:{...record.result.dynamic_audit,
       signal_id:record.identity?.signal_id??null,position_id:record.identity?.position_id??record.result.dynamic_audit.position_id,
       review_job_key:key,execution_result_ref:'fd1_final_recheck_log.final_job_key / v11_protection_decisions.reviewJobKey'}}};
-    const r=await this.db.rpc('gpt_final_review_complete',{p_job_key:key,p_owner:owner,p_record:record});
-    ensure(!r.error&&r.data?.done===true,'REVIEW_RESULT_CAS');return true;}
+    for(let attempt=0;attempt<3;attempt++){
+      const r=await this.db.rpc('gpt_final_review_complete',{p_job_key:key,p_owner:owner,p_record:record});
+      if(!r.error&&r.data?.done===true)return true;
+      if(!retryable(r.error)||attempt===2)throw Error('REVIEW_RESULT_CAS');
+      await delay(100*(attempt+1));
+    }
+  }
 }
 /** One control read per entry evaluation that has candidates. Never writes. */
 export async function readReviewControl(db){
