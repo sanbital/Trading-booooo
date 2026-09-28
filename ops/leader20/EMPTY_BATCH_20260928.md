@@ -1,0 +1,6 @@
+# Skip paid reviews with no valid input — 2026-09-28
+The 08:50 production batch c97e2b0b-6f7d-4bdb-803d-f2e199ba9d30 contained ten locally BLOCKED symbols and no market matrices. It still dispatched one DeepSeek request (1,967 input / 803 output / 384 cached tokens), charging $0.001440804. No GPT review or order resulted.
+
+callBatch now returns BATCH_NO_READY_SYMBOLS before authentication or paid transport when all ten inputs are BLOCKED. The result preserves each original ID, data version, last timestamp and block reason, with attempted=false, actual API cost 0 and usage null. The normal batch claim/start/finish lifecycle still records the scheduled slot and updates blocked campaigns; no provider reservation is made. Any READY symbol keeps the existing single batch request and validator. Fresh valid data is reviewed normally in the next strict ten-minute slot.
+
+Original-packet replay verifies all ten block results match exactly and provider reservation/network counters remain zero. Partial and fully recovered input replays preserve ordered original 24 buckets and execute one mock request. This avoids an unnecessary charge; it does not repair capture quality, change judgments, alter cadence, release past charges, or satisfy the GPT monthly sustainability gate. No paid validation call or manual order.

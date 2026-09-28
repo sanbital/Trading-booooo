@@ -1,0 +1,423 @@
+{
+  "source_batch": {
+    "id": "c97e2b0b-6f7d-4bdb-803d-f2e199ba9d30",
+    "owner": "f8098227-2f6f-4d4a-a516-bed3c964bdd7",
+    "state": "DONE",
+    "packet": {
+      "columns": [],
+      "symbols": [
+        {
+          "id": "QNTUSDT",
+          "rank": 1,
+          "state": "BLOCKED",
+          "matrix": [],
+          "last_ms": null,
+          "review_ref": "55eb2e3765cd7aa7",
+          "data_version": "55eb2e3765cd7aa7e1d8f29d2b47269abb934efc1e0be80581acdabfab503159",
+          "blocked_reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "ingested_at_ms": null,
+          "market_context": {
+            "status": "AVAILABLE",
+            "return_1m": -0.009328063241106799,
+            "return_5m": -0.007837859235215072,
+            "closed_at_ms": 1790585399999
+          },
+          "time_origin_ms": 1790585410006
+        },
+        {
+          "id": "GRTUSDT",
+          "rank": 2,
+          "state": "BLOCKED",
+          "matrix": [],
+          "last_ms": null,
+          "review_ref": "fa1bb4c63f683d39",
+          "data_version": "fa1bb4c63f683d39b175879c21326b3fd17474f388f77d17f7a05f9ad14de5ce",
+          "blocked_reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "ingested_at_ms": null,
+          "market_context": {
+            "status": "AVAILABLE",
+            "return_1m": -0.001602050624799789,
+            "return_5m": -0.01047951730708152,
+            "closed_at_ms": 1790585399999
+          },
+          "time_origin_ms": 1790585410006
+        },
+        {
+          "id": "BTWUSDT",
+          "rank": 3,
+          "state": "BLOCKED",
+          "matrix": [],
+          "last_ms": null,
+          "review_ref": "820b8959946a01fe",
+          "data_version": "820b8959946a01fe71ed3ea12ec4dfc3544c69aa19c14daaa43307a7ebf688d6",
+          "blocked_reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "ingested_at_ms": null,
+          "market_context": {
+            "status": "AVAILABLE",
+            "return_1m": 0.0024774118332846484,
+            "return_5m": 0.014676598569215882,
+            "closed_at_ms": 1790585399999
+          },
+          "time_origin_ms": 1790585410006
+        },
+        {
+          "id": "INXUSDT",
+          "rank": 4,
+          "state": "BLOCKED",
+          "matrix": [],
+          "last_ms": null,
+          "review_ref": "95f62a3b2bbee5a5",
+          "data_version": "95f62a3b2bbee5a53d392a500cf0d7d6d3feed86a36c90273de518b420065dc8",
+          "blocked_reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "ingested_at_ms": null,
+          "market_context": {
+            "status": "AVAILABLE",
+            "return_1m": 0.0006704659738516749,
+            "return_5m": -0.0005022601707684871,
+            "closed_at_ms": 1790585399999
+          },
+          "time_origin_ms": 1790585410006
+        },
+        {
+          "id": "IRYSUSDT",
+          "rank": 5,
+          "state": "BLOCKED",
+          "matrix": [],
+          "last_ms": null,
+          "review_ref": "71c2fc858dc7d467",
+          "data_version": "71c2fc858dc7d46729defd85bcc345c91bed13b899694d1bc344fbaad075f9ea",
+          "blocked_reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "ingested_at_ms": null,
+          "market_context": {
+            "status": "AVAILABLE",
+            "return_1m": 0,
+            "return_5m": 0.003500583430571913,
+            "closed_at_ms": 1790585399999
+          },
+          "time_origin_ms": 1790585410006
+        },
+        {
+          "id": "PUMPUSDT",
+          "rank": 6,
+          "state": "BLOCKED",
+          "matrix": [],
+          "last_ms": null,
+          "review_ref": "f6cb2186e92d2d08",
+          "data_version": "f6cb2186e92d2d08d0f62e8504eb8e70c17847dc710674532d6cf75594516369",
+          "blocked_reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "ingested_at_ms": null,
+          "market_context": {
+            "status": "AVAILABLE",
+            "return_1m": -0.002874153151303682,
+            "return_5m": -0.005935325419565984,
+            "closed_at_ms": 1790585399999
+          },
+          "time_origin_ms": 1790585410006
+        },
+        {
+          "id": "GRASSUSDT",
+          "rank": 7,
+          "state": "BLOCKED",
+          "matrix": [],
+          "last_ms": null,
+          "review_ref": "4579d3e4989007c2",
+          "data_version": "4579d3e4989007c2e72be91430dfa3219b6678af65dbf53a7701b00873c48e4e",
+          "blocked_reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "ingested_at_ms": null,
+          "market_context": {
+            "status": "AVAILABLE",
+            "return_1m": -0.0004965243296920496,
+            "return_5m": 0.00033129037601464795,
+            "closed_at_ms": 1790585399999
+          },
+          "time_origin_ms": 1790585410006
+        },
+        {
+          "id": "SEIUSDT",
+          "rank": 8,
+          "state": "BLOCKED",
+          "matrix": [],
+          "last_ms": null,
+          "review_ref": "298fe0c2740f5a0a",
+          "data_version": "298fe0c2740f5a0ad2a9a28eaf6a4b0165f164fa9a0405412c73beb69ac438fc",
+          "blocked_reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "ingested_at_ms": null,
+          "market_context": {
+            "status": "AVAILABLE",
+            "return_1m": -0.0015216839969566243,
+            "return_5m": -0.006811301715438978,
+            "closed_at_ms": 1790585399999
+          },
+          "time_origin_ms": 1790585410006
+        },
+        {
+          "id": "SOONUSDT",
+          "rank": 9,
+          "state": "BLOCKED",
+          "matrix": [],
+          "last_ms": null,
+          "review_ref": "95059c5120011d48",
+          "data_version": "95059c5120011d483c6a52419415f11d8d04b50048e7956a3acd10be304f89eb",
+          "blocked_reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "ingested_at_ms": null,
+          "market_context": {
+            "status": "AVAILABLE",
+            "return_1m": -0.003966942148760255,
+            "return_5m": -0.007902535396773214,
+            "closed_at_ms": 1790585399999
+          },
+          "time_origin_ms": 1790585410006
+        },
+        {
+          "id": "ONEUSDT",
+          "rank": 10,
+          "state": "BLOCKED",
+          "matrix": [],
+          "last_ms": null,
+          "review_ref": "89d4a8c125ae3504",
+          "data_version": "89d4a8c125ae3504a40cd7f2c11cdd40104cde46deafc630ca453ead073f28de",
+          "blocked_reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "ingested_at_ms": null,
+          "market_context": {
+            "status": "AVAILABLE",
+            "return_1m": 0.0030554876558299693,
+            "return_5m": -0.010250844187168373,
+            "closed_at_ms": 1790585399999
+          },
+          "time_origin_ms": 1790585410006
+        }
+      ],
+      "version": "TOP10_DEEPSEEK_BATCH_3",
+      "as_of_ms": 1790585410006,
+      "epoch_id": "ed49d5b0-ad4f-4f93-94d0-46ca490b2d00",
+      "evidence": [
+        [
+          "QNTUSDT",
+          null,
+          0,
+          null
+        ],
+        [
+          "GRTUSDT",
+          null,
+          0,
+          null
+        ],
+        [
+          "BTWUSDT",
+          null,
+          0,
+          null
+        ],
+        [
+          "INXUSDT",
+          null,
+          0,
+          null
+        ],
+        [
+          "IRYSUSDT",
+          null,
+          0,
+          null
+        ],
+        [
+          "PUMPUSDT",
+          null,
+          0,
+          null
+        ],
+        [
+          "GRASSUSDT",
+          null,
+          0,
+          null
+        ],
+        [
+          "SEIUSDT",
+          null,
+          0,
+          null
+        ],
+        [
+          "SOONUSDT",
+          null,
+          0,
+          null
+        ],
+        [
+          "ONEUSDT",
+          null,
+          0,
+          null
+        ]
+      ],
+      "batch_hash": "b3647132006a63a4d99d06fb95b32b2da84efe2d94af1e5734c298fa29387d28",
+      "generation": 3
+    },
+    "reason": "TEN_MINUTE",
+    "result": {
+      "model": "deepseek-flash",
+      "usage": {
+        "total_tokens": 2770,
+        "prompt_tokens": 1967,
+        "completion_tokens": 803,
+        "prompt_tokens_details": {
+          "cached_tokens": 384
+        },
+        "prompt_cache_hit_tokens": 384,
+        "prompt_cache_miss_tokens": 1583
+      },
+      "errors": [],
+      "purpose": "ENTRY",
+      "results": [
+        {
+          "id": "QNTUSDT",
+          "valid": false,
+          "reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "last_ms": null,
+          "version": "55eb2e3765cd7aa7e1d8f29d2b47269abb934efc1e0be80581acdabfab503159",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "GRTUSDT",
+          "valid": false,
+          "reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "last_ms": null,
+          "version": "fa1bb4c63f683d39b175879c21326b3fd17474f388f77d17f7a05f9ad14de5ce",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "BTWUSDT",
+          "valid": false,
+          "reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "last_ms": null,
+          "version": "820b8959946a01fe71ed3ea12ec4dfc3544c69aa19c14daaa43307a7ebf688d6",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "INXUSDT",
+          "valid": false,
+          "reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "last_ms": null,
+          "version": "95f62a3b2bbee5a53d392a500cf0d7d6d3feed86a36c90273de518b420065dc8",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "IRYSUSDT",
+          "valid": false,
+          "reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "last_ms": null,
+          "version": "71c2fc858dc7d46729defd85bcc345c91bed13b899694d1bc344fbaad075f9ea",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "PUMPUSDT",
+          "valid": false,
+          "reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "last_ms": null,
+          "version": "f6cb2186e92d2d08d0f62e8504eb8e70c17847dc710674532d6cf75594516369",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "GRASSUSDT",
+          "valid": false,
+          "reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "last_ms": null,
+          "version": "4579d3e4989007c2e72be91430dfa3219b6678af65dbf53a7701b00873c48e4e",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "SEIUSDT",
+          "valid": false,
+          "reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "last_ms": null,
+          "version": "298fe0c2740f5a0ad2a9a28eaf6a4b0165f164fa9a0405412c73beb69ac438fc",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "SOONUSDT",
+          "valid": false,
+          "reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "last_ms": null,
+          "version": "95059c5120011d483c6a52419415f11d8d04b50048e7956a3acd10be304f89eb",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "ONEUSDT",
+          "valid": false,
+          "reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "last_ms": null,
+          "version": "89d4a8c125ae3504a40cd7f2c11cdd40104cde46deafc630ca453ead073f28de",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        }
+      ],
+      "cost_usd": 0.001440804,
+      "provider": "deepseek",
+      "attempted": true,
+      "batch_hash": "b3647132006a63a4d99d06fb95b32b2da84efe2d94af1e5734c298fa29387d28",
+      "cost_basis": "DEEPSEEK_PEAK_TOKEN_RATE_20260928_NOT_INVOICE",
+      "latency_ms": 2983,
+      "request_id": "2d547a4f-9805-450d-a721-506f76b0c772",
+      "http_status": 200,
+      "raw_content": "{\"results\":[{\"id\":\"QNTUSDT\",\"version\":\"55eb2e3765cd7aa7\",\"decision\":\"BLOCKED\",\"reason\":\"Snapshot marked BLOCKED: dynamic invalid or noncausal bucket, no matrix data.\",\"uncertainty\":\"No usable market data.\",\"last_ms\":null,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[]},{\"id\":\"GRTUSDT\",\"version\":\"fa1bb4c63f683d39\",\"decision\":\"BLOCKED\",\"reason\":\"Snapshot marked BLOCKED: dynamic invalid or noncausal bucket, no matrix data.\",\"uncertainty\":\"No usable market data.\",\"last_ms\":null,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[]},{\"id\":\"BTWUSDT\",\"version\":\"820b8959946a01fe\",\"decision\":\"BLOCKED\",\"reason\":\"Snapshot marked BLOCKED: dynamic invalid or noncausal bucket, no matrix data.\",\"uncertainty\":\"No usable market data.\",\"last_ms\":null,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[]},{\"id\":\"INXUSDT\",\"version\":\"95f62a3b2bbee5a5\",\"decision\":\"BLOCKED\",\"reason\":\"Snapshot marked BLOCKED: dynamic invalid or noncausal bucket, no matrix data.\",\"uncertainty\":\"No usable market data.\",\"last_ms\":null,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[]},{\"id\":\"IRYSUSDT\",\"version\":\"71c2fc858dc7d467\",\"decision\":\"BLOCKED\",\"reason\":\"Snapshot marked BLOCKED: dynamic invalid or noncausal bucket, no matrix data.\",\"uncertainty\":\"No usable market data.\",\"last_ms\":null,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[]},{\"id\":\"PUMPUSDT\",\"version\":\"f6cb2186e92d2d08\",\"decision\":\"BLOCKED\",\"reason\":\"Snapshot marked BLOCKED: dynamic invalid or noncausal bucket, no matrix data.\",\"uncertainty\":\"No usable market data.\",\"last_ms\":null,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[]},{\"id\":\"GRASSUSDT\",\"version\":\"4579d3e4989007c2\",\"decision\":\"BLOCKED\",\"reason\":\"Snapshot marked BLOCKED: dynamic invalid or noncausal bucket, no matrix data.\",\"uncertainty\":\"No usable market data.\",\"last_ms\":null,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[]},{\"id\":\"SEIUSDT\",\"version\":\"298fe0c2740f5a0a\",\"decision\":\"BLOCKED\",\"reason\":\"Snapshot marked BLOCKED: dynamic invalid or noncausal bucket, no matrix data.\",\"uncertainty\":\"No usable market data.\",\"last_ms\":null,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[]},{\"id\":\"SOONUSDT\",\"version\":\"95059c5120011d48\",\"decision\":\"BLOCKED\",\"reason\":\"Snapshot marked BLOCKED: dynamic invalid or noncausal bucket, no matrix data.\",\"uncertainty\":\"No usable market data.\",\"last_ms\":null,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[]},{\"id\":\"ONEUSDT\",\"version\":\"89d4a8c125ae3504\",\"decision\":\"BLOCKED\",\"reason\":\"Snapshot marked BLOCKED: dynamic invalid or noncausal bucket, no matrix data.\",\"uncertainty\":\"No usable market data.\",\"last_ms\":null,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[]}]}",
+      "api_cost_usd": 0.001440804,
+      "input_tokens": 1967,
+      "output_tokens": 803,
+      "completed_at_ms": 1790585413734,
+      "uncached_peak_usd": 0.0015536999999999999,
+      "cached_input_tokens": 384
+    },
+    "call_key": null,
+    "epoch_id": "ed49d5b0-ad4f-4f93-94d0-46ca490b2d00",
+    "expires_at": "2026-09-28T08:51:40.616292+00:00",
+    "generation": 3,
+    "data_version": "b3647132006a63a4d99d06fb95b32b2da84efe2d94af1e5734c298fa29387d28",
+    "requested_at": "2026-09-28T08:50:10.616291+00:00",
+    "periodic_slot": "2026-09-28T08:50:00+00:00"
+  },
+  "source_ledger": [
+    {
+      "error": null,
+      "model": "deepseek-flash",
+      "owner": "55e6bfba-824b-4703-aef3-f1e6d4d49709",
+      "state": "SETTLED",
+      "purpose": "ENTRY",
+      "call_key": "b391c5f601c8dc61e587ae5bc3e6a22347f747041e481d77bd43b9394d5982b2",
+      "provider": "deepseek",
+      "actual_usd": 0.001440804,
+      "cost_basis": "TOKEN_RATE_PEAK_NOT_INVOICE",
+      "created_at": "2026-09-28T08:50:10.888101+00:00",
+      "latency_ms": 2651,
+      "parent_key": "batch:c97e2b0b-6f7d-4bdb-803d-f2e199ba9d30",
+      "request_id": "2d547a4f-9805-450d-a721-506f76b0c772",
+      "settled_at": "2026-09-28T08:50:13.719816+00:00",
+      "data_version": "02d411465e2bc86692ff123120c63470e52ab50098b0ed603c37603605a4b753",
+      "input_tokens": 1967,
+      "reserved_usd": 0.0061481999999999995,
+      "output_tokens": 803,
+      "cached_input_tokens": 384
+    }
+  ],
+  "recorded_at": "2026-09-28T08:55:57.131584+00:00"
+}
