@@ -5,7 +5,7 @@ const retryable=e=>['55P03','57014','40001','40P01'].includes(e?.code)||/abort|t
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 /** Writes exclusively to the review journal and its budget ledger. Never trading tables. */
 export class SupabaseReviewStore {
-  constructor(db){this.db=db;this.ledgerModes=new Map();}
+  constructor(db){this.db=db;this.ledgerModes=new Map();this.deferClaimUntilPrepared=true;}
   async get(key){const r=await this.db.from('gpt_final_entry_reviews').select('job_key,owner,state,record').eq('job_key',key).maybeSingle();
     ensure(!r.error,'REVIEW_STORE_READ');return r.data?{...r.data,key:r.data.job_key}:null;}
   async claim(key,record,config){const r=await this.db.rpc('gpt_final_review_claim',{

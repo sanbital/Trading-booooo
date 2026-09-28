@@ -69,18 +69,20 @@ export async function captureForInference(symbol,capture,{now=Date.now,sleep=ms=
  const ready=c=>entryCaptureSafety(c,now()).ok&&c.end_ms>afterEndMs&&now()-c.end_ms<=targetAgeMs;
  if(ready(capture))return capture;
  const attempts=[];let current=capture;
- for(let i=0;i<32&&now()+350<until;i++){
-  // Most DB buckets arrive about one second after the five-second boundary.
-  // Poll only inside the bounded acquisition budget, not the inference lifetime.
-  const delay=Math.min(1000,Math.max(100,Number.isFinite(initialEnd)?initialEnd+6000-now():500),until-now()-350);
+ for(let i=0;i<12&&now()+600<until;i++){
+  // Stagger bounded reads around bucket arrival. Ten simultaneous candidates
+  // must not produce hundreds of 350ms RPCs against the same capture store.
+  const delay=Math.min(1000,Math.max(700,Number.isFinite(initialEnd)?initialEnd+6000-now():700),until-now()-600);
   const before=now();await sleep(delay);
   if(now()<=before)break; // A frozen replay/test clock must not start a live wait loop.
-  const at=now();current=await read(symbol,at,{...options,timeoutMs:Math.min(350,until-at)});
+  const at=now();current=await read(symbol,at,{...options,timeoutMs:Math.min(600,until-at)});
   attempts.push({requested_at_ms:at,received_at_ms:now(),status:current?.status,end_ms:current?.end_ms??null});
   // 1.5s is the preferred acquisition target, not a data-integrity limit.
-  // A genuinely advanced complete bucket can arrive later than that target;
-  // accept it inside the existing 5s normal age, never the 10s stale boundary.
-  const refreshed=entryCaptureSafety(current,now()).ok&&current.end_ms>afterEndMs&&now()-current.end_ms<=Math.min(DYNAMIC_POLICY.normalAgeMs,5000);
+  // Real ingest can deliver a new complete bucket just beyond the 5s preferred
+  // refresh age. The existing entry safety check still rejects at 10s, missing
+  // buckets, noncausal timestamps and invalid book/flow. Current book is reread
+  // after a refresh by readSources before a model packet is frozen.
+  const refreshed=entryCaptureSafety(current,now()).ok&&current.end_ms>afterEndMs;
   if(now()<=until&&current?.end_ms>initialEnd&&(ready(current)||refreshed))return {...current,pre_inference_refresh:{
     requested_at_ms:started,received_at_ms:now(),previous_end_ms:previousEnd,previous_age_ms:previousAge,
     advanced:true,wait_ms:now()-started,attempts}};
