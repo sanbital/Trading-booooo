@@ -89,5 +89,6 @@ export async function generateLeader20(db, ctl, {now = Date.now, fetchFn = fetch
     } catch (error) { outcomes.push({symbol: e.symbol, reason: String(error.message)}); }
   }
   return {ok: true, strategy: LEADER20, epoch_id: ctl.epoch_id, generation: ctl.generation,
-    inserted: outcomes.filter(x => x.created).length, outcomes, refreshError};
+    inserted: outcomes.filter(x => x.created).length, outcomes, refreshError,
+    ...(batchOutcome?{batch:{created:batchOutcome.created===true,reason:batchOutcome.reason??null,batch_id:batchOutcome.batch_id??null}}:{})};
 }

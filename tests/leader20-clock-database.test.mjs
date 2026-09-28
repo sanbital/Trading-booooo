@@ -45,6 +45,22 @@ test('PostgreSQL fixed cutoff, 20-member claim, duplicate admission, expiry and 
  }
  const get=(symbol='C0USDT',at=slot+10000)=>rpc('doa_context_for_role_v1',[symbol,iso(at),'TRADE_CANDIDATE',null]);
  let packet,batch;
+ await t.test('31.442s delivery jitter admits once; 60s cutoff and original 120s expiry stay fixed',async()=>{
+  await q('update test_clock set at=$1',[iso(slot+31442)]);
+  const rows=await Promise.all(Array.from({length:20},async(_,i)=>({symbol:`C${i}USDT`,rank:i+1,capture:await get(`C${i}USDT`,slot+27000)})));
+  const delayed=await buildBatch(rows,{asOf:slot+27000,epochId:epoch,generation:3});
+  assert.equal((await rpc('leader20_batch_claim',[delayed,'old-cutoff',false])).reason,'CLOCK_BATCH_NOT_DUE');
+  await load('supabase/migrations/20260928134337_clock_batch_dispatch_jitter.sql');
+  await db.exec('begin');
+  const claim=await rpc('leader20_batch_claim',[delayed,'jitter',false]);
+  assert.equal(claim.created,true,JSON.stringify(claim));
+  assert.equal(claim.row.packet.entry_window.expires_at_ms,slot+120000);
+  assert.equal((await rpc('leader20_batch_claim',[delayed,'duplicate',false])).reason,'NOT_DUE');
+  await q('update test_clock set at=$1',[iso(slot+60000)]);
+  assert.equal((await rpc('leader20_batch_claim',[delayed,'too-late',false])).reason,'CLOCK_BATCH_NOT_DUE');
+  await db.exec('rollback');
+  await q('update test_clock set at=$1',[iso(slot+10000)]);
+ });
  await t.test('post-boundary observations cannot move the frozen path; gaps and future receipts still fail',async()=>{
   const c=await get();assert.equal(c.status,'AVAILABLE',JSON.stringify(c));
   assert.equal(c.trajectory.at(-1).bucket_ms,slot);assert.equal(c.trajectory[0].bucket_ms,slot-115000);

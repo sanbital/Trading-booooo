@@ -63,10 +63,31 @@ test('each capture preparation ranks current rolling24h Top20 and cannot refresh
 });
 test('off-clock wakes perform no market, account, capture or paid reads',async()=>{
  let reads=0;const db={rpc:()=>{reads++;throw Error('off clock');},from:()=>{reads++;throw Error('off clock');}};
- for(const at of [slot-1,slot,slot+30000,slot+100000,slot+480000]){
+ for(const at of [slot-1,slot,slot+60000,slot+100000,slot+480000]){
   assert.equal((await runEntryBatch(db,{clock_capture_enabled:true},{now:()=>at})).reason,'CLOCK_BATCH_NOT_DUE');
  }
  assert.equal(reads,0);
+});
+
+test('delayed generator wake at 31.442s can prepare the same frozen Top20 without new capture',async()=>{
+ const at=slot+31442,rows=Array.from({length:20},(_,i)=>({symbol:`C${i}USDT`,rank:i+1}));
+ let captures=0,claims=0;
+ const db={from(table){return {select(){return this;},eq(){return this;},lte(){return this;},
+  async maybeSingle(){assert.equal(table,'leader20_batch_control');return {data:{last_periodic_slot:null}};},
+  async order(){assert.equal(table,'leader20_members');return {data:rows};}};},async rpc(name,args){
+  if(name==='leader20_batch_capacity')return {data:{available:2,held:[]}};
+  if(name==='doa_context_for_role_v1'){captures++;return {data:fixed()};}
+  if(name==='leader20_batch_claim'){
+   claims++;assert.equal(args.p_packet.symbols.length,20);
+   assert.ok(args.p_packet.symbols.every(x=>x.state==='READY'&&x.matrix.length===24));
+   assert.equal(args.p_packet.entry_window.expires_at_ms,slot+120000);
+   return {data:{created:false,reason:'OFFLINE_CLAIM_OBSERVED'}};
+  }
+  throw Error('Unexpected call '+name);
+ }};
+ const result=await runEntryBatch(db,{clock_capture_enabled:true,epoch_id:'e',generation:4},
+  {now:()=>at,fetchFn:async()=>{throw Error('offline momentum unavailable');}});
+ assert.equal(result.reason,'OFFLINE_CLAIM_OBSERVED');assert.equal(captures,20);assert.equal(claims,1);
 });
 test('actual FINAL RECHECK accepts the identical clock path with a new quote and only BUY permits execution',async()=>{
  for(const decision of ['BUY','WAIT','SKIP']){
