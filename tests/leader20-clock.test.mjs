@@ -75,6 +75,7 @@ test('delayed generator wake at 31.442s can prepare the same frozen Top20 withou
  const db={from(table){return {select(){return this;},eq(){return this;},lte(){return this;},
   async maybeSingle(){assert.equal(table,'leader20_batch_control');return {data:{last_periodic_slot:null}};},
   async order(){assert.equal(table,'leader20_members');return {data:rows};}};},async rpc(name,args){
+  if(name==='leader20_collector_health')return {data:{live:true}};
   if(name==='leader20_batch_capacity')return {data:{available:2,held:[]}};
   if(name==='leader20_clock_note')return {data:{recorded:true}};
   if(name==='doa_context_for_role_v1'){captures++;return {data:fixed()};}

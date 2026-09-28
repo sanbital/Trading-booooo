@@ -480,6 +480,7 @@ test('the ten-minute batch records the whole slot decision and is not stopped by
   async maybeSingle(){return {data:{decision_reserve_ms:80000,last_periodic_slot:claimed?new Date(slot).toISOString():null}};},
   async order(){return {data:members};}};},async rpc(name,args){
    if(name==='leader20_clock_note'){notes.push(args.p_data);return {data:{recorded:true}};}
+   if(name==='leader20_collector_health')return {data:{live:true}};
    if(name==='leader20_batch_capacity')return {data:capacity};
    // A terminally invalid bucket is not a "wait and retry" state, so the slot proceeds with 19.
    if(name==='doa_context_for_role_v1')return {data:args.p_symbol==='C7USDT'

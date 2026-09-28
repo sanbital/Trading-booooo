@@ -3,6 +3,16 @@ import {validateDecision,CATEGORIES} from '../gpt-final-decision/contract.mjs';
 import {entryCaptureSafety} from '../gpt-final-decision/dynamic-flow.mjs';
 import {CLOCK_FINAL,validClockFinalPacket} from './clock-final.mjs';
 export const BATCH_FINAL=CLOCK_FINAL;
+/** A FINAL answer is usable only if it completes before the slot authority expires. Measured on
+ * production (458 PRODUCTION FD1_ENTRY calls / 12h): mean 5,847ms, max 15,061ms per call, while
+ * the whole 20-symbol FINAL stage took 109,673ms at p95 and the slot-to-GPT-completion total
+ * reached 180,597ms at p95 -- 60s PAST the 120s window. Dispatching into a window that cannot
+ * hold a typical answer buys nothing: final.mjs discards the result as
+ * CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION anyway, while the call still costs money and, worse, holds
+ * the fan-out slot that an earlier candidate with real window left could have used.
+ * Refusing early is therefore strictly better than refusing late -- and it is NOT an extension of
+ * the deadline: the deadline stays derived from slot_ms and is never widened. */
+export const CLOCK_FINAL_MIN_BUDGET_MS=6000;
 export function batchFinalPayload(p){
  const payload=payloadFor(p),user=JSON.parse(payload.input[1].content);
  // Constrain each category to the same evidence keys the server already accepts.
@@ -29,6 +39,10 @@ export async function batchFinalDecision(packet,{apiKey,fetchFn=fetch,now=Date.n
  const advice=packet?.leader20?.batch_advice,at=now(),window=packet?.leader20?.entry_window;
  const fail=error=>({valid:false,decision:'ABSTAIN',error,attempted:false,api_cost_usd:0,completed_at_ms:now()});
  if(window&&at>=window.expires_at_ms)return fail('CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION');
+ // Distinct from an expiry: the window is still open but demonstrably too short to hold an
+ // answer. Kept separate so telemetry can never confuse "we ran out" with "we never tried",
+ // and so this floor can be tuned from data without touching the expiry rule.
+ if(window&&window.expires_at_ms-at<CLOCK_FINAL_MIN_BUDGET_MS)return fail('CLOCK_FINAL_WINDOW_INSUFFICIENT');
  // All READY Top20 snapshots reach GPT. An invalid advisor is explicitly absent
  // evidence, not a veto; GPT still has the independently collected current facts.
  if(!advice||advice.id!==packet.symbol||!['PASS','WAIT','SKIP','BLOCKED'].includes(advice.decision)||

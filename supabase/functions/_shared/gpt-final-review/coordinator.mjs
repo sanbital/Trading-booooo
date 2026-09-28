@@ -2,6 +2,9 @@ import {clockCaptureValid} from '../leader20/clock.mjs';
 import {clockTicketCheck} from '../leader20/clock-final.mjs';
 import {wireSchema,parseApiResponseWire} from './wire-v4.mjs';
 import {VERSION,MODEL,LIMITS,OUTPUT_SCHEMA,canonical,hash,baselineAllowed,decisionIdentity,triggerExpiry,validateAnswer,ensure} from './contract.mjs';
+import {clockAuthorityDeadline} from '../leader20/campaign.mjs';
+/** A clock window with no derivable deadline is already expired, never open-ended. */
+const clockDeadlineOf=w=>clockAuthorityDeadline(w)??-Infinity;
 import {promptFor} from './prompt.mjs';
 import {collectMarket,buildPacket,packetHash} from './market.mjs';
 import {callFinalReviewer,DEFAULT_PROFILE,profileOf} from './openai.mjs';
@@ -109,8 +112,10 @@ export class FinalReviewCoordinator {
     const deny=reason=>({allowed:shadow,reason,decision:'ABSTAIN',scope:'CANDIDATE'});
     if(!this.baseline(s))return deny('BASELINE_REJECT_OR_INVALID');
     if(!this.authorized())return deny(this.config.source==='CONTROL_UNREADABLE'?'GPT_CONTROL_UNREADABLE':'GPT_REVIEW_NOT_CONFIGURED_OR_APPROVED');
+    // expiry() is already bounded by the derived slot deadline for clock entries; a null or
+    // NaN expiry coerces to an immediate refusal rather than an open window.
     const now=this.now(),expires=this.expiry(s);
-    if(now>=expires-(s?.features?.leader20?.entry_window?0:LIMITS.executionReserveMs))
+    if(!(Number.isFinite(expires))||now>=expires-(s?.features?.leader20?.entry_window?0:LIMITS.executionReserveMs))
       return deny(s?.features?.leader20?.entry_window?'CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION':'GPT_TRIGGER_EXPIRED');
     let key;
     try{
@@ -282,7 +287,9 @@ export class FinalReviewCoordinator {
     if(!Number.isSafeInteger(z?.completed_at_ms)||z.completed_at_ms>now||z.completed_at_ms<r.snapshot_at_ms||
       !Number.isSafeInteger(r.valid_until_ms)||r.valid_until_ms!==this.reviewValidUntil(r.packet,r.snapshot_at_ms,expires))
       return deny('GPT_STALE_OR_FUTURE_REVIEW');
-    if(r.packet.leader20?.entry_window&&now>=r.packet.leader20.entry_window.expires_at_ms)
+    // The stored packet's own expires_at_ms is evidence, not authority: the deadline is derived
+    // from the slot, so a record written with a looser TTL cannot outlive its clock window.
+    if(r.packet.leader20?.entry_window&&now>=clockDeadlineOf(r.packet.leader20.entry_window))
       return deny('CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION');
     // Past its own validity the answer is AGED. Without an agedRecheck engine, or too close to
     // the trigger expiry for a recheck, that is the same refusal as before.

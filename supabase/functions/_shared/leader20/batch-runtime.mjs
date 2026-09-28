@@ -96,6 +96,17 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sle
   await note({...stats,batch_reason:cap.reason==='NO_ENTRY_CAPACITY'?'CAPACITY_ZERO':cap.reason,slot_status:'BATCH_WAITING'});
   return outcome({created:false,reason:cap.reason});
  }
+ // A dead collector and a late capture look identical from here -- ready=0, blocked=20 -- which is
+ // how the 2026-09-29 04:33 KST collector outage read as ordinary flakiness for four hours while
+ // the retry loop below burned every decision window against streams that did not exist. Ask the
+ // transport directly: when it is gone, say so once and stop, instead of retrying up to 160 times.
+ const health=await db.rpc('leader20_collector_health');
+ if(!health.error&&health.data&&health.data.live!==true){
+  stats.collector_reason=health.data.reason??'COLLECTOR_DOWN';
+  stats.collector_heartbeat_age_ms=health.data.heartbeat_age_ms??null;
+  await note({...stats,batch_reason:stats.collector_reason,slot_status:'EXPIRED'});
+  return outcome({created:false,reason:stats.collector_reason});
+ }
  const members=await db.from('leader20_members').select('symbol,rank').eq('epoch_id',ctl.epoch_id).lte('rank',ctl.clock_capture_enabled?20:10).order('rank');
  if(members.error)throw Error('BATCH_MEMBERSHIP_READ');
  stats.watch_count=members.data.length;

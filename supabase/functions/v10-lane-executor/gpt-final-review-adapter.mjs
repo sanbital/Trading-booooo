@@ -6,10 +6,11 @@ import {dispatchDynamicSafety,DYNAMIC_VERSION} from '../_shared/gpt-final-decisi
 import {recheckAllows} from '../_shared/gpt-final-decision/recheck.mjs';
 import {resumeReviewTimeouts} from '../_shared/gpt-final-decision/timeout-recovery.mjs';
 import {lifecycleNote,mergeLifecycleNote} from './entry-lifecycle.mjs';
-import {isLeader20,validEvent,eventExpiry} from '../_shared/leader20/campaign.mjs';
+import {isLeader20,validEvent,eventExpiry,clockAuthorityDeadline} from '../_shared/leader20/campaign.mjs';
 import {requireEntryAuthority} from '../_shared/leader20/runtime.mjs';
 import {triggerExpiry} from '../_shared/gpt-final-review/contract.mjs';
 import {sameClockCapture} from '../_shared/leader20/clock.mjs';
+import {CLOCK_FINAL_MIN_BUDGET_MS} from '../_shared/leader20/final.mjs';
 const contexts=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 /** After lease release, replace only this identity's still-pending lifecycle note.
@@ -90,9 +91,26 @@ export async function gptFilterExecutable(db,executable,{completedOnly=false}={}
   };
   // Clock snapshot/authority reads are independent. Keep concurrency bounded;
   // results retain queue order and all durable provider/entry claims are unchanged.
-  const width=executable.every(s=>s.features?.leader20?.entry_window)?4:1;
+  const clock=executable.every(s=>s.features?.leader20?.entry_window);
+  const width=clock?4:1;
+  // A fixed clock slot gives the WHOLE fan-out one 120s authority window, so twenty candidates
+  // share it. Measured p95: the FINAL stage alone spent 109.7s and slot-to-completion reached
+  // 180.6s -- past the window -- which expired every candidate and produced no order at all.
+  // Once the remaining window cannot hold one more answer, stop: the candidates already
+  // reviewed keep a real chance instead of all twenty failing together. This never widens the
+  // deadline; it only declines to start work that provably cannot finish inside it.
+  const deadline=s=>clockAuthorityDeadline(s?.features?.leader20?.entry_window);
   for(let i=0;i<executable.length;i+=width){
-    const group=executable.slice(i,i+width),rows=await Promise.all(group.map(reviewOne));
+    const group=executable.slice(i,i+width);
+    if(clock){
+      const end=deadline(group[0]),left=Number.isFinite(end)?end-c.now():null;
+      if(left===null||left<CLOCK_FINAL_MIN_BUDGET_MS){
+        for(const s of executable.slice(i))reviews.push({signalId:s.id,allowed:false,
+          reason:left===null?'CLOCK_FINAL_AUTHORITY_INVALID':'CLOCK_FINAL_WINDOW_INSUFFICIENT'});
+        break;
+      }
+    }
+    const rows=await Promise.all(group.map(reviewOne));
     reviews.push(...rows);for(let j=0;j<group.length;j++)if(rows[j].allowed)candidates.push(group[j]);
   }
   const pending=reviews.some(r=>r.reason==='GPT_REVIEW_PENDING');

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {rawCapture} from '../test-support/dynamic-fixtures.mjs';
 import {runEntryBatch} from '../supabase/functions/_shared/leader20/batch-runtime.mjs';
 import {clockDecisionWindow,CLOCK_VERSION} from '../supabase/functions/_shared/leader20/clock.mjs';
-import {batchFinalDecision} from '../supabase/functions/_shared/leader20/final.mjs';
+import {batchFinalDecision,CLOCK_FINAL_MIN_BUDGET_MS} from '../supabase/functions/_shared/leader20/final.mjs';
 import {generateLeader20} from '../supabase/functions/_shared/leader20/runtime.mjs';
 import {validateCapture120} from '../supabase/functions/_shared/gpt-final-decision/capture-context.mjs';
 import {hash} from '../supabase/functions/_shared/gpt-final-decision/snapshot-hash.mjs';
@@ -11,13 +11,14 @@ import {nmrClockFinal} from '../test-support/nmr-clock-final.mjs';
 import {validClockFinalPacket} from '../supabase/functions/_shared/leader20/clock-final.mjs';
 const slot=Date.parse('2026-09-28T22:40:00+09:00');
 const fixed=()=>({...rawCapture(slot+200),entry_window:{version:CLOCK_VERSION,slot_ms:slot,expires_at_ms:slot+120000}});
-function harness({start=2000,ready=5000,reserve=80000,capacity=2,partial=false,ds='invalid'}={}){
+function harness({start=2000,ready=5000,reserve=80000,capacity=2,partial=false,ds='invalid',collector={live:true}}={}){
  let at=slot+start,claimed=false;const notes=[],sleeps=[],packets=[],paid=[],reads=[];
  const members=Array.from({length:20},(_,i)=>({symbol:`C${i}USDT`,rank:i+1}));
  const db={from(table){return {select(){return this;},eq(){return this;},lte(){return this;},
   async maybeSingle(){return {data:{decision_reserve_ms:reserve,last_periodic_slot:claimed?new Date(slot).toISOString():null}};},
   async order(){return {data:members};}};},async rpc(name,args){
   if(name==='leader20_clock_note'){notes.push(args);return {data:{recorded:true}};}
+  if(name==='leader20_collector_health')return {data:collector};
   if(name==='leader20_batch_capacity')return {data:{available:capacity,held:[],reason:capacity?null:'NO_ENTRY_CAPACITY'}};
   if(name==='leader20_batch_note_full')return {data:{}};
   if(name==='doa_context_for_role_v1'){
@@ -88,9 +89,23 @@ test('advisory and GPT bind identical slot/hash; a response arriving at the dead
  assert.equal(validClockFinalPacket(p,f.now()),true);
  p.leader20.batch_advice.trajectory_hash='different';assert.equal(validClockFinalPacket(p,f.now()),false);
  p.leader20.batch_advice.trajectory_hash=p.facts.capture_context.trajectory_hash;
- let at=w.expires_at_ms-100;const r=await batchFinalDecision(p,{now:()=>at,deadlineMs:at+20000,call:async(_p,o)=>{
-  assert.equal(o.timeoutMs,100);at=w.expires_at_ms;return {valid:true,decision:'BUY',attempted:true,completed_at_ms:at};
+ // A window too short to hold an answer is refused BEFORE the paid call: the result would be
+ // discarded as expired anyway, and the fan-out slot it occupies belongs to a candidate that
+ // still has window left. This is a distinct reason, never a widened deadline.
+ let calls=0;
+ let at=w.expires_at_ms-100;
+ let r=await batchFinalDecision(p,{now:()=>at,deadlineMs:at+20000,call:async()=>{calls++;return {};}});
+ assert.equal(r.error,'CLOCK_FINAL_WINDOW_INSUFFICIENT');assert.equal(r.decision,'ABSTAIN');
+ assert.equal(r.valid,false);assert.equal(r.attempted,false);assert.equal(calls,0,'no paid call inside a dead window');
+ assert.equal(CLOCK_FINAL_MIN_BUDGET_MS>0,true);
+ // Exactly at the floor the call is still made, and an answer landing on the deadline is
+ // still never a BUY -- the expiry rule itself is unchanged.
+ at=w.expires_at_ms-CLOCK_FINAL_MIN_BUDGET_MS;
+ r=await batchFinalDecision(p,{now:()=>at,deadlineMs:at+20000,call:async(_p,o)=>{
+  calls++;assert.equal(o.timeoutMs,CLOCK_FINAL_MIN_BUDGET_MS);
+  at=w.expires_at_ms;return {valid:true,decision:'BUY',attempted:true,completed_at_ms:at};
  }});
+ assert.equal(calls,1);
  assert.equal(r.decision,'ABSTAIN');assert.equal(r.valid,false);assert.equal(r.requires_final_recheck,false);
  assert.equal(r.error,'CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION');
 });

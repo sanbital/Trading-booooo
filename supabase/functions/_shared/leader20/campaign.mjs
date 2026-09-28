@@ -1,8 +1,32 @@
 import {LEADER20} from './universe.mjs';
 import {entryCaptureSafety, dynamicDelta} from '../gpt-final-decision/dynamic-flow.mjs';
+import {CLOCK_VERSION, SLOT_MS, EXECUTION_MS} from './clock.mjs';
 export const CAMPAIGN_POLICY = Object.freeze({version: LEADER20, fairReviewMs: 21600000, minReviewMs: 1800000, eventTtlMs: 120000});
 export const isLeader20 = row => row?.features?.leader20?.version === LEADER20;
-export const eventExpiry = row => row?.features?.leader20?.expires_at_ms;
+/** The hard end of entry permission for a fixed clock slot, DERIVED from the slot itself.
+ *
+ * A clock entry's whole authority is [slot_ms, slot_ms + EXECUTION_MS). That bound must not be
+ * readable from anything a TTL, a config row or a stored feature can grow: otherwise raising
+ * CAMPAIGN_POLICY.eventTtlMs, or writing a larger features.leader20.expires_at_ms, silently
+ * extends the window and CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION simply stops firing -- an expired
+ * authority would then execute on a stale 24-bucket path instead of being refused.
+ * A malformed clock window yields null, which every caller treats as already expired (fail closed).
+ */
+export function clockAuthorityDeadline(window) {
+  if (window?.version !== CLOCK_VERSION) return null;
+  const slot = window.slot_ms;
+  if (!Number.isSafeInteger(slot) || slot % SLOT_MS !== 0) return null;
+  return slot + EXECUTION_MS;
+}
+/** Expiry of one entry event. For a clock entry the stored value can only ever be TIGHTENED by
+ * the derived slot deadline, never loosened past it. */
+export const eventExpiry = row => {
+  const e = row?.features?.leader20, stored = e?.expires_at_ms;
+  if (!e?.entry_window) return stored;
+  const hard = clockAuthorityDeadline(e.entry_window);
+  if (hard === null) return null;
+  return Number.isSafeInteger(stored) ? Math.min(stored, hard) : hard;
+};
 export function validEvent(row) {
   const e = row?.features?.leader20;
   return isLeader20(row) && !!row.id && row.symbol === e.symbol &&

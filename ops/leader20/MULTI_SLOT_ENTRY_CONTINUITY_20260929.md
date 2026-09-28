@@ -142,3 +142,85 @@ survivable rather than fatal. `epoch_publish_lag_ms` is now the metric to drive 
   covers: the 00:50 replay (the recorded outcome reproduced on the deployed migration, then fixed),
   TEST A–G, atomic reservation and refusal, capacity transition on each fill, three independent
   position captures, and the per-slot observation row.
+
+---
+
+# Follow-up: the two levers on missed fills and timeouts
+
+Migration: `supabase/migrations/20260929090000_leader20_collector_liveness_and_final_budget.sql`
+Tests: `tests/clock-authority-and-final-budget.test.mjs` (15 checks)
+
+## Measured, not assumed
+
+Production over 36h / 12h (`leader20_clock_slots`, `gpt_final_entry_reviews`):
+
+| metric | value |
+|---|---|
+| per-call FD1_ENTRY latency (458 calls) | mean **5,847ms**, max **15,061ms** |
+| FINAL stage, whole 20-symbol fan-out (p95) | **109,673ms** |
+| slot → GPT completion, total (p50 / p95 / max) | **86,017 / 180,597 / 184,068 ms** |
+| batch start (p95) | 22,264ms |
+| DeepSeek (p95) | 17,746ms |
+| FD1_FINAL_RECHECK calls | **8** (mean 6,851ms) |
+
+The authority window is 120,000ms. **p95 total is 180.6s — 60 seconds past expiry.** Individual
+calls are fast (5.8s); the stage is slow because twenty candidates share one window four at a
+time, so the whole slot expires and produces *no* order. `FD1_FINAL_RECHECK` is only 8 calls, so
+the duplication is not a second AI round — it is the per-candidate ENTRY-scale work in the FINAL
+fan-out consuming the window.
+
+## Lever 1 — the deadline cannot be widened by a TTL
+
+`eventExpiry()` read `features.leader20.expires_at_ms` straight from the stored signal, bounded
+only by `CAMPAIGN_POLICY.eventTtlMs`. Raising that TTL, or writing a larger stored value, would
+have pushed the coordinator's `expires` past `slot_ms + 120s` — and
+`CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION` would simply stop firing, letting an expired authority
+execute on a stale 24-bucket path. That is the failure mode to refuse, not to relieve.
+
+`clockAuthorityDeadline(window)` now derives the bound from `slot_ms` alone. `eventExpiry()` can
+only **tighten** a clock entry to it, never loosen; a malformed window returns `null`, which every
+caller treats as already expired (fail closed). `validateStored()` compares against the derived
+deadline too, so a record written under a looser TTL is refused as expired rather than executed,
+and a non-finite expiry is an immediate refusal instead of an open window. Legacy non-clock
+entries keep their own stored expiry, and `eventTtlMs` itself is unchanged at 120,000.
+
+## Lever 2 — the window is not spent on work that cannot finish inside it
+
+A FINAL answer completing after `expires_at_ms` is discarded anyway. Dispatching into a window
+too short to hold one buys nothing, costs money, and holds a fan-out slot belonging to a
+candidate that still has room.
+
+* `batchFinalDecision()` refuses before the paid call when the remaining window is under
+  `CLOCK_FINAL_MIN_BUDGET_MS` (6,000ms — just above the measured 5,847ms mean), reporting
+  **`CLOCK_FINAL_WINDOW_INSUFFICIENT`**. Deliberately a *distinct* reason from an expiry, so
+  telemetry can never confuse "we ran out" with "we never tried" — and so the floor can be tuned
+  from data without touching the expiry rule.
+* The fan-out stops once the remaining window cannot hold one more answer, and every skipped
+  candidate is still accounted for with that reason. The candidates reviewed inside the window
+  keep a real chance instead of all twenty failing together.
+
+Neither change moves a deadline, alters model evidence, or changes a decision.
+
+## Recurrence: a dead collector now names itself
+
+The 04:33 KST outage was invisible for four hours because a gone transport and a late capture
+produce the same row: `ready=0, blocked=20, DECISION_WINDOW_INSUFFICIENT`, retry 4–21. The retry
+loop then burned each decision window against streams that did not exist.
+
+`leader20_collector_health()` reads the heartbeat the collector already writes (75s threshold —
+the worker itself abandons a control response older than 90s). `runEntryBatch` asks it first: when
+the transport is gone it records `COLLECTOR_DOWN` with the heartbeat age and returns, with **no
+capture read, no batch claim and no provider spend**. `leader20_clock_slot_report.capture_state`
+now separates the three cases that were indistinguishable — transport gone, capture incomplete,
+no account room — and `final_after_expiry` counts the fills the 120s window lost, a number to
+drive to zero by finishing sooner, never by widening the window.
+
+## Still open
+
+* **The collector process itself.** `leader20_collector_health()` makes the outage loud and stops
+  the waste, but it cannot start a Fly machine. That needs `top20-book-bootstrap.yml` (collector
+  only) or a manual restart; the DB is ready — lease free, `enabled=true`.
+* **Reserve and fan-out width.** `decision_reserve_ms` is 80,000 (derived from a two-slot p95 of
+  66,835ms) and the clock fan-out width is 4. With the measurements above both are now tunable on
+  evidence: `epoch_publish_lag_ms`, `decision_total_latency_ms` and `final_after_expiry` are the
+  three numbers to watch before changing either.
