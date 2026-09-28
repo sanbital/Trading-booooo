@@ -1,0 +1,23 @@
+{
+  "source_review": "bed1dcafcd10a21d174983435a63db04d019f8e3cf646555f44f20eeb6509ba3",
+  "call_key": "0a080ac79ec418fec1c51c30f3585763969631bedf58733e532cd26790b321cc",
+  "owner": "00000000-0000-4000-8000-000000000001",
+  "provider": "openai",
+  "model": "gpt-5.4-mini-2026-03-17",
+  "purpose": "RECHECK",
+  "reserved_usd": 0.0577395,
+  "observed_first": {
+    "error": "API_TIMEOUT",
+    "http_status": 200,
+    "request_id": "req_302baf9fdfb14e15837cbeab096143a7",
+    "usage": null
+  },
+  "observed_ledger": {
+    "state": "UNKNOWN",
+    "actual_usd": null,
+    "input_tokens": null,
+    "output_tokens": null,
+    "request_id": null
+  },
+  "original_transition_definition": "CREATE OR REPLACE FUNCTION public.ai_call_transition(p_key text, p_owner uuid, p_state text, p_usage jsonb DEFAULT NULL::jsonb, p_request_id text DEFAULT NULL::text, p_latency_ms bigint DEFAULT NULL::bigint, p_error text DEFAULT NULL::text)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\ndeclare j public.ai_call_ledger%rowtype; cost numeric; i bigint; o bigint; c bigint;\n parent_state text; parent_kind text; deadline_ms numeric;\nbegin\n if p_state in ('DISPATCHED','SETTLED','CANCELLED') then\n  perform pg_advisory_xact_lock(20260928,51); end if;\n select * into j from public.ai_call_ledger where call_key=p_key for update;\n if not found or j.owner<>p_owner then raise exception 'API_CALL_OWNER'; end if;\n if j.state=p_state and p_state in ('SETTLED','CANCELLED','UNKNOWN') then\n  return jsonb_build_object('state',j.state,'duplicate',true); end if;\n if p_state='DISPATCHED' and j.state='RESERVED' then\n  select state,record->>'kind',case when jsonb_typeof(record->'expires_at_ms')='number'\n    then (record->>'expires_at_ms')::numeric end into parent_state,parent_kind,deadline_ms\n  from public.gpt_final_entry_reviews where job_key=j.parent_key;\n  if found and (parent_state<>'RUNNING' or\n    (deadline_ms is null and (parent_kind is null or parent_kind not in (\n      'FD1_FINAL_RECHECK','FD1_HOLD','FD1_HOLD_EMERGENCY',\n      'FD1_HOLD_PROBE','STORED_DYNAMIC_REPLAY','DS_HOLD_SHADOW',\n      'TOP10_BATCH_AUDIT','TOP10_PAIRED_FROZEN_GPT'))) or\n    (deadline_ms is not null and deadline_ms<=extract(epoch from clock_timestamp())*1000)) then\n   raise exception 'API_PARENT_EXPIRED_OR_TERMINAL';\n  end if;\n  update public.ai_call_ledger set state=p_state where call_key=p_key;\n elsif p_state='CANCELLED' and j.state='RESERVED' then\n  update public.ai_call_ledger set state=p_state,actual_usd=0,settled_at=clock_timestamp() where call_key=p_key;\n elsif p_state='UNKNOWN' and j.state='DISPATCHED' then\n  update public.ai_call_ledger set state=p_state,error=p_error where call_key=p_key;\n elsif p_state='SETTLED' and j.state in ('DISPATCHED','UNKNOWN') then\n  i:=(p_usage->>'input_tokens')::bigint;o:=(p_usage->>'output_tokens')::bigint;\n  c:=coalesce((p_usage->>'cached_input_tokens')::bigint,0);\n  if i is null or o is null or i<0 or o<0 or c<0 or c>i then raise exception 'API_USAGE_INVALID'; end if;\n  cost:=case when j.provider='deepseek' then ((i-c)*.3+c*.006+o*1.2)/1000000\n   else ((i-c)*.75+c*.075+o*4.5)/1000000 end;\n  update public.ai_call_ledger set state=p_state,actual_usd=cost,input_tokens=i,output_tokens=o,cached_input_tokens=c,\n   request_id=p_request_id,cost_basis='TOKEN_RATE_PEAK_NOT_INVOICE',latency_ms=p_latency_ms,\n   settled_at=clock_timestamp(),error=case when cost>reserved_usd then 'RESERVATION_EXCEEDED' else p_error end\n   where call_key=p_key;\n else raise exception 'API_CALL_TRANSITION';\n end if;\n return jsonb_build_object('state',p_state,'cost_usd',cost);\nend $function$\n"
+}
