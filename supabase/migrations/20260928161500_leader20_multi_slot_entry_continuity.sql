@@ -85,12 +85,9 @@ alter table public.leader20_entry_reservations enable row level security;
 revoke all on public.leader20_entry_reservations from public,anon,authenticated;
 grant select on public.leader20_entry_reservations to service_role;
 
--- A live reservation is one that has not been settled and has not run out of time. Capacity
--- reads this predicate WITHOUT writing, so a lost settlement can never block the account
--- past its own deadline, and capacity stays usable from a read-only session.
-create or replace function public.leader20_entry_reservation_live() returns text
- language sql immutable set search_path='' as $$ select 'RESERVED,ORDER_PENDING' $$;
-
+-- A reservation is LIVE while its state is RESERVED or ORDER_PENDING and its own deadline has
+-- not passed. Capacity reads that predicate WITHOUT writing, so a lost settlement can never
+-- block the account past that deadline, and capacity stays callable from a read-only session.
 -- Record the reservation lifecycle from the order/signal journal. Idempotent, and never
 -- required for correctness: expiry alone already releases capacity.
 create or replace function public.leader20_entry_reservation_sweep() returns jsonb
@@ -108,11 +105,13 @@ begin
   where r.state in ('RESERVED','ORDER_PENDING') and r.signal_id is not null
   group by r.id
  )
+ -- An order state this function does not recognise leaves the reservation alone: it then
+ -- falls away at its own deadline rather than freeing a slot on an unknown outcome.
  update public.leader20_entry_reservations r
   set state=case when o.filled then 'FILLED' when o.live then 'ORDER_PENDING' else 'RELEASED' end,
    reason=case when o.filled then 'ORDER_FILLED' when o.live then 'ORDER_DISPATCHED' else 'ORDER_NOT_FILLED' end,
    settled_at=case when o.live then r.settled_at else clock_timestamp() end,updated_at=clock_timestamp()
-  from o where o.id=r.id
+  from o where o.id=r.id and (o.filled or o.live or o.dead)
    and r.state is distinct from case when o.filled then 'FILLED' when o.live then 'ORDER_PENDING' else 'RELEASED' end;
  get diagnostics settled=row_count;
  -- A candidate the executor refused outright frees its slot at once.
@@ -285,12 +284,12 @@ begin
  return jsonb_build_object('settled',r.id is not null,'state',coalesce(r.state,p_state));
 end $$;
 
-revoke all on function public.leader20_entry_slot_policy(),public.leader20_entry_reservation_live(),
+revoke all on function public.leader20_entry_slot_policy(),
  public.leader20_entry_reservation_sweep(),public.leader20_batch_capacity(),
  public.leader20_reserve_entry_slot(text,bigint,uuid,timestamptz),
  public.leader20_bind_entry_reservation(uuid,uuid),
  public.leader20_settle_entry_reservation(uuid,text,text) from public,anon,authenticated;
-grant execute on function public.leader20_entry_slot_policy(),public.leader20_entry_reservation_live(),
+grant execute on function public.leader20_entry_slot_policy(),
  public.leader20_entry_reservation_sweep(),public.leader20_batch_capacity(),
  public.leader20_reserve_entry_slot(text,bigint,uuid,timestamptz),
  public.leader20_bind_entry_reservation(uuid,uuid),
