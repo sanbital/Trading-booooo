@@ -3,6 +3,10 @@ import {buildBatch,callBatch} from './batch.mjs';
 import {paidTransport} from './paid-transport.mjs';
 import {hash} from '../gpt-final-decision/snapshot-hash.mjs';
 
+// Leave the final minute for DeepSeek, GPT and execution. The frozen slot's
+// absolute 120-second expiry is unchanged; delivery jitter must not lose it at 30s.
+export const CLOCK_BATCH_ADMISSION_MS=60000;
+
 // Closed one-minute candles supply current 1m/5m momentum. The source close
 // timestamp travels with the evidence; missing candles remain explicitly unknown.
 export async function batchMomentum(symbol,at,fetchFn=fetch){
@@ -38,7 +42,7 @@ export async function finishEntryBatch(db,batch,result,{sleep=ms=>new Promise(re
 export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,apiKey=globalThis.Deno?.env?.get('deepseek api')}={}){
  if(ctl.clock_capture_enabled){
   const phase=now()-slotFloor(now());
-  if(phase<1000||phase>=30000)return {created:false,reason:'CLOCK_BATCH_NOT_DUE'};
+  if(phase<1000||phase>=CLOCK_BATCH_ADMISSION_MS)return {created:false,reason:'CLOCK_BATCH_NOT_DUE'};
   const current=await batchControl(db);
   if(Date.parse(current.last_periodic_slot)>=slotFloor(now()))return {created:false,reason:'NOT_DUE'};
  }
