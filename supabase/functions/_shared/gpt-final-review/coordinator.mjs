@@ -175,11 +175,13 @@ export class FinalReviewCoordinator {
     }catch{return deny('GPT_REVIEW_STORAGE_OR_VALIDATION_ERROR');}
   }
   async work(key,owner,record){
+    let preparationStage='TRANSPORT';
     try{
       const fetchFn=this.store.transport?await this.store.transport(key,record,this.fetchFn):this.fetchFn;
       const deadlineMs=record.expires_at_ms-LIMITS.executionReserveMs;
       ensure(this.now()<deadlineMs,'REVIEW_TRIGGER_EXPIRED');
       let captured;
+      preparationStage='CAPTURE';
       if(this.engine){const prep=await this.engine.prepare(record.identity,{fetchFn:this.fetchFn,now:this.now,deadlineMs,
         afterEndMs:record.after_capture_end_ms??record.timeout_recovery?.after_end_ms??-Infinity});record.packet=prep.packet;captured=prep.captured;}
       else{const current=await this.market(record.identity,{fetchFn:this.fetchFn,now:this.now,deadlineMs});
@@ -190,12 +192,15 @@ export class FinalReviewCoordinator {
       ensure(capture?.reason!=='INFERENCE_CAPTURE_NOT_READY','DYNAMIC_INFERENCE_CAPTURE_NOT_READY');
       if(afterEnd!=null)ensure(capture?.end_ms>afterEnd,'RETRY_CAPTURE_NOT_ADVANCED');
       // Snapshot persistence before the paid request; failures cannot lead to an unrecorded PASS.
+      preparationStage='SNAPSHOT';
       if(this.store.snapshot)await this.store.snapshot(key,owner,record);
+      preparationStage='DEADLINE';
       ensure(this.now()<record.valid_until_ms,'REVIEW_TRIGGER_EXPIRED');
       const analysisDeadline=this.engine?.analysisDeadline?this.engine.analysisDeadline(record.packet,
         {now:this.now(),executionDeadline:deadlineMs,ordinaryDeadline:record.valid_until_ms}):record.valid_until_ms;
       ensure(Number.isFinite(analysisDeadline)&&analysisDeadline>this.now(),'REVIEW_RECHECK_ROOM_REQUIRED');
       record.analysis_deadline_ms=analysisDeadline;
+      preparationStage='MODEL';
       record.result=this.engine?await this.engine.call(record.packet,{apiKey:this.apiKey(),fetchFn,now:this.now,deadlineMs:analysisDeadline,identity:record.identity}):
         await callFinalReviewer(record.packet,{apiKey:this.apiKey(),fetchFn,now:this.now,
         deadlineMs:record.valid_until_ms,profile:this.profile});
@@ -207,6 +212,7 @@ export class FinalReviewCoordinator {
     }catch(e){
       const error=['RETRY_CAPTURE_NOT_ADVANCED','DYNAMIC_INFERENCE_CAPTURE_NOT_READY','REVIEW_TRIGGER_EXPIRED','REVIEW_RECHECK_ROOM_REQUIRED'].includes(e?.message)?e.message:'REVIEW_PREPARATION_FAILED';
       record.result={origin:'LOCAL_DATA_ERROR',valid:false,decision:'ABSTAIN',error,
+        preparation_stage:preparationStage,preparation_error_code:/^[A-Z][A-Z0-9_]{1,100}$/.test(e?.message??'')?e.message:(e?.name??'Error'),
         attempted:false,api_cost_usd:0,completed_at_ms:this.now(),model_requested:MODEL,wire_profile:this.profile};
     }
     await this.store.complete(key,owner,record);

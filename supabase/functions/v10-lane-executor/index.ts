@@ -2423,7 +2423,6 @@ const openSymbols=new Set(openNow.map(x=>String(x.symbol).toUpperCase())),closed
   quarantinedSymbols=typeof pair==="undefined"?new Set():new Set((pair.quarantines??[]).map(x=>String(x.symbol).toUpperCase())),eligible=signalRows.filter(x=>!openSymbols.has(String(x.symbol).toUpperCase())),
   ranked=eligible.filter(x=>!closedProtectionSymbols.has(String(x.symbol).toUpperCase())&&!quarantinedSymbols.has(String(x.symbol).toUpperCase()))
     .sort((a,b)=>Date.parse(b.entry_bar_at)-Date.parse(a.entry_bar_at)||N(rec(a.features).rank,999)-N(rec(b.features).rank,999));
-if(leader20Control.active_strategy==='LEADER20_DYNAMIC_1')ranked.sort((a,b)=>Date.parse(a.entry_bar_at)-Date.parse(b.entry_bar_at)||N(rec(a.features).rank,999)-N(rec(b.features).rank,999));
 // One symbol never occupies more than one place in the queue. The list is already
 // freshest-bar-first, so the first row for a symbol is its freshest candidate and
 // every later one is superseded. Retiring them terminally (rather than leaving them
@@ -2435,6 +2434,8 @@ for(const row of ranked){
   if(seenSymbols.has(key)){superseded.push(row);continue}
   seenSymbols.add(key);queue.push(row);
 }
+// Fairness applies across symbols only, after retaining each symbol's newest packet.
+if(leader20Control.active_strategy==='LEADER20_DYNAMIC_1')queue.sort((a,b)=>Date.parse(a.entry_bar_at)-Date.parse(b.entry_bar_at)||N(rec(a.features).rank,999)-N(rec(b.features).rank,999));
 for(const row of superseded)
   await db.from("v11_long_regime_signals").update({status:"REJECTED",
     reject_reason:`SUPERSEDED_BY_FRESHER_SIGNAL:${String(row.symbol).toUpperCase()}`,

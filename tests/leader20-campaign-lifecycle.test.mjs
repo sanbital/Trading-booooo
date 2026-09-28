@@ -35,6 +35,7 @@ test('real PostgreSQL: fixed periodic clock, fresh candidates, WAIT continuity, 
  `);
  await db.exec(await read('test-support/leader20-production-baseline.sql'));
  await db.exec(await read('supabase/migrations/20260928032022_leader20_campaign_execution_lifecycle.sql'));
+ await db.exec(await read('supabase/migrations/20260928034100_leader20_transient_capacity_pause.sql'));
  await db.exec(`create trigger campaign_review after update of state on gpt_final_entry_reviews
   for each row when(new.state='DONE' and old.state is distinct from new.state) execute function leader20_record_review();
  update leader20_batch_control set enabled=true,release_receipt='{"budget_verified":true,"recall_verified":true,"concurrency_verified":true,"protection_verified":true}';
@@ -74,6 +75,18 @@ test('real PostgreSQL: fixed periodic clock, fresh candidates, WAIT continuity, 
  });
  const features=()=>({referenceClose:2,execution_snapshot:{complete:true,causal:true,bucket_count:24,end_ms:Date.now()-500,
   start_ms:Date.now()-120500,captured_at_ms:Date.now(),trajectory_hash:'fresh-capture'}});
+ await t.test('transient incomplete/future account snapshots pause without retiring reviews or fabricating a slot release',async()=>{
+  const before=(await q('select last_slots,next_periodic_at from leader20_batch_control'))[0];
+  for(const future of [false,true]){
+   await q(`update trading_account_snapshots set positions_complete=$1,captured_at=clock_timestamp()+$2::interval`,[future,future?'5 seconds':'0 seconds']);
+   assert.equal((await rpc('leader20_batch_note_full')).available,0);
+   assert.equal((await rpc('leader20_batch_claim',[packet('unavailable'),'unavailable',true])).created,false);
+   assert.deepEqual((await q('select last_slots,next_periodic_at from leader20_batch_control'))[0],before);
+   assert.equal((await q("select count(*)::int n from leader20_review_events where state='REQUESTED'"))[0].n,10);
+  }
+  await q('update trading_account_snapshots set positions_complete=true,captured_at=clock_timestamp()');
+  assert.equal((await q('select count(*)::int n from net.requests'))[0].n,0);
+ });
  await t.test('materialization requires a fresh capture and writes NEW identity/timestamps',async()=>{
   firstEvent=(await q("select * from leader20_review_events where symbol='C0USDT'"))[0];
   const stale=features();stale.execution_snapshot.end_ms-=600000;
@@ -112,6 +125,17 @@ test('real PostgreSQL: fixed periodic clock, fresh candidates, WAIT continuity, 
   await q("update trading_account_snapshots set available_quote=0");
   assert.equal((await rpc('leader20_batch_claim',[packet('full'),'full',true])).created,false);
  });
+});
+
+test('executor keeps the newest candidate per symbol before campaign queue fairness ordering',async()=>{
+ const source=await read('supabase/functions/v10-lane-executor/index.ts');
+ const block=source.slice(source.indexOf('const openSymbols=new Set(openNow.map'),source.indexOf('if(!queue.length)entry='));
+ const retired=[];const db={from:()=>({update:patch=>({eq:()=>({eq:async(_,status)=>retired.push(patch)})})})};
+ const run=new Function('signalRows','db',`return (async()=>{const openNow=[],blockedSymbols=new Set(),pair={},leader20Control={active_strategy:'LEADER20_DYNAMIC_1'},rec=x=>x??{},N=(x,f)=>Number.isFinite(Number(x))?Number(x):f;${block};return {queue,superseded};})()`);
+ const row=(id,symbol,seconds)=>({id,symbol,entry_bar_at:new Date(1800000000000+seconds*1000).toISOString(),features:{rank:1}});
+ const result=await run([row('old','ONEUSDT',0),row('new','ONEUSDT',25),row('other','SOONUSDT',20)],db);
+ assert.deepEqual(result.queue.map(x=>x.id),['other','new']);
+ assert.deepEqual(result.superseded.map(x=>x.id),['old']);assert.equal(retired.length,1);
 });
 
 test('missing capture pauses and recovers within a bounded window without synthesizing buckets',async()=>{
