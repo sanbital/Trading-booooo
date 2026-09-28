@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {rawCapture} from '../test-support/dynamic-fixtures.mjs';
+import {rawCapture,dynamicWire} from '../test-support/dynamic-fixtures.mjs';
 import {CLOCK_VERSION,clockCaptureValid,sameClockCapture} from '../supabase/functions/_shared/leader20/clock.mjs';
 import {captureDisposition} from '../collectors/doa-capture/clock.mjs';
 import {validateCapture120,captureForInference} from '../supabase/functions/_shared/gpt-final-decision/capture-context.mjs';
@@ -11,6 +11,7 @@ import {runEntryBatch} from '../supabase/functions/_shared/leader20/batch-runtim
 import {runFinalRecheck,preDispatchSnapshot,detectChange,recheckAllows} from '../supabase/functions/_shared/gpt-final-decision/recheck.mjs';
 import {MemoryReviewStore} from '../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
 import {src} from '../development/gpt-final-decision/tests/fixtures.mjs';
+import {dualEntryDecision} from '../supabase/functions/_shared/gpt-final-decision/dual.mjs';
 const slot=Date.parse('2026-09-28T08:50:00+09:00');
 const fixed=()=>({...rawCapture(slot+200),entry_window:{version:CLOCK_VERSION,slot_ms:slot,expires_at_ms:slot+120000}});
 
@@ -76,11 +77,19 @@ test('actual FINAL RECHECK accepts the identical clock path with a new quote and
   const result=await runFinalRecheck({signal:{id:decision,symbol:'C0USDT',features:{referenceClose:1,leader20}},ticket,preDispatch,
    detection:detectChange(ticket.initial,preDispatch),store:new MemoryReviewStore(),
    config:{mode:'ENFORCE',modeValid:true,enforceApproved:true,approvalRef:'fixture',apiBudgetUsd:100,maxCalls:100},apiKey:'offline',now:()=>at,
-   readFresh:async()=>({src:{...src(at),captureContext:c},errors:{}}),review:async packet=>{
-    calls++;assert.deepEqual(packet.facts.capture_context.trajectory,c.trajectory);
-    assert.equal(packet.current_ref.at,at);return {valid:true,decision,attempted:true,completed_at_ms:at};
-   }});
-  assert.equal(result.valid,true,JSON.stringify(result));assert.equal(calls,1);
+   readFresh:async()=>({src:{...src(at),captureContext:c},errors:{}}),
+   review:async(packet,options)=>dualEntryDecision(packet,{...options,fetchFn:async()=>{throw Error('offline');},
+    counterCall:async()=>({valid:false,attempted:false,error:'FIXTURE_UNAVAILABLE'}),gptCall:async(p,o)=>{
+     assert.ok(o.timeoutMs>0);const input=JSON.parse(o.payloadFn(p).input[1].content);
+     if(!input.independent_reviews)return {valid:false,attempted:false,error:'FIXTURE_FIRST'};
+     calls++;assert.deepEqual(p.facts.capture_context.trajectory,c.trajectory);assert.equal(p.current_ref.at,at);
+     const wire={...dynamicWire({t:'RECHECK',c:p.candidate_id,d:decision,reasons:decision==='SKIP'?[{r:'GPT_JUDGMENT',e:['return_5m']}]:[],support:decision==='BUY'?['return_5m']:[],n:'Observed flow'},p),
+      action:decision==='BUY'?'ENTER':'DEFER',pressure_state:'MIXED',decision_reason:'Boundary evidence assessed',counter_evidence:[],
+      thesis_invalidation:'Demand fails',next_review_conditions:'Next clock window',
+      arbitration:{considered:[],adopted:[],rejected:[],supporting:[],opposing:[],reason:'Independent judgment'}};
+     return {valid:true,wire,answer:wire,decision,attempted:true,completed_at_ms:at};
+    }})});
+  assert.equal(result.valid,true,JSON.stringify({error:result.error,decision:result.decision}));assert.equal(calls,1);
   assert.equal(recheckAllows(result,at),decision==='BUY');
  }
 });
