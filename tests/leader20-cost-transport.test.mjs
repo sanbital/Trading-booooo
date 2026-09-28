@@ -29,8 +29,8 @@ test('monthly hold profile spends on changed risk, not unchanged two-minute poll
  assert.equal(nextEvent(st,{...args,now:at+120000},MONTHLY_HOLD_POLICY).event,null);
  assert.equal(nextEvent(st,{...args,now:at+21600000},MONTHLY_HOLD_POLICY).event,'DYNAMIC_PERIODIC_REVIEW');
  const urgent={event:'BID_DEPTH_COLLAPSE',evidenceKey:'changed'};
- assert.equal(nextEvent(st,{...args,now:at+59999,dynamics:urgent},MONTHLY_HOLD_POLICY).event,null);
- assert.equal(nextEvent(st,{...args,now:at+60000,dynamics:urgent},MONTHLY_HOLD_POLICY).event,'BID_DEPTH_COLLAPSE');
+ assert.equal(nextEvent(st,{...args,now:at+4999,dynamics:urgent},MONTHLY_HOLD_POLICY).event,null);
+ assert.equal(nextEvent(st,{...args,now:at+5000,dynamics:urgent},MONTHLY_HOLD_POLICY).event,'BID_DEPTH_COLLAPSE');
  assert.equal(nextEvent(st,{...args,now:at+60000,dynamics:{event:'DATA_DEGRADED',evidenceKey:'changed'}},MONTHLY_HOLD_POLICY).event,null);
 });
 test('economy wire preserves the frozen market and complete ordered path for both preliminary reviewers',async()=>{

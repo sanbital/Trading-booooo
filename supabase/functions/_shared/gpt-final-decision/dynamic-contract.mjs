@@ -9,6 +9,8 @@ export const DYNAMIC_EVIDENCE_FIELDS = Object.freeze(['return','velocity_bps_s',
   'buy_share','flow_acceleration','bid_liquidity_change','ask_liquidity_change','imbalance','spread','trade_count',
   'high_renewal_slowdown','drawdown_from_sampled_peak','recovery_velocity_bps_s','arrival_rate_slope']);
 export const DYNAMIC_PROMPT = HORIZON_TIME_NOTE+`
+Evidence priority: full ordered 24x5s path and 5/15/30/60/120s trajectory, taker flow, book/spread/liquidity, position behavior, derivatives/BTC, then technical indicators and candle shape. Technical values are optional advisory evidence, never gates.
+ENTRY: never BUY on a strong final 5 seconds alone. Check 15/30/60/120s consistency, distance from peak, upper/lower wick, RSI/Stochastic state, Bollinger position, EMA alignment, taker flow, book support and participation. Distinguish continuation from exhaustion when 120s is negative but 5s spikes.
 STRUCTURAL STRENGTH and CURRENT PROPULSION are separate questions. Structural trend alone never justifies BUY or HOLD.
 Read the ordered 5s, 15s, 30s, 60s, 120s horizons and price, flow, book, participation together.
 dynamic_evidence and dynamic_risks contain ONLY exact numeric dot paths from their schema enum, never prose or values.

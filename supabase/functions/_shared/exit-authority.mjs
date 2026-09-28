@@ -1,3 +1,4 @@
+import {emergencyProtection} from './gpt-final-decision/emergency-protection.mjs';
 /** Explicit economic authority. Policy calculators remain evidence generators. No IO. */
 export const EXIT_AUTHORITY_VERSION='AI_EXIT_AUTHORITY_2';
 /** Protection arbitration: the deterministic engine proposes a protection level, the AI
@@ -7,7 +8,7 @@ export const PROTECTION_ARBITRATION_VERSION='AI_PROTECTION_ARBITRATION_1';
 export const PROTECTION_ACTIONS=Object.freeze(['HOLD','RAISE_PROTECTION','EXIT']);
 /** RAISE_PROTECTION as it is named in the existing FD1 HOLD decision contract. */
 export const RAISE_PROTECTION_DECISION='PROTECT';
-export const EXIT_CLASS=Object.freeze({HARD_SAFETY:'HARD_SAFETY',SOFT_PROTECTION:'SOFT_PROTECTION',AI_STRATEGIC:'AI_STRATEGIC'});
+export const EXIT_CLASS=Object.freeze({HARD_SAFETY:'HARD_SAFETY',SOFT_PROTECTION:'SOFT_PROTECTION',AI_STRATEGIC:'AI_STRATEGIC',EMERGENCY_PROTECTION:'EMERGENCY_PROTECTION'});
 const H=EXIT_CLASS.HARD_SAFETY,S=EXIT_CLASS.SOFT_PROTECTION,A=EXIT_CLASS.AI_STRATEGIC;
 export const EXIT_REASONS=Object.freeze({
  NATIVE_HARD_STOP:H,V17_HARD_STOP:H,R5_RISK_CUT:H,V17_RISK_CUT:H,RISK_CUT:H,V17_NATIVE_STOP:H,
@@ -19,7 +20,7 @@ export const EXIT_REASONS=Object.freeze({
  V17_PROFIT_LOCK:S,V17_COST_BREAKEVEN:S,V17_MOMENTUM_STALE:S,V17_MAX_HOLD:S,
  QV3_TWO_BEARISH_CLOSED:S,BULL_TRAIL_PROTECTION:S,BULL_T1:S,
  REGIME_BULL_TO_RANGE_REALIZE:S,REGIME_BULL_TO_BEAR_REALIZE:S,AI_PROTECT_LEVEL:S,
- FD1_GPT_EXIT:A,FD1_DEEPSEEK_EXIT:A,
+ FD1_GPT_EXIT:A,FD1_DEEPSEEK_EXIT:A,THESIS_REVIEW_PROTECTION:S,EMERGENCY_THESIS_PROTECTION:S,EMERGENCY_EXIT_THESIS_FAILURE:EXIT_CLASS.EMERGENCY_PROTECTION,
 });
 export function exitClass(reason){if(!Object.hasOwn(EXIT_REASONS,reason))throw Error('UNCLASSIFIED_EXIT_REASON:'+reason);return EXIT_REASONS[reason];}
 const finite=x=>Number.isFinite(Number(x)),ceil=(x,t)=>t>0?Math.ceil(x/t-1e-10)*t:x;
@@ -116,14 +117,14 @@ export function approvedProtection(p,hard,bid,{aiApproved=null,aiReason=null,res
  if(!old&&Number(p.hard_stop_price)>=entry)take(p.hard_stop_price,meta.p142State?.stage,'LEGACY_PROFIT_STOP');
  const standing=level,requested=Number(aiApproved);
  // 3. This tick's reviewer approval. It may only ever raise.
- take(aiApproved,aiReason,'AI_APPROVED');
- const ignoredRequest=Number.isFinite(requested)&&requested>0&&source!=='AI_APPROVED'?
+ take(aiApproved,aiReason,aiReason==='EMERGENCY_THESIS_PROTECTION'?'DETERMINISTIC_EMERGENCY':'AI_APPROVED');
+ const ignoredRequest=Number.isFinite(requested)&&requested>0&&!['AI_APPROVED','DETERMINISTIC_EMERGENCY'].includes(source)?
    {requestedLevel:requested,requestedReason:aiReason??null,standingLevel:standing||null,
     verdict:requested<standing-eps?'BELOW_APPROVED_IGNORED':'EQUAL_TO_APPROVED_NO_OP'}:null;
  const candidateLevel=Number(candidate)>0?Number(candidate):null;
  const base={exitClass:EXIT_CLASS.SOFT_PROTECTION,candidateLevel,ignoredRequest,
    candidateAboveApproved:candidateLevel!==null&&candidateLevel>level+eps,
-   raised:source==='AI_APPROVED'&&level>Math.max(standing,hardFloor)+eps};
+   raised:['AI_APPROVED','DETERMINISTIC_EMERGENCY'].includes(source)&&level>Math.max(standing,hardFloor)+eps};
  // Below the hard floor there is nothing to add: hard safety already protects that level.
  if(!(level>hardFloor+eps))
    return {...base,level:null,reason:null,source:null,active:false,crossed:false,key:null,
@@ -142,6 +143,14 @@ export function legacySoftOrders(p,hard){
 }
 export function assertExitAuthority(reason,p,approval,now=Date.now()){
  const kind=exitClass(reason),generation=positionGeneration(p);
+ if(kind===EXIT_CLASS.EMERGENCY_PROTECTION){
+   if(approval?.authority!=='DETERMINISTIC_TECHNICAL_PROTECTION'||approval.valid!==true||approval.positionId!==String(p.id)||approval.generation!==generation||
+      !Number.isSafeInteger(approval.observedAt)||approval.observedAt>now||now-approval.observedAt>5000||p.state!=='OPEN'||!(Number(p.remaining_quantity)>0))throw Error('EMERGENCY_PROOF_REQUIRED');
+   if(approval.capture?.position_id&&approval.capture.position_id!==String(p.id)||!Number.isSafeInteger(approval.technicalFailure?.at)||approval.technicalFailure.at>now)throw Error('EMERGENCY_PROOF_INVALID');
+   const check=emergencyProtection({...approval,now});
+   if(check?.action!=='EMERGENCY_EXIT_THESIS_FAILURE'||check.level!==approval.level)throw Error('EMERGENCY_PROOF_INVALID');
+   return kind;
+ }
  if(kind===H)return kind;
  if(kind===S){
    if(approval?.authority!=='RESIDENT_PROTECTION'||approval?.valid!==true||

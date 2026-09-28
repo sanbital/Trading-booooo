@@ -1,3 +1,6 @@
+import {readSources} from './market.mjs';
+import {bars} from './facts.mjs';
+import {technicalFacts} from './technical.mjs';
 /** Order-free current-policy replay using ONLY a stored decision-time packet.
  * No Binance reads, outcome columns, synthetic buckets or trading table writes. */
 import {hash} from './api.mjs';
@@ -20,7 +23,7 @@ export async function prepareStoredReplay(record){
  packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
  return {packet,at,safety};
 }
-export async function storedDynamicReplay(db,{sourceJobKey,runId,apiKey,deepseekKey,fetchFn=fetch}){
+export async function storedDynamicReplay(db,{sourceJobKey,runId,apiKey,deepseekKey,fetchFn=fetch,includeTechnicals=false}){
  if(!/^[a-f0-9]{64}$/.test(sourceJobKey))throw Error('REPLAY_JOB_KEY');
  const source=await db.from('gpt_final_entry_reviews').select('record,purpose,created_at,signal_id').eq('job_key',sourceJobKey).maybeSingle();
  if(source.error||source.data?.purpose!=='PRODUCTION')throw Error('REPLAY_SOURCE_NOT_PRODUCTION');
@@ -32,7 +35,15 @@ export async function storedDynamicReplay(db,{sourceJobKey,runId,apiKey,deepseek
   if(entry)selected.initial={...selected.initial,capture_context:entry.record.packet.facts.capture_context??null};
  }
  const {packet,at,safety}=await prepareStoredReplay(source.data.record);
- const key=await hash({version:'DYNAMIC_CONTINUITY_REPLAY_2',sourceJobKey,runId});
+ let technicalAudit=null;
+ if(includeTechnicals){
+   const {src,errors}=await readSources(packet.symbol,at,{mode:'REPLAY',fetchFn,ms:2500});
+   const extra=technicalFacts(bars(src.one??[],60000,at),bars(src.five??[],300000,at));
+   packet.facts={...packet.facts,values:{...packet.facts.values,...extra.values},missing:{...packet.facts.missing,...extra.missing},technical_context:extra.context};
+   packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
+   technicalAudit={source:'HISTORICAL_COMPLETED_CANDLES',cutoff_ms:at,values:extra.values,missing:extra.missing,errors};
+ }
+ const key=await hash({version:'DYNAMIC_CONTINUITY_REPLAY_2',sourceJobKey,runId,includeTechnicals});
  const store=new SupabaseReviewStore(db),config=configFromControl(await readReviewControl(db),k=>globalThis.Deno?.env?.get(k)??'');
  const record={version:'DYNAMIC_CONTINUITY_REPLAY_2',kind:'STORED_DYNAMIC_REPLAY',purpose:'DRYRUN',
   identity:{symbol:packet.symbol,source_job_key:sourceJobKey},source_commit:'DYNAMIC_CONTINUITY_2',api_approval_ref:config.approvalRef,
@@ -45,9 +56,9 @@ export async function storedDynamicReplay(db,{sourceJobKey,runId,apiKey,deepseek
   policy:baselinePolicy(),reviewTier:packet.task==='HOLD'?'FAST':'FULL',
   ...(packet.task==='RECHECK'?{inputPayload:recheckPayload,validate:validateRecheck}:{})});
  await store.complete(key,claimed.row.owner,{...record,result:{...result,final_packet:undefined},
-  replay_limitations:{historical_clock:true,current_prompt:true,outcomes_excluded:true,
+  technical_audit:technicalAudit,replay_limitations:{historical_clock:true,current_prompt:true,outcomes_excluded:true,
     emergency_packet_reconstructed:false,trajectory_available:safety.ok,original_data_unchanged:true}});
  return {orderCalls:0,jobKey:key,sourceJobKey,task:packet.task,symbol:packet.symbol,captureSafety:safety,
-  decision:result.decision,valid:result.valid,error:result.error,latency_ms:result.latency_ms,
+  technical_audit:technicalAudit,decision:result.decision,valid:result.valid,error:result.error,latency_ms:result.latency_ms,
   audit:result.dynamic_audit,answer:result.answer,missing_history:!safety.ok};
 }

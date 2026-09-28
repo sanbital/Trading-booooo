@@ -24,7 +24,7 @@ export function validateLeaderDecision(wire,packet,read) {
   const expected = ({BUY:'ENTER',WAIT:'DEFER',SKIP:'DEFER',ABSTAIN:'DEFER',HOLD:'HOLD',PROTECT:'PROTECT',EXIT:'EXIT'})[wire.d];
   if (wire.action !== expected) throw Error('FD_LEADER20_ACTION_MISMATCH');
   for (const p of wire.counter_evidence) if (read(p) === null) throw Error('FD_LEADER20_COUNTER_EVIDENCE_INVALID');
-  if (wire.d !== 'ABSTAIN' && !(wire.dynamic_evidence?.length || wire.dynamic_risks?.length || wire.counter_evidence.length))
+  if (wire.d !== 'ABSTAIN' && !(wire.dynamic_evidence?.length || wire.dynamic_risks?.length || wire.counter_evidence.length || packet.task==='HOLD'&&packet.facts?.capture_context?.status!=='AVAILABLE'&&(wire.support?.length||wire.reasons?.some(x=>x.e?.length))))
     throw Error('FD_LEADER20_EVIDENCE_REQUIRED');
   return {decision_contract:LEADER20_DECISION_VERSION,...Object.fromEntries(Object.keys(leaderProperties(packet)).map(k=>[k,wire[k]]))};
 }

@@ -3010,9 +3010,9 @@ async function manageLeader(db,p,ctx){
     details.fd1={reason:fd1.reason??null,close:fd1.close===true,fallback:fd1.fallback===true,timeCandidate,
       last:fd1.state?.last??null,pending:fd1.state?.pending?.event??null,residentProtection,
       protectApproval:fd1.protectApproval??null};
-    if(fd1.close&&["FD1_GPT_EXIT","FD1_DEEPSEEK_EXIT"].includes(fd1.reason)){
+    if(fd1.close&&["FD1_GPT_EXIT","FD1_DEEPSEEK_EXIT","EMERGENCY_EXIT_THESIS_FAILURE"].includes(fd1.reason)){
       assertExitAuthority(fd1.reason,p,fd1.approval,Date.now());
-      state.action="CLOSE";state.reason=fd1.reason;state.exitClass=EXIT_CLASS.AI_STRATEGIC;ctx={...ctx,finalApproval:fd1.approval};
+      state.action="CLOSE";state.reason=fd1.reason;state.exitClass=exitClass(fd1.reason);ctx={...ctx,finalApproval:fd1.approval};
     }
     details.action=state.action;details.reason=state.reason;
   }else{
@@ -3339,7 +3339,7 @@ Deno.serve(async req=>{
     }
     if(mode==="ops-readiness")return res(200,await opsReadiness(db));
     if(mode==="fd1-stored-dynamic-replay")return res(200,await storedDynamicReplay(db,{
-      sourceJobKey:String(body.sourceJobKey??""),runId:String(body.runId??"continuity-audit").slice(0,80),
+      includeTechnicals:body.includeTechnicals===true,sourceJobKey:String(body.sourceJobKey??""),runId:String(body.runId??"continuity-audit").slice(0,80),
       apiKey:env("OPENAI_API_KEY")||"",deepseekKey:env("deepseek api")||""}));
     if(mode==="fd1-exit-probe"){
       const symbol=String(body.symbol??"BTCUSDT").toUpperCase();if(!/^[A-Z0-9]{1,24}USDT$/.test(symbol))return res(400,{ok:false,error:"SYMBOL"});
