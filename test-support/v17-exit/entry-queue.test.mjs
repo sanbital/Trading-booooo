@@ -193,7 +193,7 @@ const SLOT_COST = capacity.slotCostUsdt({maxOrderMarginUsdt: slotSizingBounds(SL
   leverage: SLOT_SIZING_CONTRACT.leverage, takerFeeRate: FEE_RATE, iocMaxBps: SLOT_SIZING_CONTRACT.iocMaxBps});
 
 function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {}, setupMaxConcurrent = MAX_SLOTS,
-  reviews = null, followUp = false, account = null, budget = null, policyOpen = 0}) {
+  reviews = null, followUp = false, account = null, budget = null, policyOpen = 0, leader20 = false}) {
   const seen = [];
   const audits = [];
   const notes = [];
@@ -280,7 +280,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     rec: x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}),
     openNow: model.pair().positions, manual: [], signalRanges, seen, SIGNAL_MAX: 1_200_000,
     REVISION: 'V11-LONG-REGIME-1.0.1', STRATEGY: 'P10',
-    gptFilterExecutable: async (_db, executable) => reviews ? reviews(executable) :
+    gptFilterExecutable: async (_db, executable, options) => reviews ? reviews(executable, options) :
       ({candidates: executable, reason: 'TEST_GPT_PASS', reviews: executable.map(s => ({signalId: s.id, allowed: true}))}),
     ...lifecycle,lifecycleNote, gptTerminalReason, notes, terminals, attempts, model,PATCH:'TEST',
     noteEntryLifecycle: async (_db, row, note) => { notes.push({id: row.id, ...note}); return row; },
@@ -313,17 +313,45 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     maxInFlight: () => maxInFlight,
     db,
   };
-  Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);
+  Object.assign(ctx,leader20LegacyBindings);
+  // The queue integration test supplies approved membership at the DB boundary.
+  // Real authority rejection is covered by the Leader20 database suites.
+  if(leader20){ctx.leader20Control={active_strategy:'LEADER20_DYNAMIC_1'};ctx.requireEntryAuthority=async()=>{};}
+  vm.createContext(ctx);
   vm.runInContext(source.slice(source.indexOf('async function recordEntryTechnicalFailure('),source.indexOf('/**\n * Terminal accounting')),ctx);
   const helpers = source.slice(source.indexOf('// Account state the entry capacity is computed from'), source.indexOf('async function runEntryQueue('));
   if (!helpers.includes('function refreshCapacityInputs(db)')) throw new Error('the capacity helpers moved');
   vm.runInContext(helpers, ctx);
   const loop = source.slice(source.indexOf('const since=new Date(Date.now()-SIGNAL_MAX).toISOString(),signalPageSize='),
     source.indexOf('\n}\n\nasync function requireLeaderEntryControls',source.indexOf('async function runEntryQueue')));
-  if (!loop.includes('for(const [index,s] of queued.entries())')) throw new Error('the entry loop was reshaped');
+  if (!loop.includes('for await(const [index,s] of entryQueueWithLateReviews(queued,')) throw new Error('the entry loop was reshaped');
   vm.runInContext(`this.go=async function(){let entry={entered:false,reason:"V17_NO_ENTRY"};const out=await (async()=>{${loop}\n})();return {entry:out,seen}}`, ctx);
   return ctx;
 }
+
+function lateLeaderFixture({stop=false,budgetStop=false}={}){
+  const rows=buyRows(3).map(r=>({...r,status:'NEW',features:{...r.features,leader20:{
+    version:'LEADER20_DYNAMIC_1',symbol:r.symbol,epoch_id:'epoch',event_id:r.id,generation:1,
+    requested_at_ms:SETUP_NOW-1000,expires_at_ms:SETUP_NOW+119000}}}));
+  let completed=0,reads=0;
+  const reviewCalls=[];
+  const outcomes=Object.fromEntries(rows.map(r=>[r.symbol,()=>{completed++;return {dispatch:false,result:{entered:false,
+    reason:stop?'ACCOUNT_RISK_BLOCK':'GPT_FINAL_RECHECK_WAIT',releaseClaim:true,releaseScope:stop?'ACCOUNT':'SYMBOL'}};}]));
+  const ctx=harness({now:SETUP_NOW,rows,leader20:true,outcomes,account:accountModel({available:5000}),
+    budget:{remaining:()=>budgetStop&&completed>=2?ATTEMPT_RESERVE.ms-1:50000,callsLeft:100},
+    reviews:(xs,options)=>{reviewCalls.push(options);if(options?.completedOnly){reads++;assert.equal(completed,2);assert.deepEqual(Array.from(xs,x=>x.id),['C2']);return {candidates:xs,reviews:[{signalId:'C2',allowed:true}]};}
+      return {candidates:xs.filter(x=>x.id!=='C2'),reviews:xs.map(x=>({signalId:x.id,allowed:x.id!=='C2',reason:x.id==='C2'?'GPT_REVIEW_PENDING':'BUY'}))};}});
+  return {ctx,readCount:()=>reads,reviewCalls};
+}
+test('real entry queue rereads only pending Leader20 reviews after ordinary FINAL refusals',async()=>{
+  const f=lateLeaderFixture();await f.ctx.go();
+  assert.equal(f.readCount(),1);assert.deepEqual(f.ctx.attempts.map(x=>x.symbol),['C0USDT','C1USDT','C2USDT']);
+  assert.equal(f.ctx.maxInFlight(),1);assert.equal(f.ctx.model.fills.length,0);
+});
+test('real entry queue does not discover late BUY after account or cycle-budget stop',async()=>{
+  for(const opt of [{stop:true},{budgetStop:true}]){const f=lateLeaderFixture(opt);await f.ctx.go();
+    assert.equal(f.readCount(),0);assert.ok(!f.ctx.attempts.some(x=>x.symbol==='C2USDT'));assert.equal(f.ctx.model.fills.length,0);}
+});
 
 test('CEC input failure is recorded and the next normal candidate still reaches GPT',async()=>{
  const now=Date.parse('2026-09-27T03:07:10Z');
@@ -1122,3 +1150,4 @@ test('an unlabelled claim release stops the run (fail closed) and its slots are 
     assertEveryUnusedSlotHasAReason(entry);
   }
 });
+

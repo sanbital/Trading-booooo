@@ -90,7 +90,7 @@ export class FinalReviewCoordinator {
   allowDecision(){return this.engine?this.engine.allow:'PASS';}
   authorized(){const c=this.config;return c.modeValid!==false&&c.approvalRef.length>0&&c.apiBudgetUsd>=MAX_RESERVED_USD&&
     Number.isInteger(c.maxCalls)&&c.maxCalls>0&&!!this.apiKey()&&(c.mode!=='ENFORCE'||c.enforceApproved===true);}
-  async consider(s){
+  async consider(s,{completedOnly=false}={}){
     if(this.config.mode==='OFF')return {allowed:true,reason:'OFF'};
     const shadow=this.config.mode==='SHADOW';
     // A failed re-read must not leave an earlier PASS ticket usable.
@@ -143,6 +143,9 @@ export class FinalReviewCoordinator {
         row=child;
       }
       if(!row){
+        // Queue refresh may consume a durable completed answer, but must never
+        // acquire data, claim a review, reserve spend or dispatch a provider.
+        if(completedOnly)return deny('GPT_REVIEW_PENDING');
         const record={version:VERSION,binding,identity,identity_json:identityJson,expires_at_ms:expires,
           reserved_usd:MAX_RESERVED_USD,api_approval_ref:this.config.approvalRef,purpose:this.purpose,wire_profile:this.profile,
           prompt_hash:await this.promptHash,schema_hash:await this.schemaHash,source_commit:RELEASE,packet:null,result:null,
