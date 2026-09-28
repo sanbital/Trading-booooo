@@ -8,13 +8,15 @@ begin
  source:=replace(source,marker,'-- Serialize before counting other committed completions, not after the count.
   perform 1 from public.leader20_clock_slots where slot_at=at_slot for update;
   '||marker);
+ source:=replace(source,'select count(*),count(*) filter(where r->>''decision''=''BUY'') into finished,buys',
+  'select count(distinct r#>>''{record,packet,symbol}''),count(*) filter(where r->>''decision''=''BUY'') into finished,buys');
  execute source;
 end $migration$;
 
 create or replace function public.leader20_clock_expire() returns void language sql set search_path='' as $$
  -- Reconcile durable results as well, including a missed/overlapping last trigger.
  with finished as (
-  select t.slot_at,count(*) completed,count(*) filter(where r.decision='BUY') buys,
+  select t.slot_at,count(distinct r.record#>>'{packet,symbol}') completed,count(*) filter(where r.decision='BUY') buys,
    max(coalesce(r.api_completed_at,r.completed_at)) completed_at
   from public.leader20_clock_slots t join public.gpt_final_entry_reviews r
    on r.record#>>'{packet,leader20,batch_id}'=t.batch_id::text and r.purpose='PRODUCTION'
