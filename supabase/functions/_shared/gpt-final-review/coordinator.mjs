@@ -303,7 +303,11 @@ export class FinalReviewCoordinator {
       return {allowed:false,reason:'IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID'};
     if(t.requiresFinalRecheck&&!life&&supersededBy===null&&!allowAged)
       return {allowed:false,reason:'GPT_FINAL_RECHECK_REQUIRED'};
-    const agedEntry=allowAged===true&&t.aged===true&&supersededBy===null&&!life&&
+    // A ticket can cross its answer deadline after validateStored and before openBull.
+    // Evaluate that boundary here too, under the same forced-recheck engine contract.
+    // This grants only entry to FINAL preparation; dispatch still omits allowAged.
+    const agedEntry=allowAged===true&&this.engine?.agedRecheck===true&&
+      (t.aged===true||now>=t.validUntil)&&supersededBy===null&&!life&&
       now<t.expires-LIMITS.executionReserveMs-AGED_RECHECK_MIN_MS;
     if(!life&&!agedEntry&&((supersededBy===null&&now>=t.validUntil)||now>=t.expires-LIMITS.executionReserveMs))return {allowed:false,reason:'GPT_REVIEW_EXPIRED'};
     return {allowed:t.decision===this.allowDecision(),reason:'GPT_'+t.decision+(agedEntry?'_AGED_RECHECK_REQUIRED':''),review:t,

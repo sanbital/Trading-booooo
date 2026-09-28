@@ -1,0 +1,14 @@
+# Ticket aging between validation and entry — 2026-09-28
+
+GRT's natural 11:00 batch produced an ENTRY BUY at 11:01:18.173 UTC. The original answer validity ended at 11:01:27.616. The entry-defer journal at 11:01:27.823 reports GPT_REVIEW_EXPIRED, while the original candidate remained live until 11:02:24.194. A ticket validated before its answer deadline had no aged flag. The subsequent entry check only recognized tickets already marked aged at validation, so crossing that boundary inside the same run rejected access to the existing mandatory FINAL path.
+
+The entry check now computes aging using its current clock as well as the stored flag, only for an engine explicitly supporting aged rechecks. This permits preparation of a fresh FINAL decision under the existing candidate expiry, 3-second execution reserve and 8-second minimum room. It never extends the answer deadline, changes a stored answer, grants dispatch authority, or bypasses fresh capture, capacity, budget, identity, protection or final BUY checks. Every dispatch check still omits allowAged. No scheduler, API request shape, model, risk limit, schema or ledger change.
+
+Original GRT packet/answer validation replay uses the recorded answer and identity unchanged. The signal fetched after the incident is REJECTED; the offline replay restores only its earlier active lifecycle state (NEW) and uses the journal timestamp as the replay check time. The exact entry-check instant and historical status at that instruction are not stored. Existing code reproduces GPT_REVIEW_EXPIRED; patched code returns GPT_BUY_AGED_RECHECK_REQUIRED. Direct dispatch and retry authority remain denied, and original deadlines match byte-for-byte. No paid API or order is called by replay.
+
+The later GRT FINAL preparation was a separate no-call failure: at 11:02:12.604 its existing latest capture ended 2,367 ms earlier, with only 590 ms remaining before the unchanged preparation deadline. The capture loop requires more than 600 ms to poll, so it made zero attempts and returned INFERENCE_CAPTURE_NOT_READY. This was not a provider timeout or proof that GRT's raw buckets were incomplete. Those capture/deadline rules remain unchanged.
+
+Regression coverage crosses the answer deadline without rereading the journal for legacy and Leader20 tickets, with FINAL BUY, WAIT and timeout; non-recheck engines, original minimum-room boundary and changed identity remain blocked. Seven new tests failed on the original source and pass after the change. The full FINAL suite passes 51 tests. Integrated checks and deployment evidence are recorded in the first-fill release artifact.
+
+Remaining risks: natural crossing recovery needs a post-deploy sample; provider latency, intermittent collection gaps, semantic evidence errors and GPT monthly sustainability are not solved by this change. It does not revive the expired GRT candidate or imply a trade should occur.
+
