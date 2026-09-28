@@ -1,5 +1,6 @@
 import {DYNAMIC_VERSION, DYNAMIC_POLICY, HORIZONS, entryCaptureSafety} from './dynamic-flow.mjs';
 import {leaderProperties,validateLeaderDecision} from '../leader20/decision-contract.mjs';
+import {HORIZON_TIME_NOTE,horizonTimeMismatch} from './horizon-time.mjs';
 const obj = properties => ({type:'object',properties,required:Object.keys(properties),additionalProperties:false});
 const prose = {type:'string',minLength:1,maxLength:280};
 const citation = {type:'string',minLength:1,maxLength:160};
@@ -7,7 +8,7 @@ const citations = {type:'array',maxItems:8,items:citation};
 export const DYNAMIC_EVIDENCE_FIELDS = Object.freeze(['return','velocity_bps_s','acceleration_bps_s2','net_taker_flow',
   'buy_share','flow_acceleration','bid_liquidity_change','ask_liquidity_change','imbalance','spread','trade_count',
   'high_renewal_slowdown','drawdown_from_sampled_peak','recovery_velocity_bps_s','arrival_rate_slope']);
-export const DYNAMIC_PROMPT = `
+export const DYNAMIC_PROMPT = HORIZON_TIME_NOTE+`
 STRUCTURAL STRENGTH and CURRENT PROPULSION are separate questions. Structural trend alone never justifies BUY or HOLD.
 Read the ordered 5s, 15s, 30s, 60s, 120s horizons and price, flow, book, participation together.
 dynamic_evidence and dynamic_risks contain ONLY exact numeric dot paths from their schema enum, never prose or values.
@@ -41,7 +42,7 @@ export function dynamicWireProperties(task) {
     confidence:{type:'number'},dynamic_action:{type:'string',enum:['HOLD','HOLD_AND_RAISE_PROTECTION','HOLD_WITH_TIGHTER_RISK',
       'EXIT_THESIS_BROKEN','EXIT_SELL_DOMINANCE','EXIT_MOMENTUM_FAILURE','EXIT_PROFIT_PROTECTION']}};
   return {...common,why_buy_now:obj({summary:prose,
-    horizons:obj(Object.fromEntries(HORIZONS.map(s=>['s'+s,obj({summary:prose,evidence:citations})]))),
+    horizons:obj(Object.fromEntries(HORIZONS.map(s=>['s'+s,{...obj({summary:{...prose,description:`Describe only the last ${s} SECONDS (${s/5} five-second buckets), never hours or candle/forecast horizons.`},evidence:citations}),description:`Retrospective ${s}-SECOND capture window ending at capture_context.end_ms.`}]))),
     flow:citations,orderbook:citations}),why_not_wait:prose,
     ...(task==='RECHECK'?{confidence:{type:'number'},invalidation:prose}:{})};
 }
@@ -75,6 +76,8 @@ export function validateDynamicWire(wire,packet) {
   if(packet.task!=='HOLD') paths.push(...(wire.why_buy_now?.flow??[]),...(wire.why_buy_now?.orderbook??[]),
     ...HORIZONS.flatMap(s=>wire.why_buy_now?.horizons?.['s'+s]?.evidence??[]));
   for(const path of paths)require(valueAt(capture,path)!==null,'CITED_EVIDENCE_MISSING');
+  if(packet.task!=='HOLD')for(const seconds of HORIZONS)
+    require(!horizonTimeMismatch(wire.why_buy_now?.horizons?.['s'+seconds]?.summary,seconds),'HORIZON_TIME_UNIT_MISMATCH:s'+seconds);
   if(decision==='BUY') {
     const at=packet.dynamic_as_of_ms;
     require(entryCaptureSafety(capture,at).ok,'BUY_WITHOUT_VALID_TRAJECTORY');

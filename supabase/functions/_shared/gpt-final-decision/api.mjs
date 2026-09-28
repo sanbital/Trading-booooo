@@ -9,6 +9,7 @@ import {entryAssessment} from './assessment.mjs';
 import {compactDynamic} from './dynamic-flow.mjs';
 import {DYNAMIC_PROMPT,dynamicEnabled,boundedDynamicTransportSchema} from './dynamic-contract.mjs';
 import {hash} from './snapshot-hash.mjs';
+import {horizonDefinitions} from './horizon-time.mjs';
 export {hash};
 export const MODEL='gpt-5.4-mini-2026-03-17';
 export const API_URL='https://api.openai.com/v1/responses';
@@ -40,7 +41,7 @@ export function modelInput(packet){
     ...(packet.task==='ENTRY'?{entry_assessment:entryAssessment(v)}:{}),
     risk_flags:Object.fromEntries(Object.entries(risk.flags).filter(([,x])=>x.level!=='CLEAR').map(([k,x])=>[k,x.level])),
     model_judgments:packet.model_judgments,...(packet.facts.capture_context?{capture_context:dynamicEnabled(packet)?compactDynamic(packet.facts.capture_context,{fullPath:leaderDecision(packet)}):contextForModel(packet.facts.capture_context)}:{}),...(packet.position?{position:packet.position}:{}),...(packet.chase?{chase:packet.chase}:{}),
-    ...(dynamicEnabled(packet)?{dynamic_policy:packet.dynamic_policy,dynamic_as_of_ms:packet.dynamic_as_of_ms,dynamic_data_state:packet.dynamic_data_state??null}: {}),
+    ...(dynamicEnabled(packet)?{horizon_definitions:horizonDefinitions(packet.facts.capture_context),dynamic_policy:packet.dynamic_policy,dynamic_as_of_ms:packet.dynamic_as_of_ms,dynamic_data_state:packet.dynamic_data_state??null}: {}),
     ...(packet.leader20?{leader20:packet.leader20}:{})};
 }
 /** ENTRY now writes its evidence and expected value before the decision, so it gets more room. */
