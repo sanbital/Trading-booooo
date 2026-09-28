@@ -61,6 +61,31 @@ test('PostgreSQL fixed cutoff, 20-member claim, duplicate admission, expiry and 
   await db.exec('rollback');
   await q('update test_clock set at=$1',[iso(slot+10000)]);
  });
+ await t.test('reserve-based start permits 35s, bounds the slot expiry, and rejects insufficient time',async()=>{
+  await load('supabase/migrations/20260928135658_clock_frozen_handoff.sql');
+  await db.exec('begin');
+  await q('update test_clock set at=$1',[iso(slot+35000)]);
+  const rows=await Promise.all(Array.from({length:20},async(_,i)=>({symbol:`C${i}USDT`,rank:i+1,capture:await get(`C${i}USDT`,slot+35000)})));
+  const delayed=await buildBatch(rows,{asOf:slot+35000,epochId:epoch,generation:3});
+  const [a,b]=await Promise.all([rpc('leader20_batch_claim',[delayed,'race-a',false]),rpc('leader20_batch_claim',[delayed,'race-b',false])]);
+  assert.equal([a,b].filter(x=>x.created).length,1);
+  assert.equal(Date.parse(a.row.expires_at),slot+120000);
+  assert.equal((await q('select count(*)::int n from leader20_batches'))[0].n,1);
+  // Uniqueness is also enforced independently of the admission function.
+  await assert.rejects(q("insert into leader20_batches(epoch_id,generation,data_version,state,reason,packet,periodic_slot) select epoch_id,generation,'different-hash','RESERVED',reason,packet,periodic_slot from leader20_batches"),/unique/);
+  await db.exec('rollback');
+  await db.exec('begin');
+  await q('update test_clock set at=$1',[iso(slot+100000)]);
+  assert.equal((await rpc('leader20_batch_claim',[delayed,'late',false])).reason,'DECISION_WINDOW_INSUFFICIENT');
+  // Configuration changes the start boundary, never the absolute decision expiry.
+  await db.exec('update leader20_batch_control set decision_reserve_ms=30000');
+  await q('update test_clock set at=$1',[iso(slot+89000)]);
+  await q('update doa_capture.control set heartbeat_at=$1',[iso(slot+89000)]);
+  const later={...delayed,as_of_ms:slot+89000};
+  assert.equal((await rpc('leader20_batch_claim',[later,'configured',false])).created,true);
+  await db.exec('rollback');
+  await q('update test_clock set at=$1',[iso(slot+10000)]);
+ });
  await t.test('post-boundary observations cannot move the frozen path; gaps and future receipts still fail',async()=>{
   const c=await get();assert.equal(c.status,'AVAILABLE',JSON.stringify(c));
   assert.equal(c.trajectory.at(-1).bucket_ms,slot);assert.equal(c.trajectory[0].bucket_ms,slot-115000);
@@ -83,6 +108,27 @@ test('PostgreSQL fixed cutoff, 20-member claim, duplicate admission, expiry and 
   await assert.rejects(rpc('leader20_batch_claim',[tampered,'changed',false]),/CLOCK_BATCH_CAPTURE_BINDING/);
   const claim=await rpc('leader20_batch_claim',[packet,'good',false]);assert.equal(claim.created,true,JSON.stringify(claim));batch=claim.row;
   assert.equal((await rpc('leader20_batch_claim',[packet,'same',true])).reason,'NOT_DUE');
+ });
+ await t.test('durable slot telemetry follows batch, GPT and order journal transitions',async()=>{
+  await db.exec('begin');
+  await db.exec('alter table gpt_final_entry_reviews add column completed_at timestamptz,add column api_started_at timestamptz,add column api_completed_at timestamptz,add column decision text');
+  await rpc('leader20_clock_note',[iso(slot),{batch_requested_at:iso(slot+2000),capture_ready_at:iso(slot+5000),available_slots:2,retry_count:4}]);
+  await q("update leader20_batches set state='DISPATCHED' where id=$1",[batch.id]);
+  await q("update leader20_batches set state='DONE',result=$2 where id=$1",[batch.id,{completed_at_ms:slot+19000,latency_ms:9000}]);
+  for(let i=0;i<20;i++)await q("insert into gpt_final_entry_reviews(job_key,purpose,record,api_started_at,api_completed_at,completed_at,decision) values($1,'PRODUCTION',$2,$3,$4,$4,'WAIT')",
+   ['test-'+i,{packet:{leader20:{batch_id:batch.id,entry_window:packet.entry_window}}},iso(slot+20000),iso(slot+30000)]);
+  const status=(await q('select * from leader20_clock_slots where slot_at=$1',[iso(slot)]))[0];
+  assert.equal(status.slot_status,'DONE');assert.equal(Number(status.capture_finalize_latency_ms),5000);
+  assert.equal(Number(status.deepseek_latency_ms),9000);assert.equal(Number(status.gpt_latency_ms),10000);
+  assert.equal(Number(status.decision_total_latency_ms),30000);assert.equal(status.retry_count,4);
+  const sid=crypto.randomUUID();
+  await q('insert into v11_long_regime_signals(id,features) values($1,$2)',[sid,{leader20:{entry_window:packet.entry_window}}]);
+  await q("insert into v11_long_regime_orders(state,signal_id,intent,response_payload) values('FILLED',$1,'OPEN_LONG',$2)",
+   [sid,{v22EntryFinality:{sentAt:slot+31000,respondedAt:slot+32000}}]);
+  assert.equal(Date.parse((await q('select order_sent_at from leader20_clock_slots'))[0].order_sent_at),slot+31000);
+  await q('update test_clock set at=$1',[iso(slot+120000)]);await rpc('leader20_clock_expire');
+  assert.equal((await q('select slot_status from leader20_clock_slots'))[0].slot_status,'DONE');
+  await db.exec('rollback');
  });
  await t.test('materialization binds slot, expires at minute two, and cannot grant the next cycle',async()=>{
   const advice={id:'C0USDT',version:packet.symbols[0].data_version,last_ms:packet.symbols[0].last_ms,decision:'WAIT',valid:true};

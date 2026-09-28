@@ -26,8 +26,9 @@ export function batchFinalPayload(p){
  payload.input[1].content=JSON.stringify({...user,deepseek_prior_review:p.leader20.batch_advice});return payload;
 }
 export async function batchFinalDecision(packet,{apiKey,fetchFn=fetch,now=Date.now,deadlineMs=now()+20000,call=callDecision}={}){
- const advice=packet?.leader20?.batch_advice,at=now();
+ const advice=packet?.leader20?.batch_advice,at=now(),window=packet?.leader20?.entry_window;
  const fail=error=>({valid:false,decision:'ABSTAIN',error,attempted:false,api_cost_usd:0,completed_at_ms:now()});
+ if(window&&at>=window.expires_at_ms)return fail('CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION');
  // All READY Top20 snapshots reach GPT. An invalid advisor is explicitly absent
  // evidence, not a veto; GPT still has the independently collected current facts.
  if(!advice||advice.id!==packet.symbol||!['PASS','WAIT','SKIP','BLOCKED'].includes(advice.decision)||
@@ -35,8 +36,11 @@ export async function batchFinalDecision(packet,{apiKey,fetchFn=fetch,now=Date.n
  const safety=entryCaptureSafety(packet.facts?.capture_context,at);
  if(!safety.ok)return fail(safety.reason);
  if(packet.leader20?.entry_window&&!validClockFinalPacket(packet,at))return fail('CLOCK_FINAL_SNAPSHOT_BINDING_INVALID');
- const result=await call(packet,{apiKey,fetchFn,now,timeoutMs:Math.max(1,Math.min(20000,deadlineMs-at)),
+ const result=await call(packet,{apiKey,fetchFn,now,timeoutMs:Math.max(1,Math.min(20000,deadlineMs-at,(window?.expires_at_ms??Infinity)-at)),
   payloadFn:batchFinalPayload,validate:validateDecision});
+ if(window&&(now()>=window.expires_at_ms||(result.completed_at_ms??now())>=window.expires_at_ms))
+  return {...result,valid:false,decision:'ABSTAIN',error:'CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION',
+   review_route:BATCH_FINAL,requires_final_recheck:false};
  return {...result,review_route:BATCH_FINAL,requires_final_recheck:!validClockFinalPacket(packet,result.completed_at_ms??now()),model_requested:MODEL,
   final_packet:packet,final_snapshot_at_ms:packet.execution_ref?.at??at};
 }

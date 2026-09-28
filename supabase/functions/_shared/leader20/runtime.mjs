@@ -1,6 +1,6 @@
-import {slotFloor} from './clock.mjs';
+import {slotFloor,clockDecisionWindow} from './clock.mjs';
 import {LEADER20, fetchEpoch} from './universe.mjs';
-import {batchControl,runEntryBatch} from './batch-runtime.mjs';
+import {batchControl,runEntryBatch,batchOutcome as formatBatchOutcome} from './batch-runtime.mjs';
 import {isLeader20} from './campaign.mjs';
 import {POLICY, STRATEGY} from '../leader-momentum-v17.mjs';
 import {validateCapture120} from '../gpt-final-decision/capture-context.mjs';
@@ -45,17 +45,18 @@ export async function generateLeader20(db, ctl, {now = Date.now, fetchFn = fetch
       ctl = await leaderControl(db);
     } catch (e) { refreshError = String(e.message); }
   }
-  if(ctl.clock_capture_enabled&&(phase<1000||phase>=120000))return {ok:true,strategy:LEADER20,inserted:0,state:preparing?'PREPARING_CAPTURE':phase>=480000?'CAPTURING':'WAITING_FOR_WINDOW',refreshError};
+  if(ctl.clock_capture_enabled&&phase>=120000)return {ok:true,strategy:LEADER20,inserted:0,state:preparing?'PREPARING_CAPTURE':phase>=480000?'CAPTURING':'WAITING_FOR_WINDOW',refreshError,
+    batch_outcome:formatBatchOutcome({created:false,reason:'DECISION_WINDOW_EXPIRED'},clockDecisionWindow(now()))};
   const batchMode=await batchControl(db);
   // Observation/candidate housekeeping continues even while a batch is not due.
-  if(batchMode.enabled){
+  if(batchMode.enabled&&!ctl.clock_capture_enabled){
     const observed=await db.rpc('leader20_schedule');
     if(observed.error)throw Error('LEADER20_OBSERVATION_FAILED');
   }
   const batchOutcome=batchMode.enabled?await runEntryBatch(db,ctl,{now,fetchFn}):null;
   const scheduled = batchMode.enabled?{data:batchOutcome}:await db.rpc('leader20_schedule');
   if (scheduled.error) throw Error('LEADER20_SCHEDULE_FAILED');
-  if (ctl.active_strategy !== LEADER20) return {ok: true, strategy: LEADER20, inserted: 0, state: 'OBSERVATION_ONLY', refreshError};
+  if (ctl.active_strategy !== LEADER20) return {ok: true, strategy: LEADER20, inserted: 0, state: 'OBSERVATION_ONLY', refreshError,batch_outcome:batchOutcome};
   const queue = await db.from('leader20_review_events').select('*').eq('state', 'REQUESTED')
     .eq('epoch_id', ctl.epoch_id).eq('generation', ctl.generation)
     .order('requested_at', {ascending: true}).order('priority', {ascending: true}).limit(20);
@@ -89,6 +90,6 @@ export async function generateLeader20(db, ctl, {now = Date.now, fetchFn = fetch
     } catch (error) { outcomes.push({symbol: e.symbol, reason: String(error.message)}); }
   }
   return {ok: true, strategy: LEADER20, epoch_id: ctl.epoch_id, generation: ctl.generation,
-    inserted: outcomes.filter(x => x.created).length, outcomes, refreshError,
+    inserted: outcomes.filter(x => x.created).length, outcomes, refreshError,batch_outcome:batchOutcome,
     ...(batchOutcome?{batch:{created:batchOutcome.created===true,reason:batchOutcome.reason??null,batch_id:batchOutcome.batch_id??null}}:{})};
 }

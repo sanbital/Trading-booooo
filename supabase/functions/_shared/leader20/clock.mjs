@@ -1,7 +1,16 @@
 /** Entry evidence is fixed to [HH:x8, HH:(x+1)0]. Holdings use live evidence. */
 export const CLOCK_VERSION='TOP20_CLOCK_CAPTURE_1';
 export const SLOT_MS=600000, CAPTURE_MS=120000, PREWARM_MS=60000, EXECUTION_MS=120000;
+// v153: batch -> last GPT FINAL p95 66,835ms (two completed slots); retain 13s
+// for dispatch/safety and tail latency. SQL owns the configurable same reserve.
+export const DECISION_RESERVE_MS=80000;
 export const slotFloor=at=>Math.floor(at/SLOT_MS)*SLOT_MS;
+export function clockDecisionWindow(at,reserveMs=DECISION_RESERVE_MS){
+ if(!Number.isSafeInteger(reserveMs)||reserveMs<30000||reserveMs>=EXECUTION_MS)throw Error('CLOCK_DECISION_RESERVE_INVALID');
+ const slot=slotFloor(at),deadline=slot+EXECUTION_MS;
+ return {slot_ms:slot,capture_start_ms:slot-CAPTURE_MS,capture_end_ms:slot,
+  decision_deadline_ms:deadline,decision_reserve_ms:reserveMs,latest_batch_start_ms:deadline-reserveMs};
+}
 export const preparationSlot=at=>slotFloor(at+CAPTURE_MS+PREWARM_MS);
 export function clockCaptureValid(c,at){
  const w=c?.entry_window;

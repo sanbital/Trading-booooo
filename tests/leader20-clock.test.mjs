@@ -63,8 +63,8 @@ test('each capture preparation ranks current rolling24h Top20 and cannot refresh
 });
 test('off-clock wakes perform no market, account, capture or paid reads',async()=>{
  let reads=0;const db={rpc:()=>{reads++;throw Error('off clock');},from:()=>{reads++;throw Error('off clock');}};
- for(const at of [slot-1,slot,slot+60000,slot+100000,slot+480000]){
-  assert.equal((await runEntryBatch(db,{clock_capture_enabled:true},{now:()=>at})).reason,'CLOCK_BATCH_NOT_DUE');
+ for(const at of [slot-1,slot+120000,slot+480000]){
+  assert.equal((await runEntryBatch(db,{clock_capture_enabled:true},{now:()=>at})).reason,'DECISION_WINDOW_EXPIRED');
  }
  assert.equal(reads,0);
 });
@@ -76,6 +76,7 @@ test('delayed generator wake at 31.442s can prepare the same frozen Top20 withou
   async maybeSingle(){assert.equal(table,'leader20_batch_control');return {data:{last_periodic_slot:null}};},
   async order(){assert.equal(table,'leader20_members');return {data:rows};}};},async rpc(name,args){
   if(name==='leader20_batch_capacity')return {data:{available:2,held:[]}};
+  if(name==='leader20_clock_note')return {data:{recorded:true}};
   if(name==='doa_context_for_role_v1'){captures++;return {data:fixed()};}
   if(name==='leader20_batch_claim'){
    claims++;assert.equal(args.p_packet.symbols.length,20);
