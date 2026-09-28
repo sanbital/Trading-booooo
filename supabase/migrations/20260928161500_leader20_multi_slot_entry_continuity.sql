@@ -1,47 +1,67 @@
 -- Multi-slot entry capacity, entry-capture continuity and independent position capture.
 --
--- INCIDENT (2026-09-28 00:50 KST)
--- ------------------------------
--- One OPEN position (HBARUSDT) and one affordable slot, yet the 00:50 entry capture
--- produced ready=0 / blocked=20 / retry=13 and expired as DECISION_WINDOW_INSUFFICIENT.
--- The capture archive for that slot held only BTCUSDT (market sensor) and HBARUSDT
--- (open position): the twenty Top20 candidate streams were never collected.
+-- INCIDENT (2026-09-29 KST): three ten-minute slots lost their entire entry capture
+-- -----------------------------------------------------------------------------------
+-- 00:50, 01:00 and 01:20 each expired DECISION_WINDOW_INSUFFICIENT with ready=0 /
+-- blocked=20, and leader20_micro_archive for those windows holds ONE symbol: BTCUSDT.
+-- available_slots read 1-2 throughout, and 01:20 had no open position at all, so a held
+-- position was never the cause. What the three share is their Top20 publication time:
+-- T-130s, against T-165s for every healthy neighbouring slot.
 --
--- Two production defects combined:
+--  1. PRIMARY. doa_capture_rpc('watch') read the entry slot from the EPOCH SNAPSHOT
+--     (leader20_epochs.snapshot->>'capture_slot_ms' for leader20_control.epoch_id). That
+--     value only advances when the next slot's Top20 publishes, scheduled for T-180s. With
+--     publication at T-130s, the RPC reported the PREVIOUS, already-closed slot for the whole
+--     preparation window; the collector's captureDisposition() computes
+--     connect = now>=slot-180000 && now<slot+1000 from it, so all twenty candidate streams
+--     were connect:false and were closed, leaving only the roles that are never clock-gated
+--     (OPEN_POSITION, MARKET_SENSOR) -- hence BTCUSDT alone in the archive. The 10s left
+--     between publication and the end of the [T-180s, T-120s) arming band was narrower than
+--     the collector's own 15s control poll, so the slot was never armed either.
 --
---  1. leader20_batch_capacity() returned available=0 whenever ANY order was unresolved
---     ("case when pending>0 then 0"), although the same function had already reserved a
---     full slot cost AND a slot for each of them. One entry going PLANNED therefore
---     closed the whole account: entry capture, paid review admission (ai_call_reserve),
---     batch claim/finish and materialization all read zero slots, and
---     leader20_batch_note_full()/leader20_batch_slot_wake() retired every in-flight
---     review event. A filled position ended the batch instead of consuming one slot.
+--  2. entry_capture_slot_ms was a single-shot latch: armable ONLY inside [T-180s, T-120s),
+--     and cleared by ANY zero-capacity read -- including one that was merely uncertain (a
+--     stale or unreadable account snapshot). Past T-120s there was no way back inside the
+--     same window.
 --
---  2. doa_capture_rpc() used leader20_control.entry_capture_slot_ms as a single-shot
---     latch: it was only ever armed inside [T-180s, T-120s), and ANY zero-capacity read
---     cleared it -- including a read that was merely uncertain (a stale or unreadable
---     account snapshot). Once cleared it could not be re-armed for the same clock slot,
---     so the watch RPC dropped all twenty candidates for the rest of the window and the
---     collector tore their sockets down.
+--  3. leader20_batch_capacity() returned available=0 whenever ANY order was unresolved
+--     ("case when pending>0 then 0"), although the same function had already reserved a full
+--     slot cost AND a slot for each of them. One entry going PLANNED therefore closed the
+--     whole account: entry capture, paid review admission (ai_call_reserve), batch
+--     claim/finish and materialization all read zero, and leader20_batch_note_full() /
+--     leader20_batch_slot_wake() retired every in-flight review event. A fill ended the
+--     batch instead of consuming one slot.
+--
+--  4. Nothing counted concurrent BUY candidates: leader20_materialize_event checked
+--     available>=1 once per candidate, non-atomically, so N simultaneous BUYs against two
+--     slots could all materialize.
 --
 -- WHAT THIS MIGRATION CHANGES
 -- ---------------------------
---  * Unresolved entry orders and live slot reservations CONSUME slots and margin; they
---    no longer zero the account. available_slots means "how many more positions may be
---    opened", never "stop scanning".
---  * entry_capture_slot_ms becomes derived, re-armable state: arming is allowed at any
---    point in the preparation window while a complete 120s/24-bucket path is still
---    reachable (up to T-120s-arm_lead), and an uncertain account read preserves an armed
---    slot instead of destroying it (CAPACITY_UNCERTAIN). Only a confirmed zero disarms.
---  * The BTCUSDT market sensor stays watched whenever anything is held, so entry capacity
---    can never degrade open-position evidence.
---  * An atomic, self-expiring slot reservation (leader20_entry_reservations) admits at
---    most available_for_new_entry concurrent BUY candidates; the rest get NO_ENTRY_CAPACITY.
+--  * The entry slot is derived from the CLOCK (floor((now+180s)/600s)*600s -- the same slot
+--    the shared clock module derives), so the preparation window starts at T-180s whatever
+--    the epoch does. Until the epoch flips, the watch carries the outgoing Top20 membership,
+--    which between consecutive rolling-24h epochs is nearly identical: members whose rank
+--    actually changed get a shorter lead instead of every member getting none. The
+--    publication lag stays visible as entry_capture.epoch_published and
+--    leader20_clock_slot_report.epoch_publish_lag_ms.
+--  * entry_capture_slot_ms becomes derived, re-armable state: armable at any point while a
+--    complete 120s/24-bucket path is still reachable (up to
+--    T-120s-leader20_control.entry_capture_arm_lead_ms), so capacity 1 -> 0 -> 1 inside the
+--    window recovers by itself. Only a CONFIRMED zero disarms; an uncertain account read
+--    HOLDS an armed path (CAPACITY_UNCERTAIN) and never creates one or admits an order.
+--  * Unresolved entry orders and live slot reservations CONSUME slots and margin; they no
+--    longer zero the account. available_slots means "how many more positions may be opened",
+--    never "stop scanning". Only available=0 stops NEW entry capture.
+--  * The BTCUSDT market sensor stays watched whenever anything is held, so entry capacity can
+--    never degrade the evidence an open position's HOLD/EXIT review cites.
+--  * An atomic, self-expiring slot reservation (leader20_entry_reservations) admits at most
+--    available_for_new_entry concurrent BUY candidates; the rest get NO_ENTRY_CAPACITY.
 --  * Per-slot observation columns and a read-only report view.
 --
--- Sizing authority is UNCHANGED: MAX_SLOTS=10, one slot's worst-case margin draw
--- 152.021375 USDT, account cash buffer 0.10 USDT, leverage, the 10-minute clock and the
--- 120s/24-bucket capture contract are all read from the existing production values.
+-- Sizing authority is UNCHANGED and read from one place: MAX_SLOTS=10, one slot's worst-case
+-- margin draw 152.021375 USDT, account cash buffer 0.10 USDT. Leverage, Top20 selection, the
+-- ten-minute cadence and the 120s/24-bucket capture contract are untouched.
 begin;
 set local lock_timeout='2s';
 set local statement_timeout='60s';
