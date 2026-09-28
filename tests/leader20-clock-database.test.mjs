@@ -121,6 +121,11 @@ test('PostgreSQL fixed cutoff, 20-member claim, duplicate admission, expiry and 
   assert.equal(status.slot_status,'DONE');assert.equal(Number(status.capture_finalize_latency_ms),5000);
   assert.equal(Number(status.deepseek_latency_ms),9000);assert.equal(Number(status.gpt_latency_ms),10000);
   assert.equal(Number(status.decision_total_latency_ms),30000);assert.equal(status.retry_count,4);
+  const sid=crypto.randomUUID();
+  await q('insert into v11_long_regime_signals(id,features) values($1,$2)',[sid,{leader20:{entry_window:packet.entry_window}}]);
+  await q("insert into v11_long_regime_orders(state,signal_id,intent,response_payload) values('FILLED',$1,'OPEN_LONG',$2)",
+   [sid,{v22EntryFinality:{sentAt:slot+31000,respondedAt:slot+32000}}]);
+  assert.equal(Date.parse((await q('select order_sent_at from leader20_clock_slots'))[0].order_sent_at),slot+31000);
   await q('update test_clock set at=$1',[iso(slot+120000)]);await rpc('leader20_clock_expire');
   assert.equal((await q('select slot_status from leader20_clock_slots'))[0].slot_status,'DONE');
   await db.exec('rollback');

@@ -140,8 +140,10 @@ begin
   if w->>'version' is distinct from 'TOP20_CLOCK_CAPTURE_1' then return new;end if;
   at_slot:=to_timestamp((w->>'slot_ms')::numeric/1000);
   d:=jsonb_build_object('order_started_at',coalesce(j->>'created_at',clock_timestamp()::text),'slot_status','EXECUTING');
-  if j->>'state'='DISPATCHED' and prior->>'state' is distinct from 'DISPATCHED' then
-   d:=d||jsonb_build_object('order_sent_at',clock_timestamp());end if;
+  -- IOC journals PLANNED -> finality directly. Use its actual gateway send
+  -- timestamp, never the timestamp of a later DB update or an untransmitted intent.
+  if j#>>'{response_payload,v22EntryFinality,sentAt}' is not null then
+   d:=d||jsonb_build_object('order_sent_at',to_timestamp((j#>>'{response_payload,v22EntryFinality,sentAt}')::numeric/1000));end if;
   if j->>'state' in ('FILLED','REJECTED','CANCELLED','EXPIRED') then d:=d||jsonb_build_object('slot_status','DONE');end if;
  end if;
  perform public.leader20_clock_note(at_slot,d);return new;
