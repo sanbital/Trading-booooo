@@ -11,7 +11,7 @@ create role anon;create role authenticated;create role service_role bypassrls;
  create table leader20_members(epoch_id uuid,symbol text,rank int);
  create table trading_account_snapshots(exchange text,captured_at timestamptz,positions_complete boolean,available_quote numeric,positions jsonb);
  create table v11_long_regime_positions(symbol text,state text,remaining_quantity numeric,metadata jsonb);
- create table v11_long_regime_orders(state text,response_payload jsonb,signal_id uuid,intent text);
+ create table v11_long_regime_orders(id uuid primary key default gen_random_uuid(),symbol text,state text,response_payload jsonb,signal_id uuid,intent text);
  create table v11_long_regime_signals(id uuid primary key,features jsonb);
  create table leader20_review_events(id uuid default gen_random_uuid(),epoch_id uuid,symbol text,generation bigint,requested_at timestamptz,
  snapshot_end_ms bigint,snapshot_hash text,reason text,priority int,state text default 'REQUESTED',result jsonb,signal_id uuid);

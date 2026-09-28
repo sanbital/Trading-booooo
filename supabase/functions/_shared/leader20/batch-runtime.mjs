@@ -15,6 +15,16 @@ export function batchOutcome(result,window,extra={}){
   capture_ready_count:0,capture_blocked_count:0,available_slots:null,...extra};
 }
 const pendingCapture=c=>!c||/CAPTURE_READ|INCOMPLETE|MISSING|NOT_READY|INGEST_PENDING|STALE_BUCKET/.test(c.reason??'');
+// Why each watched symbol is not READY, so a blocked slot can be diagnosed from its own row.
+export function blockedReasons(rows,held=[]){
+ const tally={};
+ for(const r of rows??[]){
+  if(r.capture?.status==='AVAILABLE')continue;
+  const key=held?.includes(r.symbol)?'ALREADY_HELD':r.capture?.reason??'CAPTURE_UNAVAILABLE';
+  tally[key]=(tally[key]??0)+1;
+ }
+ return tally;
+}
 
 // Closed one-minute candles supply current 1m/5m momentum. The source close
 // timestamp travels with the evidence; missing candles remain explicitly unknown.
@@ -70,14 +80,25 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sle
  }
  const capacity=await db.rpc('leader20_batch_capacity');
  if(capacity.error)throw Error('BATCH_CAPACITY_UNAVAILABLE');
- stats.available_slots=capacity.data.available;
- if(capacity.data.available<1){
+ const cap=capacity.data??{};
+ // `available` is the ACCOUNT's capture/review admission bound; `available_for_new_entry` is how
+ // many MORE positions may be opened right now (open positions, live entry orders and slot
+ // reservations already taken off). Holding one position never closes the other slots, so the
+ // Top20 entry capture is admitted on `available` and only the ORDER count uses the narrower bound.
+ const remaining=cap.available_for_new_entry??cap.available;
+ Object.assign(stats,{available_slots:remaining,available_slots_before:remaining,
+  open_position_count:cap.open_positions??null,reserved_slots:cap.reserved_slots??0,
+  futures_available_margin:cap.futures_available_margin??cap.available_quote??null,
+  target_margin_per_slot:cap.target_margin_per_slot??null,
+  tracked_positions:cap.open_symbols??cap.held??[]});
+ if(cap.available<1){
   const marked=await db.rpc('leader20_batch_note_full');if(marked.error)throw Error('BATCH_CAPACITY_NOTE');
-  await note({available_slots:capacity.data.available,batch_reason:capacity.data.reason==='NO_ENTRY_CAPACITY'?'CAPACITY_ZERO':capacity.data.reason,slot_status:'BATCH_WAITING'});
-  return outcome({created:false,reason:capacity.data.reason});
+  await note({...stats,batch_reason:cap.reason==='NO_ENTRY_CAPACITY'?'CAPACITY_ZERO':cap.reason,slot_status:'BATCH_WAITING'});
+  return outcome({created:false,reason:cap.reason});
  }
  const members=await db.from('leader20_members').select('symbol,rank').eq('epoch_id',ctl.epoch_id).lte('rank',ctl.clock_capture_enabled?20:10).order('rank');
  if(members.error)throw Error('BATCH_MEMBERSHIP_READ');
+ stats.watch_count=members.data.length;
  let rows,packet;
  for(let attempt=0;attempt<160;attempt++){
   if(window&&now()>=window.latest_batch_start_ms){
@@ -91,10 +112,11 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sle
    if(r.error)throw Error('CAPTURE_READ');return {...m,capture:r.data};
   }catch{return {...m,capture:{status:'UNAVAILABLE',reason:'CAPTURE_READ'}};}
   }));
-  packet=await buildBatch(rows,{asOf:now(),epochId:ctl.epoch_id,generation:ctl.generation,held:capacity.data.held});
+  packet=await buildBatch(rows,{asOf:now(),epochId:ctl.epoch_id,generation:ctl.generation,held:cap.held});
   stats.capture_ready_count=packet.symbols.filter(s=>s.state==='READY').length;
   stats.capture_blocked_count=packet.symbols.length-stats.capture_ready_count;
-  if(!window||stats.capture_ready_count>0&&!rows.some(r=>!capacity.data.held?.includes(r.symbol)&&pendingCapture(r.capture)))break;
+  stats.blocked_reasons=blockedReasons(rows,cap.held);
+  if(!window||stats.capture_ready_count>0&&!rows.some(r=>!cap.held?.includes(r.symbol)&&pendingCapture(r.capture)))break;
   await note({...stats,batch_reason:'CAPTURE_NOT_READY',slot_status:'BATCH_WAITING'});
   const delay=Math.min(1000,250*2**Math.min(attempt,2),window.latest_batch_start_ms-now());
   if(delay<=0)continue;
@@ -111,7 +133,7 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sle
  const readyAt=now();
  // Momentum is also bounded by T, not shifted to a later minute during retries.
  rows=await Promise.all(rows.map(async r=>({...r,market_context:await batchMomentum(r.symbol,window?.slot_ms??now(),fetchFn)})));
- packet=await buildBatch(rows,{asOf:now(),epochId:ctl.epoch_id,generation:ctl.generation,held:capacity.data.held});
+ packet=await buildBatch(rows,{asOf:now(),epochId:ctl.epoch_id,generation:ctl.generation,held:cap.held});
  if(window&&(now()>=window.latest_batch_start_ms||packet.symbols.some(s=>s.state==='READY'&&s.entry_window?.slot_ms!==window.slot_ms))){
   await note({...stats,batch_reason:'DECISION_WINDOW_INSUFFICIENT',slot_status:'EXPIRED'});
   return outcome({created:false,reason:'DECISION_WINDOW_INSUFFICIENT'});
