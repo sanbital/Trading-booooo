@@ -9,7 +9,6 @@ import {lifecycleNote,mergeLifecycleNote} from './entry-lifecycle.mjs';
 import {isLeader20,validEvent,eventExpiry} from '../_shared/leader20/campaign.mjs';
 import {requireEntryAuthority} from '../_shared/leader20/runtime.mjs';
 import {triggerExpiry} from '../_shared/gpt-final-review/contract.mjs';
-import {clockExecutionSafety} from '../_shared/leader20/clock-final.mjs';
 import {sameClockCapture} from '../_shared/leader20/clock.mjs';
 const contexts=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
@@ -111,8 +110,8 @@ export function gptFinalCheck(db,s,finalRecheck=null,retryAuthority=null,{allowA
   if(c.config.mode!=='ENFORCE')return {allowed:false,reason:'GPT_NOT_ENFORCING_NO_NEW_ENTRY'};
   const clockTicket=c.tickets.get(String(s?.id));
   if(clockTicket?.clockFinalAuthority&&finalRecheck){
-    const safety=clockExecutionSafety(clockTicket,c.identity(s),finalRecheck.dispatch_quote,c.now());
-    if(!safety.ok)return {allowed:false,reason:safety.reason};
+    // This is an authority check, including during intent/lease I/O. Quote safety
+    // runs on a freshly acquired quote at the execution boundary before the send.
     if(finalRecheck.recheck_triggered||!sameClockCapture(clockTicket.initial.capture_context,finalRecheck.dispatch_capture,c.now()))
       return {allowed:false,reason:'CLOCK_FINAL_SNAPSHOT_MISMATCH'};
   }

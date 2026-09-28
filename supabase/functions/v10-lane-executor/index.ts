@@ -12,7 +12,7 @@ import {fd1HoldTick,fd1Probe,fd1ExitProbe,HOLD_RELEASE,holdShadowEnabled,FD1_HOL
 import {readCaptureWithRecovery} from "../_shared/gpt-final-decision/capture-context.mjs";
 import {DYNAMIC_VERSION,dispatchDynamicSafety} from "../_shared/gpt-final-decision/dynamic-flow.mjs";
 import {FD1_ENTRY_ENGINE} from "../_shared/gpt-final-decision/engine.mjs";
-import {finalRecheckStep,finalRecheckProbe,postRecheckSafety,markRecheckOutcome,withOrderTiming,executionCapture,executionDynamicSafety} from "./gpt-final-recheck-adapter.mjs";
+import {finalRecheckStep,finalRecheckProbe,postRecheckSafety,markRecheckOutcome,withOrderTiming,executionCapture,executionDynamicSafety,authorizeClockExecution} from "./gpt-final-recheck-adapter.mjs";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 import {POLICY, STRATEGY, ENTRY_EXECUTION_POLICY_VERSION, entryFresh, postFillEntryGuard, nextExit, portfolioMatches as leaderPortfolioMatches} from "../_shared/leader-momentum-v17.mjs";
 import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5, exitAttemptId, classifyExitResponse} from "../_shared/leader-exit-review.mjs";
@@ -290,7 +290,7 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
     // approval or quote budget and then send a stale order. No venue call on refusal.
     let generationError=null;
     try{await requireEntryAuthority(db,s);}catch(error){generationError=String(error.message);}
-    const authority=generationError?{allowed:false,reason:generationError}:authorize?.();
+    const authority=generationError?{allowed:false,reason:generationError}:await authorize?.();
     if(authority?.allowed!==true){
       const reason=authority?.reason??"IOC_DISPATCH_AUTHORITY_MISSING";
       const wr=await db.from("v11_long_regime_orders").update({state:"REJECTED",reject_reason:reason,
@@ -311,7 +311,8 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
     }
     const evidence={source:finalitySource,initialStatus:initial.status,confirmedAt:new Date().toISOString(),attemptNo,
       sentAt,respondedAt,latencyMs:respondedAt-sentAt,finalStatus:receipt?.status??null,executedQty:receipt?.quantity??null,
-      avgPrice:receipt?.price??null,requestedQty:quantity,limitPrice};
+      avgPrice:receipt?.price??null,requestedQty:quantity,limitPrice,
+      ...(authority.clock_execution_safety?{clockExecutionSafety:authority.clock_execution_safety}:{})};
     return {oi:oi.data,rp,id,receipt,initial,evidence,settledRaw:{...finalRaw,v22EntryFinality:evidence}};
   }catch(error){
     if(classifyFailure(error).fatal)throw error;
@@ -1261,7 +1262,8 @@ if(E1_ENABLED&&!isLeader20(s)){
 // its frozen slot, without reading another capture or invoking either AI. Legacy
 // non-clock entries retain the original change detector and FINAL RECHECK contract.
 {
-  const recheck=await finalRecheckStep(db,s,{ticket:attempt.gptFinalReview,e1:E1_ENABLED?e1Decision:null,rawQuote:q});
+  const executionQuote=attempt.gptFinalReview?.clockFinalAuthority?await gateway({action:"quote",market:s.symbol},3000):q;
+  const recheck=await finalRecheckStep(db,s,{ticket:attempt.gptFinalReview,e1:E1_ENABLED?e1Decision:null,rawQuote:executionQuote});
   attempt.finalRecheck=recheck.record;
   if(recheck.record.clock_final_authority)
     await audit(db,null,"BULL","BULL",recheck.proceed?"ENTRY_ALLOW":"ENTRY_DEFER",recheck.reason,
@@ -1298,13 +1300,14 @@ if(E1_ENABLED&&!isLeader20(s)){
 // hand. Re-introducing an await between the quote read and the dispatch check is
 // exactly the defect this fixes; see booGateInputs for the production evidence.
 await requireLeaderEntryControls(db);
-const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuote,dispatchCapture]=await Promise.all([
+const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuoteRead,dispatchCapture]=await Promise.all([
   readOpsPair(db,undefined,s.symbol),
   gateway({action:"v18_open_orders"},5000),
   E1_ENABLED?snap(db):Promise.resolve(sn),
   booGateInputs(db,s),
-  E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q),
+  attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q),
   executionCapture(attempt.gptFinalReview,s.symbol,Date.now())]),finalCheck=rawFinalCheck;
+const dispatchQuote=attempt.gptFinalReview?.clockFinalAuthority?await gateway({action:"quote",market:s.symbol},3000):dispatchQuoteRead;
 attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:dispatchCapture,dispatch_quote:dispatchQuote};
 const dispatchDynamic=executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
 attempt.finalRecheck.dispatch_dynamic=dispatchDynamic;
@@ -1440,7 +1443,9 @@ const firstEvidence=iocAttemptEvidence({attemptNo:1,quote:q,quantity:sized.amoun
 attempt.dispatched=true;
 const first=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:1,quantity:sized.amount,limitPrice,step,
   payload:{...baseIntentPayload,ioc_attempt_evidence:firstEvidence},
-  authorize:()=>gptFinalCheck(db,s,attempt.finalRecheck)});
+  authorize:()=>attempt.gptFinalReview?.clockFinalAuthority?
+    authorizeClockExecution(s,attempt.gptFinalReview,attempt.finalRecheck,()=>gateway({action:"quote",market:s.symbol},3000),
+      ()=>gptFinalCheck(db,s,attempt.finalRecheck)):gptFinalCheck(db,s,attempt.finalRecheck)});
 if(first.blocked)return await finishPartialOrAbort(first.reason,{executionAttempts:0});
 const retryArmed=gptConfirmFirstFinality(db,retryAuthority,first);
 lastEvidence=first.evidence;lastReceipt=first.receipt;
@@ -1490,9 +1495,11 @@ if(!retryRecheck.proceed)return await finishPartialOrAbort(retryRecheck.reason,{
 
 // FINAL BUY can take seconds. Re-read every execution-safety input after the answer.
 await requireLeaderEntryControls(db);
-const[retryPair,retryOrders,retrySnap,retryQuote,retryInfo,retryCapture]=await Promise.all([
-  readOpsPair(db,undefined,s.symbol),gateway({action:"v18_open_orders"},5000),snap(db),gateway({action:"quote",market:s.symbol},3000),
+const[retryPair,retryOrders,retrySnap,retryQuoteRead,retryInfo,retryCapture]=await Promise.all([
+  readOpsPair(db,undefined,s.symbol),gateway({action:"v18_open_orders"},5000),snap(db),
+  attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):gateway({action:"quote",market:s.symbol},3000),
   gateway({action:"symbol_info",market:s.symbol},3000),executionCapture(attempt.gptFinalReview,s.symbol,Date.now())]);
+const retryQuote=attempt.gptFinalReview?.clockFinalAuthority?await gateway({action:"quote",market:s.symbol},3000):retryQuoteRead;
 attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:retryCapture,dispatch_quote:retryQuote};
 const retryDynamic=executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
 attempt.finalRecheck.dispatch_dynamic=retryDynamic;
@@ -1550,6 +1557,11 @@ if(!retryDispatchCheck.allowed)
   return await finishPartialOrAbort(retryDispatchCheck.reason??"IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID",{executionAttempts:1});
 const second=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:2,quantity:retryPlan.remainingQuantity,
   limitPrice:retryPlan.limitPrice,step,payload:retryPayload,authorize:()=>{
+    if(attempt.gptFinalReview?.clockFinalAuthority)
+      return authorizeClockExecution(s,attempt.gptFinalReview,attempt.finalRecheck,()=>gateway({action:"quote",market:s.symbol},3000),()=>{
+        const check=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority);
+        return check.allowed&&gptConsumeRetry(db,retryAuthority)?check:{allowed:false,reason:check.reason??"IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID"};
+      });
     const check=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority),age=Date.now()-Number(retryQuote?.timing?.received_at_ms);
     if(!check.allowed)return check;
     if(!Number.isFinite(age)||age<0||age>E1_POLICY.maxQuoteAgeMs)return {allowed:false,reason:"EXECUTION_SAFETY_REJECT:STALE_QUOTE"};
