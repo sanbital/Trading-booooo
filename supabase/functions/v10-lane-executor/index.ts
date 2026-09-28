@@ -3212,8 +3212,23 @@ async function gptDryRun(db,body){
 }
 async function runWithLease(db,operation=run){
   const owner=crypto.randomUUID();
-  const lock=await db.rpc("v17_acquire_execution_lease",{p_owner:owner});
-  if(lock.error)throw new Error("V17_LEASE_UNAVAILABLE");
+  let lock;
+  try{
+    lock=await db.rpc("v17_acquire_execution_lease",{p_owner:owner});
+    if(lock.error)throw new Error("V17_LEASE_UNAVAILABLE");
+  }catch{
+    // Acquisition may have committed before its acknowledgement was lost.
+    // Never execute on uncertain ownership. Release only this unstarted request's
+    // owner; the RPC cannot release another worker's lease. Keep the 10 min TTL.
+    let cleaned=false;
+    for(let attempt=0;attempt<3;attempt++){
+      const released=await db.rpc("v17_release_execution_lease",{p_owner:owner}).catch(()=>null);
+      if(released&&!released.error){cleaned=true;break;}
+      if(attempt<2)await new Promise(resolve=>setTimeout(resolve,100*(attempt+1)));
+    }
+    if(!cleaned)console.error("V17_UNCERTAIN_LEASE_CLEANUP_FAILED");
+    throw new Error("V17_LEASE_UNAVAILABLE");
+  }
   if(lock.data!==true)return {ok:true,skipped:"V17_EXECUTOR_BUSY"};
   leaseOwners.set(db,owner);cycleBudgets.set(db,createBudget({ms:55000,calls:160}));
   try{return await operation(db);}finally{
