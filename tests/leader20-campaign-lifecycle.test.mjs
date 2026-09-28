@@ -44,6 +44,7 @@ test('real PostgreSQL: fixed periodic clock, fresh candidates, WAIT continuity, 
   add column api_completed_at timestamptz,add column snapshot_at timestamptz;
   alter table gpt_final_review_daily_budget add column settled_usd numeric default 0;`);
  await db.exec(await read('supabase/migrations/20260928034900_leader20_review_completion_concurrency.sql'));
+ await db.exec(await read('supabase/migrations/20260928035300_leader20_owned_provider_reservation.sql'));
  await db.exec(`create trigger campaign_review after update of state on gpt_final_entry_reviews
   for each row when(new.state='DONE' and old.state is distinct from new.state) execute function leader20_record_review();
  update leader20_batch_control set enabled=true,release_receipt='{"budget_verified":true,"recall_verified":true,"concurrency_verified":true,"protection_verified":true}';
@@ -140,6 +141,17 @@ test('real PostgreSQL: fixed periodic clock, fresh candidates, WAIT continuity, 
   assert.equal((await rpc('gpt_final_review_complete',['complete',owner,record])).duplicate,true);
   await assert.rejects(rpc('gpt_final_review_complete',['complete',crypto.randomUUID(),record]),/REVIEW_RESULT_CAS/);
   await assert.rejects(rpc('gpt_final_review_complete',['complete',owner,{result:{valid:true,decision:'BUY'}}]),/REVIEW_RESULT_CAS/);
+ });
+ await t.test('lost reserve response recovers only the same undispatched owner; daily cap and dispatch prevent duplicate spend',async()=>{
+  await q('update trading_account_snapshots set available_quote=500,captured_at=clock_timestamp()');
+  await q("update ai_provider_limits set daily_usd=50 where provider='openai'");
+  const owner=crypto.randomUUID(),reserve=o=>rpc('ai_call_reserve_owned',[o,'owned','openai','gpt-5.4-mini-2026-03-17','ENTRY','owned','v',.05]);
+  assert.equal((await reserve(owner)).created,true);
+  assert.equal((await reserve(owner)).resumed_reservation,true);
+  assert.equal((await reserve(crypto.randomUUID())).created,false);
+  await rpc('ai_call_transition',['owned',owner,'DISPATCHED',null,null,null,null]);
+  assert.equal((await reserve(owner)).created,false);
+  assert.equal((await q("select count(*)::int n from ai_call_ledger where call_key='owned'"))[0].n,1);
  });
 });
 

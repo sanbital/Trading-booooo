@@ -11,7 +11,7 @@ const endpoint='https://api.deepseek.com/chat/completions';
 const init={body:JSON.stringify({model:'deepseek-flash',max_tokens:2400,messages:[]})};
 function database({denied=false}={}){
  const events=[];return {events,async rpc(name,p){events.push({name,p});
-  return {data:name==='ai_call_reserve'?(denied?{created:false,reason:'API_BUDGET_EXHAUSTED',additional_usd:.05}:
+  return {data:name==='ai_call_reserve_owned'?(denied?{created:false,reason:'API_BUDGET_EXHAUSTED',additional_usd:.05}:
    {created:true,row:{owner:'owner'}}):{state:p.p_state}};}};
 }
 test('usage is settled once even when provider model JSON is malformed',async()=>{
@@ -19,7 +19,7 @@ test('usage is settled once even when provider model JSON is malformed',async()=
  const f=paidTransport(db,{parentKey:'p',purpose:'ENTRY',fetchFn:async()=>{calls++;return Response.json({id:'r',
   usage:{prompt_tokens:20000,prompt_cache_hit_tokens:12000,completion_tokens:500},choices:[{message:{content:'{bad'}}]});}});
  await f(endpoint,init);assert.equal(calls,1);
- assert.deepEqual(db.events.map(e=>e.name==='ai_call_reserve'?'RESERVED':e.p.p_state),['RESERVED','DISPATCHED','SETTLED']);
+ assert.deepEqual(db.events.map(e=>e.name==='ai_call_reserve_owned'?'RESERVED':e.p.p_state),['RESERVED','DISPATCHED','SETTLED']);
  assert.equal(db.events[2].p.p_usage.cached_input_tokens,12000);
 });
 test('budget refusal sends no HTTP and preserves blocked-candidate additional cost',async()=>{
@@ -34,6 +34,20 @@ test('ambiguous provider timeout is retained, never refunded or automatically re
  await assert.rejects(f(endpoint,init),/timeout/);assert.equal(calls,1);
  assert.equal(db.events.at(-1).p.p_state,'UNKNOWN');
  assert.equal(db.events.some(e=>e.p.p_state==='CANCELLED'),false);
+});
+
+test('lost reservation response and rolled-back dispatch transition recover without duplicate provider HTTP',async()=>{
+ let reserved=null,claims=0,dispatches=0,calls=0;
+ const db={rpc:async(name,p)=>{
+  if(name==='ai_call_reserve_owned'){
+   claims++;if(!reserved){reserved=p;return {error:{message:'fetch failed'}};}
+   assert.deepEqual(p,reserved);return {data:{created:true,resumed_reservation:true,row:{owner:p.p_owner}}};
+  }
+  if(p.p_state==='DISPATCHED'&&++dispatches===1)return {error:{code:'55P03'}};
+  return {data:{state:p.p_state}};
+ }};
+ await paidTransport(db,{parentKey:'retry',purpose:'ENTRY',fetchFn:async()=>{calls++;return Response.json({usage:{prompt_tokens:2,completion_tokens:2}});}})(endpoint,init);
+ assert.equal(claims,2);assert.equal(dispatches,2);assert.equal(calls,1);
 });
 test('batch PASS gets one independent GPT FINAL with original latest 24 buckets and no FIRST',async()=>{
  const facts=computeFacts(src(T),{asOf:T});facts.capture_context=validCapture(T);
