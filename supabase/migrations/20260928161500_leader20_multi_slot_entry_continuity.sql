@@ -108,7 +108,8 @@ grant select on public.leader20_entry_reservations to service_role;
 -- A reservation is LIVE while its state is RESERVED or ORDER_PENDING and its own deadline has
 -- not passed. Capacity reads that predicate WITHOUT writing, so a lost settlement can never
 -- block the account past that deadline, and capacity stays callable from a read-only session.
--- Record the reservation lifecycle from the order/signal journal. Idempotent, and never
+--
+-- This records the lifecycle from the order and signal journals. It is idempotent and never
 -- required for correctness: expiry alone already releases capacity.
 create or replace function public.leader20_entry_reservation_sweep() returns jsonb
  language plpgsql set search_path='' as $$
