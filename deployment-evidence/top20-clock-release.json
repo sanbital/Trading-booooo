@@ -1,9 +1,15 @@
 {
   "policy": "TOP20_CLOCK_CAPTURE_1",
-  "release_attempt": 2,
+  "release_attempt": 3,
   "baseline_main": "a94642a47be989baa25aa70785fb4bc7ba9839dc",
   "baseline_collector_commit": "c7c1d688fb26432ef238924db91a69221d129200",
   "expected_versions": {"v10-lane-executor": 148, "v10-lane-signal-generator": 43},
+  "baseline_source_overrides": {
+    "v10-lane-executor": {
+      "supabase/functions/_shared/leader20/batch-runtime.mjs": "ee2d0b44c23ac8aa687dd19a5d142bb542071f49",
+      "supabase/functions/_shared/leader20/batch.mjs": "ee2d0b44c23ac8aa687dd19a5d142bb542071f49"
+    }
+  },
   "watch_limit": 20,
   "capture_seconds": 120,
   "slot_seconds": 600,
