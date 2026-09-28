@@ -107,7 +107,7 @@ export function compactDynamic(c,{fullPath=false}={}) {
     ordered_path_columns:columns,
     ordered_path:p.map(x=>columns.map(k=>fullPath?(x[k]??null):x[k])),
     latest_six_range:[Math.max(0,p.length-6),p.length-1],
-    critical_segments: [...indices].filter(i => i >= 0).sort((a,b) => a-b).map(i => ({index: i, ...Object.fromEntries(fields.filter(k=>Object.hasOwn(p[i],k)).map(k=>[k,p[i][k]]))})),
+    critical_segments: [...indices].filter(i => i >= 0).sort((a,b) => a-b).map(i => fullPath?{index:i,ordered_path_row:i}:{index: i, ...Object.fromEntries(fields.filter(k=>Object.hasOwn(p[i],k)).map(k=>[k,p[i][k]]))}),
     raw_bucket_count: p.length};
 }
 /** Absence of data changes confidence and schedules review, never creates an EXIT. */

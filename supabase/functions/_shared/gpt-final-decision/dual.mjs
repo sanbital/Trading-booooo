@@ -1,3 +1,4 @@
+import {deduplicateEvidence,compactHoldPayload,technicalFailure} from './compact-hold.mjs';
 import {boundedDynamicTransportSchema} from './dynamic-contract.mjs';
 import {ENTRY_ANALYSIS,isEntryAnalysis} from './entry-analysis.mjs';
 /** Normal arbitration is GPT FINAL-only. The separately validated emergency HOLD consumer is unchanged. */
@@ -24,14 +25,14 @@ Adopt, partially adopt or reject either opinion. No advisor vote or extra veto; 
 advisor_status/available/valid/error are server facts; never infer or output them.
 Ignore INVALID/UNAVAILABLE opinions. DEGRADED_VALID retains verified citations; never adopt rejected_evidence.
 If DeepSeek input mismatched, do not use its opinion; explain that status in arbitration.reason.
-For HOLD, P142/retestAnchor/trailing/profit/breakeven/time candidates are SOFT proposals, never mandatory exits.
+HOLD: all soft stop and time candidates are proposals, never mandatory exits.
 You approve soft raises and strategic exits in this arbitration.
 Read position.exit_context.protection: approved_soft_stop is the protection actually in force,
 candidate_soft_stop is what the deterministic engine proposes. A candidate is never applied without your approval.
 HOLD consumes the candidate and keeps approved_soft_stop exactly as it is.
 PROTECT means RAISE_PROTECTION: approve candidate_soft_stop at exactly that value. The server applies only the
 candidate you were shown and never a price you invent; with no candidate above approved_soft_stop nothing moves.
-An approved protection level is append-only and can never be lowered, by you or by anything else.
+Approved protection can only rise.
 Do not tighten protection merely because price rose a lot. While higher highs, higher lows, 60-120s net taker flow,
 buyer share, peak drawdown, BTC/market, spread and depth all still support the thesis, HOLD even with a candidate present.
 One short shake-out is not enough to PROTECT; raise when several independent axes weaken together
@@ -40,7 +41,7 @@ worsening flow acceleration, bid depth collapse, rising ask pressure, OI/price d
 strength, BTC/market falling, persistent lower highs, momentum exhaustion). If the thesis itself is broken, EXIT.
 The separate catastrophic/R5 maximum-loss floor remains HARD and cannot be overridden.
 PROTECT retains existing HARD/native protection; it cannot widen/cancel stops or independently place an order.
-Your valid decision takes precedence. For dynamic-policy reviews GPT FINAL is the only decision authority. On failure keep approved protection and hard safety, and schedule a fresh review; DeepSeek never independently authorizes an action.
+Your valid decision takes precedence. For dynamic-policy reviews GPT FINAL is the only decision authority. On technical failure the server retries GPT once, then evaluates deterministic emergency protection using fresh multi-axis evidence. DeepSeek never independently authorizes an action.
 Copy arbitration paths exactly from the schema: initial. or current. prefixes are snapshot-specific; never rename or alias.
 RECHECK facts are nested, e.g. current.current.facts.trend.return_5m; bare metric names are invalid.
 adopted/rejected use only valid DeepSeek citations prefixed initial.; considered is their union (up to twelve keys).
@@ -108,11 +109,12 @@ export async function frozenReview(packet,{snapshotAtMs,inputPayload=payloadFor,
     market_sensor_hash:await hash(copy.facts?.market_sensor??null),packet_hash:await hash(copy),capture_window:{start_ms:capture.start_ms??null,end_ms:capture.end_ms??null},
     capture_trajectory_hash:trajectoryHash,orderbook_reference:copy.current_ref??copy.execution_ref??copy.position?.valuation??null,
     tape_window:copy.pre_dispatch?.tape??null,initial_reference:copy.initial?.execution_ref??null,
-    current_reference:copy.current_ref??copy.execution_ref??null,position_state:copy.position??null,
+    current_reference:copy.current_ref??copy.execution_ref??null,position_state:dynamicEnabled(copy)&&copy.task==='HOLD'?{position_id:copy.position.position_id,generation:copy.position.generation,evidence_reference:'position',position_hash:await hash(copy.position)}:copy.position??null,
     trigger_identity:{candidate_id:copy.candidate_id,reasons:copy.trigger_reasons??[],offset_ms:copy.as_of_offset_ms??null},policy_version:policy?.bundle?.policy_version??null,policy_hash:policy?.hash??null};
-  const snapshot_hash=await hash({identity,market});
+  const canonicalMarket=copy.task==='HOLD'?deduplicateEvidence(market):market;
+  const snapshot_hash=await hash({identity,market:canonicalMarket});
   return freeze({packet:copy,base_payload:base,snapshot_at_ms:snapshotAtMs,snapshot_hash,
-    market_input:{...market,snapshot:{...identity,snapshot_hash}},capture_trajectory_hash:trajectoryHash});
+    market_input:{...canonicalMarket,snapshot:{...identity,snapshot_hash}},capture_trajectory_hash:trajectoryHash});
 }
 export const FIRST_COMPACT_VERSION='FD1_FIRST_COMPACT_1';
 function firstSchema(shared){
@@ -244,10 +246,10 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   const finalReserveMs=dynamicEnabled(packet)?Math.min(analysis?ENTRY_ANALYSIS.finalMs:4500,Math.max(0,Math.floor((remainingAtStart-completionReserveMs)*(analysis?.7:.6)))):0;
   const preliminaryMs=dynamicEnabled(packet)?Math.max(0,remainingAtStart-finalReserveMs-completionReserveMs):Infinity;
   const firstMs=Math.min(preliminaryMs,Math.max(1,Math.min(analysis?ENTRY_ANALYSIS.preliminaryMs:dynamicEnabled(packet)?2500:6000,remainingAtStart-2500,Math.floor((remainingAtStart-1500)*.65))));
-  const advisoryMs=Math.min(preliminaryMs,Math.max(1,Math.min(analysis?ENTRY_ANALYSIS.preliminaryMs:dynamicEnabled(packet)?3500:6000,remainingAtStart-2200,Math.floor((remainingAtStart-1200)*.75))));
+  const advisoryMs=Math.min(fast?1200:Infinity,preliminaryMs,Math.max(1,Math.min(analysis?ENTRY_ANALYSIS.preliminaryMs:dynamicEnabled(packet)?3500:6000,remainingAtStart-2200,Math.floor((remainingAtStart-1200)*.75))));
   const safe=async fn=>{try{return await fn();}catch{return invalid('FD_PROVIDER_ERROR');}};
   const [first0,ds0]=await Promise.all([
-    firstMs>0?safe(()=>gptCall(initial.packet,{apiKey,fetchFn,now,timeoutMs:firstMs,payloadFn:()=>firstPayload(initial),validate:dynamicEnabled(packet)?wire=>validateFirstWire(wire,initial):validate})):invalid('FD_FINAL_BUDGET_RESERVED'),
+    !fast&&firstMs>0?safe(()=>gptCall(initial.packet,{apiKey,fetchFn,now,timeoutMs:firstMs,payloadFn:()=>firstPayload(initial),validate:dynamicEnabled(packet)?wire=>validateFirstWire(wire,initial):validate})):invalid('FD_FINAL_BUDGET_RESERVED'),
     advisoryMs>0?safe(()=>counterCall(initial,{apiKey:deepseekKey,fetchFn,now,timeoutMs:advisoryMs})):invalid('FD_FINAL_BUDGET_RESERVED')]);
   const preliminaryCompletedAt=now();
   const first={...first0,snapshot_hash:initial.snapshot_hash};let ds={...ds0};
@@ -276,9 +278,19 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   if(refreshError){const u=JSON.parse(finalPayload.input[1].content);u.latest_snapshot_error=refreshError;finalPayload.input[1].content=JSON.stringify(u);}
   const transport=dynamicEnabled(packet)?finalEvidenceTransport(finalPayload):{payload:finalPayload,decode:x=>x};
   const finalStartedAt=now(),remaining=deadline-finalStartedAt-completionReserveMs;
-  let final=remaining>0?await safe(()=>gptCall(current.packet,{apiKey,fetchFn,now,timeoutMs:Math.min(analysis?ENTRY_ANALYSIS.finalMs:8000,remaining),
+  let final=remaining>0?await safe(()=>gptCall(current.packet,{apiKey,fetchFn,now,timeoutMs:Math.min(analysis?ENTRY_ANALYSIS.finalMs:fast?3500:8000,remaining),
     payloadFn:()=>transport.payload,
     validate:(wire,p)=>validateFinalWire(transport.decode(wire),p,{validate,catalog,advisory:ds})})):invalid('FD_ARBITRATION_NO_TIME');
+  let retry=null,failedFinal=null;
+  // Only GPT can retry the final verdict. Same immutable snapshot, one separately metered call.
+  if(packet.task==='HOLD'&&dynamicEnabled(packet)&&technicalFailure(final)&&deadline-now()-completionReserveMs>0){
+    failedFinal=final;
+    const retryPayload=compactHoldPayload(transport.payload);
+    final=await safe(()=>gptCall(current.packet,{apiKey,fetchFn,now,timeoutMs:Math.min(3500,deadline-now()-completionReserveMs),
+      payloadFn:()=>retryPayload,validate:(wire,p)=>validateFinalWire(transport.decode(wire),p,{validate,catalog,advisory:ds})}));
+    retry={attempts:1,trigger:failedFinal.error??'FD_HOLD_NO_VALID_DECISION',before_bytes:failedFinal.request_bytes??null,
+      after_bytes:final.request_bytes??null,valid:final.valid===true,error:final.error??null,started_at_ms:final.started_at_ms,completed_at_ms:final.completed_at_ms};
+  }
   if(final.valid===true){try{const wire=transport.decode(final.wire),answer=validateFinalWire(wire,current.packet,{validate,catalog,advisory:ds});
     final={...final,...(JSON.stringify(wire)!==JSON.stringify(final.wire)?{provider_wire:final.wire,wire_encoding:'EXACT_EVIDENCE_IDS_V1'}:{}),wire,answer,decision:answer.decision};}
     catch(e){final={...final,valid:false,decision:'ABSTAIN',answer:null,error:e.message??'FD_FINAL_INVALID'};}}
@@ -311,9 +323,9 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
     deepseek_snapshot_hash:ds.snapshot_hash??null,gpt_snapshot_hash:current.snapshot_hash,
     trajectory_hash:current.capture_trajectory_hash,snapshot_binding:dynamicEnabled(packet)?'SAME_FROZEN_DYNAMIC_SNAPSHOT':'LEGACY_REFRESH',refresh_error:refreshError,
     first,deepseek:ds,initial_packet:{snapshot_hash:initial.packet.snapshot_hash},initial_input:initial.market_input,final_input:current.market_input,
-    api_calls:[first,ds,final].filter(x=>x.attempted).length};
+    compact_retry:retry,api_calls:[first,ds,failedFinal,final].filter(x=>x?.attempted).length};
   const knownCost=x=>x?.attempted===false?0:Number.isFinite(x?.api_cost_usd)?x.api_cost_usd:null;
-  const costs=[knownCost(first),ds.attempted===false?0:flashCostCeiling(ds),knownCost(final)];
+  const costs=[failedFinal?knownCost(failedFinal):0,knownCost(first),ds.attempted===false?0:flashCostCeiling(ds),knownCost(final)];
   const capture=current.packet.facts?.capture_context,position=current.packet.position?.exit_context;
   const dynamicAudit={version:'DYNAMIC_CONTINUITY_2',stage:packet.task==='RECHECK'?'FINAL_RECHECK':packet.task==='HOLD'?
     final.decision==='EXIT'?'EXIT':final.decision==='PROTECT'?'PROTECTION':'HOLD':'ENTRY',symbol:packet.symbol,
@@ -334,7 +346,7 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
     dynamic_audit:dynamicAudit,
     dual:{version:DUAL_VERSION,authority:'GPT_FINAL_ONLY',audit_ref:'arbitration'},arbitration:audit,final_packet:current.packet,final_snapshot_at_ms:current.snapshot_at_ms,
     api_cost_usd:costs.every(x=>x!==null)?costs.reduce((a,b)=>a+b,0):null,
-    attempted:[first,ds,final].some(x=>x.attempted),started_at_ms:started,completed_at_ms:now(),latency_ms:now()-started};
+    attempted:[first,ds,failedFinal,final].some(x=>x?.attempted),started_at_ms:started,completed_at_ms:now(),latency_ms:now()-started};
 }
 export function revalidateArbitration(result,packet,validate=validateDecision){
   if(result?.arbitration?.version!==DUAL_VERSION||result.arbitration.authority!=='GPT_FINAL_ONLY')throw Error('FD_FINAL_AUTHORITY');

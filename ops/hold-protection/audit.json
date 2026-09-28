@@ -1,0 +1,1221 @@
+{
+  "source_main": "08665eb98f7bbe251896609f35a84bd0d0c9a081",
+  "source_executor_version": 155,
+  "source_executor_hash": "5579ad81a2b5d56c712abe7fca97901e972179fc96de86787e5d9d66ae037b22",
+  "requests": [
+    {
+      "job_key": "64fa6a6b48345d5f47c214977af7136d92d88195289f99e876a8e8e6e4822af2",
+      "error_before": "FD_LEADER20_EVIDENCE_REQUIRED",
+      "input_bytes_before": 98013,
+      "input_bytes_after": 55191,
+      "bound_bytes": 130000,
+      "provider_model": "gpt-5.4-mini-2026-03-17",
+      "max_output_tokens": 1400,
+      "parent_reserved_usd": 0.1,
+      "final_reservation_before": "see paid ledger",
+      "final_actual_cost_before": 0.05216865,
+      "conservative_input_token_upper_bound_before": 102109,
+      "conservative_input_token_upper_bound_after": 59287,
+      "conservative_max_cost_before": 0.08288175,
+      "conservative_max_cost_after": 0.05076525,
+      "note": "Token count is the existing conservative admission bound (UTF-8 bytes + 4096), not tokenizer usage. Rejected FINAL was never reserved/dispatched; FIRST may have been billed.",
+      "original_market_sections": [
+        {
+          "section": "snapshot",
+          "bytes": 28434
+        },
+        {
+          "section": "position",
+          "bytes": 27484
+        },
+        {
+          "section": "leader20",
+          "bytes": 1635
+        },
+        {
+          "section": "facts",
+          "bytes": 1424
+        },
+        {
+          "section": "capture_context",
+          "bytes": 1189
+        },
+        {
+          "section": "model_judgments",
+          "bytes": 772
+        },
+        {
+          "section": "horizon_definitions",
+          "bytes": 690
+        },
+        {
+          "section": "dynamic_data_state",
+          "bytes": 593
+        },
+        {
+          "section": "decision_policy",
+          "bytes": 521
+        },
+        {
+          "section": "execution_state",
+          "bytes": 295
+        },
+        {
+          "section": "market_sensor",
+          "bytes": 180
+        },
+        {
+          "section": "deterministic_safety_state",
+          "bytes": 172
+        },
+        {
+          "section": "trajectory_contracts",
+          "bytes": 152
+        },
+        {
+          "section": "candidate_id",
+          "bytes": 28
+        },
+        {
+          "section": "dynamic_policy",
+          "bytes": 26
+        },
+        {
+          "section": "unavailable",
+          "bytes": 14
+        },
+        {
+          "section": "dynamic_as_of_ms",
+          "bytes": 13
+        },
+        {
+          "section": "symbol",
+          "bytes": 10
+        },
+        {
+          "section": "t",
+          "bytes": 6
+        },
+        {
+          "section": "data_mode",
+          "bytes": 6
+        },
+        {
+          "section": "risk_flags",
+          "bytes": 2
+        }
+      ],
+      "original_position_sections": [
+        {
+          "section": "dynamic_continuity",
+          "bytes": 25838
+        },
+        {
+          "section": "exit_context",
+          "bytes": 1255
+        },
+        {
+          "section": "valuation",
+          "bytes": 120
+        },
+        {
+          "section": "generation",
+          "bytes": 68
+        },
+        {
+          "section": "position_id",
+          "bytes": 38
+        },
+        {
+          "section": "event",
+          "bytes": 15
+        },
+        {
+          "section": "stop_stage",
+          "bytes": 10
+        },
+        {
+          "section": "deterministic_exit_candidate",
+          "bytes": 4
+        }
+      ],
+      "after_payload_sections": [
+        {
+          "section": "input",
+          "bytes": 50104
+        },
+        {
+          "section": "text",
+          "bytes": 4866
+        },
+        {
+          "section": "model",
+          "bytes": 25
+        },
+        {
+          "section": "prompt_cache_key",
+          "bytes": 20
+        },
+        {
+          "section": "reasoning",
+          "bytes": 17
+        },
+        {
+          "section": "truncation",
+          "bytes": 10
+        },
+        {
+          "section": "service_tier",
+          "bytes": 9
+        },
+        {
+          "section": "store",
+          "bytes": 5
+        },
+        {
+          "section": "max_output_tokens",
+          "bytes": 4
+        },
+        {
+          "section": "tools",
+          "bytes": 2
+        }
+      ],
+      "after_user_sections": [
+        {
+          "section": "position",
+          "bytes": 14734
+        },
+        {
+          "section": "evidence_ids",
+          "bytes": 4189
+        },
+        {
+          "section": "independent_reviews",
+          "bytes": 1784
+        },
+        {
+          "section": "facts",
+          "bytes": 1424
+        },
+        {
+          "section": "leader20",
+          "bytes": 1345
+        },
+        {
+          "section": "capture_context",
+          "bytes": 1189
+        },
+        {
+          "section": "snapshot",
+          "bytes": 1121
+        },
+        {
+          "section": "snapshot_delta",
+          "bytes": 1028
+        },
+        {
+          "section": "model_judgments",
+          "bytes": 772
+        },
+        {
+          "section": "horizon_definitions",
+          "bytes": 690
+        },
+        {
+          "section": "dynamic_data_state",
+          "bytes": 593
+        },
+        {
+          "section": "execution_state",
+          "bytes": 295
+        },
+        {
+          "section": "initial_snapshot_reference",
+          "bytes": 193
+        },
+        {
+          "section": "market_sensor",
+          "bytes": 180
+        },
+        {
+          "section": "deterministic_safety_state",
+          "bytes": 172
+        },
+        {
+          "section": "trajectory_contracts",
+          "bytes": 152
+        },
+        {
+          "section": "candidate_id",
+          "bytes": 28
+        },
+        {
+          "section": "dynamic_policy",
+          "bytes": 26
+        },
+        {
+          "section": "unavailable",
+          "bytes": 14
+        },
+        {
+          "section": "dynamic_as_of_ms",
+          "bytes": 13
+        },
+        {
+          "section": "symbol",
+          "bytes": 10
+        },
+        {
+          "section": "advisor_status",
+          "bytes": 7
+        },
+        {
+          "section": "disagreement",
+          "bytes": 7
+        },
+        {
+          "section": "t",
+          "bytes": 6
+        },
+        {
+          "section": "data_mode",
+          "bytes": 6
+        },
+        {
+          "section": "advisor_available",
+          "bytes": 4
+        },
+        {
+          "section": "advisor_valid",
+          "bytes": 4
+        },
+        {
+          "section": "advisor_error",
+          "bytes": 4
+        },
+        {
+          "section": "risk_flags",
+          "bytes": 2
+        }
+      ],
+      "physical_provider_ledger": true
+    },
+    {
+      "job_key": "5abbe4a919c862918b0a4a49b1bfde52641e205062ea0857b121651a0da72eb7",
+      "error_before": "FD_REQUEST_COST_BOUND",
+      "input_bytes_before": 156173,
+      "input_bytes_after": 96766,
+      "bound_bytes": 130000,
+      "provider_model": "gpt-5.4-mini-2026-03-17",
+      "max_output_tokens": 1400,
+      "parent_reserved_usd": 0.1,
+      "final_reservation_before": 0,
+      "final_actual_cost_before": 0,
+      "conservative_input_token_upper_bound_before": 160269,
+      "conservative_input_token_upper_bound_after": 100862,
+      "conservative_max_cost_before": 0.12650175,
+      "conservative_max_cost_after": 0.0819465,
+      "note": "Token count is the existing conservative admission bound (UTF-8 bytes + 4096), not tokenizer usage. Rejected FINAL was never reserved/dispatched; FIRST may have been billed.",
+      "original_market_sections": [
+        {
+          "section": "snapshot",
+          "bytes": 34884
+        },
+        {
+          "section": "position",
+          "bytes": 33916
+        },
+        {
+          "section": "capture_context",
+          "bytes": 23277
+        },
+        {
+          "section": "market_sensor",
+          "bytes": 11166
+        },
+        {
+          "section": "leader20",
+          "bytes": 1635
+        },
+        {
+          "section": "facts",
+          "bytes": 1426
+        },
+        {
+          "section": "horizon_definitions",
+          "bytes": 790
+        },
+        {
+          "section": "model_judgments",
+          "bytes": 772
+        },
+        {
+          "section": "decision_policy",
+          "bytes": 521
+        },
+        {
+          "section": "execution_state",
+          "bytes": 295
+        },
+        {
+          "section": "dynamic_data_state",
+          "bytes": 175
+        },
+        {
+          "section": "deterministic_safety_state",
+          "bytes": 172
+        },
+        {
+          "section": "trajectory_contracts",
+          "bytes": 152
+        },
+        {
+          "section": "candidate_id",
+          "bytes": 28
+        },
+        {
+          "section": "dynamic_policy",
+          "bytes": 26
+        },
+        {
+          "section": "unavailable",
+          "bytes": 14
+        },
+        {
+          "section": "dynamic_as_of_ms",
+          "bytes": 13
+        },
+        {
+          "section": "symbol",
+          "bytes": 10
+        },
+        {
+          "section": "t",
+          "bytes": 6
+        },
+        {
+          "section": "data_mode",
+          "bytes": 6
+        },
+        {
+          "section": "risk_flags",
+          "bytes": 2
+        }
+      ],
+      "original_position_sections": [
+        {
+          "section": "dynamic_continuity",
+          "bytes": 32256
+        },
+        {
+          "section": "exit_context",
+          "bytes": 1258
+        },
+        {
+          "section": "valuation",
+          "bytes": 120
+        },
+        {
+          "section": "generation",
+          "bytes": 68
+        },
+        {
+          "section": "position_id",
+          "bytes": 38
+        },
+        {
+          "section": "event",
+          "bytes": 26
+        },
+        {
+          "section": "stop_stage",
+          "bytes": 10
+        },
+        {
+          "section": "deterministic_exit_candidate",
+          "bytes": 4
+        }
+      ],
+      "after_payload_sections": [
+        {
+          "section": "input",
+          "bytes": 90650
+        },
+        {
+          "section": "text",
+          "bytes": 5895
+        },
+        {
+          "section": "model",
+          "bytes": 25
+        },
+        {
+          "section": "prompt_cache_key",
+          "bytes": 20
+        },
+        {
+          "section": "reasoning",
+          "bytes": 17
+        },
+        {
+          "section": "truncation",
+          "bytes": 10
+        },
+        {
+          "section": "service_tier",
+          "bytes": 9
+        },
+        {
+          "section": "store",
+          "bytes": 5
+        },
+        {
+          "section": "max_output_tokens",
+          "bytes": 4
+        },
+        {
+          "section": "tools",
+          "bytes": 2
+        }
+      ],
+      "after_user_sections": [
+        {
+          "section": "capture_context",
+          "bytes": 18658
+        },
+        {
+          "section": "position",
+          "bytes": 17941
+        },
+        {
+          "section": "evidence_ids",
+          "bytes": 12599
+        },
+        {
+          "section": "market_sensor",
+          "bytes": 11166
+        },
+        {
+          "section": "facts",
+          "bytes": 1426
+        },
+        {
+          "section": "leader20",
+          "bytes": 1345
+        },
+        {
+          "section": "snapshot",
+          "bytes": 1139
+        },
+        {
+          "section": "snapshot_delta",
+          "bytes": 1028
+        },
+        {
+          "section": "horizon_definitions",
+          "bytes": 790
+        },
+        {
+          "section": "model_judgments",
+          "bytes": 772
+        },
+        {
+          "section": "independent_reviews",
+          "bytes": 704
+        },
+        {
+          "section": "execution_state",
+          "bytes": 295
+        },
+        {
+          "section": "initial_snapshot_reference",
+          "bytes": 193
+        },
+        {
+          "section": "dynamic_data_state",
+          "bytes": 175
+        },
+        {
+          "section": "deterministic_safety_state",
+          "bytes": 172
+        },
+        {
+          "section": "trajectory_contracts",
+          "bytes": 152
+        },
+        {
+          "section": "candidate_id",
+          "bytes": 28
+        },
+        {
+          "section": "dynamic_policy",
+          "bytes": 26
+        },
+        {
+          "section": "disagreement",
+          "bytes": 24
+        },
+        {
+          "section": "advisor_error",
+          "bytes": 21
+        },
+        {
+          "section": "unavailable",
+          "bytes": 14
+        },
+        {
+          "section": "dynamic_as_of_ms",
+          "bytes": 13
+        },
+        {
+          "section": "advisor_status",
+          "bytes": 13
+        },
+        {
+          "section": "symbol",
+          "bytes": 10
+        },
+        {
+          "section": "t",
+          "bytes": 6
+        },
+        {
+          "section": "data_mode",
+          "bytes": 6
+        },
+        {
+          "section": "advisor_available",
+          "bytes": 5
+        },
+        {
+          "section": "advisor_valid",
+          "bytes": 5
+        },
+        {
+          "section": "risk_flags",
+          "bytes": 2
+        }
+      ],
+      "physical_provider_ledger": true
+    },
+    {
+      "job_key": "c7a1eb07e6abcf6186521c90bf15a857f2d94adbc0c21327ff46f2dd3353419c",
+      "error_before": "FD_REQUEST_COST_BOUND",
+      "input_bytes_before": 157744,
+      "input_bytes_after": 97994,
+      "bound_bytes": 130000,
+      "provider_model": "gpt-5.4-mini-2026-03-17",
+      "max_output_tokens": 1400,
+      "parent_reserved_usd": 0.1,
+      "final_reservation_before": 0,
+      "final_actual_cost_before": 0,
+      "conservative_input_token_upper_bound_before": 161840,
+      "conservative_input_token_upper_bound_after": 102090,
+      "conservative_max_cost_before": 0.12768000000000002,
+      "conservative_max_cost_after": 0.0828675,
+      "note": "Token count is the existing conservative admission bound (UTF-8 bytes + 4096), not tokenizer usage. Rejected FINAL was never reserved/dispatched; FIRST may have been billed.",
+      "original_market_sections": [
+        {
+          "section": "snapshot",
+          "bytes": 34761
+        },
+        {
+          "section": "position",
+          "bytes": 33793
+        },
+        {
+          "section": "capture_context",
+          "bytes": 24217
+        },
+        {
+          "section": "market_sensor",
+          "bytes": 11199
+        },
+        {
+          "section": "leader20",
+          "bytes": 1635
+        },
+        {
+          "section": "facts",
+          "bytes": 1422
+        },
+        {
+          "section": "horizon_definitions",
+          "bytes": 789
+        },
+        {
+          "section": "model_judgments",
+          "bytes": 772
+        },
+        {
+          "section": "decision_policy",
+          "bytes": 521
+        },
+        {
+          "section": "execution_state",
+          "bytes": 295
+        },
+        {
+          "section": "deterministic_safety_state",
+          "bytes": 263
+        },
+        {
+          "section": "dynamic_data_state",
+          "bytes": 175
+        },
+        {
+          "section": "trajectory_contracts",
+          "bytes": 152
+        },
+        {
+          "section": "risk_flags",
+          "bytes": 93
+        },
+        {
+          "section": "candidate_id",
+          "bytes": 28
+        },
+        {
+          "section": "dynamic_policy",
+          "bytes": 26
+        },
+        {
+          "section": "unavailable",
+          "bytes": 14
+        },
+        {
+          "section": "dynamic_as_of_ms",
+          "bytes": 13
+        },
+        {
+          "section": "symbol",
+          "bytes": 10
+        },
+        {
+          "section": "t",
+          "bytes": 6
+        },
+        {
+          "section": "data_mode",
+          "bytes": 6
+        }
+      ],
+      "original_position_sections": [
+        {
+          "section": "dynamic_continuity",
+          "bytes": 32138
+        },
+        {
+          "section": "exit_context",
+          "bytes": 1253
+        },
+        {
+          "section": "valuation",
+          "bytes": 120
+        },
+        {
+          "section": "generation",
+          "bytes": 68
+        },
+        {
+          "section": "position_id",
+          "bytes": 38
+        },
+        {
+          "section": "event",
+          "bytes": 26
+        },
+        {
+          "section": "stop_stage",
+          "bytes": 10
+        },
+        {
+          "section": "deterministic_exit_candidate",
+          "bytes": 4
+        }
+      ],
+      "after_payload_sections": [
+        {
+          "section": "input",
+          "bytes": 91986
+        },
+        {
+          "section": "text",
+          "bytes": 5787
+        },
+        {
+          "section": "model",
+          "bytes": 25
+        },
+        {
+          "section": "prompt_cache_key",
+          "bytes": 20
+        },
+        {
+          "section": "reasoning",
+          "bytes": 17
+        },
+        {
+          "section": "truncation",
+          "bytes": 10
+        },
+        {
+          "section": "service_tier",
+          "bytes": 9
+        },
+        {
+          "section": "store",
+          "bytes": 5
+        },
+        {
+          "section": "max_output_tokens",
+          "bytes": 4
+        },
+        {
+          "section": "tools",
+          "bytes": 2
+        }
+      ],
+      "after_user_sections": [
+        {
+          "section": "capture_context",
+          "bytes": 19125
+        },
+        {
+          "section": "position",
+          "bytes": 17877
+        },
+        {
+          "section": "evidence_ids",
+          "bytes": 13481
+        },
+        {
+          "section": "market_sensor",
+          "bytes": 11199
+        },
+        {
+          "section": "facts",
+          "bytes": 1422
+        },
+        {
+          "section": "leader20",
+          "bytes": 1345
+        },
+        {
+          "section": "snapshot",
+          "bytes": 1139
+        },
+        {
+          "section": "snapshot_delta",
+          "bytes": 1028
+        },
+        {
+          "section": "horizon_definitions",
+          "bytes": 789
+        },
+        {
+          "section": "model_judgments",
+          "bytes": 772
+        },
+        {
+          "section": "independent_reviews",
+          "bytes": 443
+        },
+        {
+          "section": "execution_state",
+          "bytes": 295
+        },
+        {
+          "section": "deterministic_safety_state",
+          "bytes": 263
+        },
+        {
+          "section": "initial_snapshot_reference",
+          "bytes": 193
+        },
+        {
+          "section": "dynamic_data_state",
+          "bytes": 175
+        },
+        {
+          "section": "trajectory_contracts",
+          "bytes": 152
+        },
+        {
+          "section": "risk_flags",
+          "bytes": 93
+        },
+        {
+          "section": "candidate_id",
+          "bytes": 28
+        },
+        {
+          "section": "dynamic_policy",
+          "bytes": 26
+        },
+        {
+          "section": "disagreement",
+          "bytes": 24
+        },
+        {
+          "section": "advisor_error",
+          "bytes": 21
+        },
+        {
+          "section": "unavailable",
+          "bytes": 14
+        },
+        {
+          "section": "dynamic_as_of_ms",
+          "bytes": 13
+        },
+        {
+          "section": "advisor_status",
+          "bytes": 13
+        },
+        {
+          "section": "symbol",
+          "bytes": 10
+        },
+        {
+          "section": "t",
+          "bytes": 6
+        },
+        {
+          "section": "data_mode",
+          "bytes": 6
+        },
+        {
+          "section": "advisor_available",
+          "bytes": 5
+        },
+        {
+          "section": "advisor_valid",
+          "bytes": 5
+        }
+      ],
+      "physical_provider_ledger": true
+    }
+  ],
+  "technical": {
+    "at": 1790607678315,
+    "values": {
+      "rsi_1m_14": 53.59527407965584,
+      "rsi_5m_14": 45.7050207930004,
+      "stoch_k_1m": 63.533819951338295,
+      "stoch_d_1m": 61.32592167333416,
+      "stoch_k_5m": 26.40666222602097,
+      "stoch_d_5m": 26.006511413097726,
+      "stoch_cross_1m": 1,
+      "stoch_cross_5m": 1,
+      "bb_mid": 0.11809900000000002,
+      "bb_upper": 0.11935534231004136,
+      "bb_lower": 0.11684265768995869,
+      "bb_position": 0.7670450539781237,
+      "bb_width": 0.021276087181793805,
+      "ema9_distance": 0.005839510152263472,
+      "ema20_distance": 0.004879885450256527,
+      "ema9_vs_ema20": -0.0009540534969257886,
+      "atr_1m_14_normalized": 0.007952904066811102,
+      "last_lower_wick": 0.002794478787365543,
+      "candle_range": 0.011940045727834657,
+      "body_to_range": 0.48226950354610115,
+      "close_location_value": 0.7163120567375892
+    },
+    "missing": {},
+    "context": {
+      "version": "COMPLETED_TECHNICAL_1",
+      "advisory_only": true,
+      "completed_1m_count": 121,
+      "completed_5m_count": 49,
+      "recent_1m_candles": [
+        {
+          "closed_at_ms": 1790607539999,
+          "body_sign": -1,
+          "body": -0.006851632549484056,
+          "upper_wick": 0.0010150566739975902,
+          "lower_wick": 0.0010150566739975902,
+          "range": 0.008881745897479237,
+          "body_to_range": 0.7714285714285798,
+          "close_location": 0.11428571428571013
+        },
+        {
+          "closed_at_ms": 1790607599999,
+          "body_sign": 1,
+          "body": 0.005620848237097665,
+          "upper_wick": 0.0006813149378299842,
+          "lower_wick": 0.0007664793050587026,
+          "range": 0.007068642479986352,
+          "body_to_range": 0.7951807228915782,
+          "close_location": 0.9036144578313289
+        },
+        {
+          "closed_at_ms": 1790607659999,
+          "body_sign": 1,
+          "body": 0.005758319925480566,
+          "upper_wick": 0.0033872470149885476,
+          "lower_wick": 0.002794478787365543,
+          "range": 0.011940045727834657,
+          "body_to_range": 0.48226950354610115,
+          "close_location": 0.7163120567375892
+        }
+      ],
+      "recent_candles_missing_reason": null
+    }
+  },
+  "calibration": {
+    "positions": 6,
+    "valid_windows": 370,
+    "recorded_rows": 537,
+    "results": [
+      {
+        "position_id": "028fc6b2-b062-4713-b7db-99a647f70a14",
+        "symbol": "SOONUSDT",
+        "recorded_pnl": 11.351031299999994,
+        "entry_at": "2026-09-27 02:32:42.482+00",
+        "closed_at": "2026-09-27 02:44:16.865+00",
+        "recorded_rows": 139,
+        "first_failure": {
+          "at": "2026-09-27 02:36:05+00",
+          "now": 1790476566258,
+          "capture_end": 1790476565043,
+          "entry": 0.24770000000000003,
+          "peak": 0.26215,
+          "bid": 0.2602999999998923,
+          "action": "HOLD_WITH_TIGHTER_RISK",
+          "level": 0.25820000000057,
+          "floors": {
+            "15": {
+              "floor": 0.2602999999998923,
+              "first_cross_at": "2026-09-27 02:36:05+00",
+              "return_at_floor": 0.050867985465854915
+            },
+            "30": {
+              "floor": 0.2602999999998923,
+              "first_cross_at": "2026-09-27 02:36:05+00",
+              "return_at_floor": 0.050867985465854915
+            },
+            "60": {
+              "floor": 0.25909999999938677,
+              "first_cross_at": null,
+              "return_at_floor": 0.04602341541940547
+            },
+            "120": {
+              "floor": 0.25820000000057,
+              "first_cross_at": null,
+              "return_at_floor": 0.04238998789087578
+            }
+          }
+        }
+      },
+      {
+        "position_id": "02c09191-2796-41c3-8391-6d36e70a1ddb",
+        "symbol": "SOONUSDT",
+        "recorded_pnl": -6.687425799999859,
+        "entry_at": "2026-09-28 15:21:37.12+00",
+        "closed_at": "2026-09-28 15:25:16.331+00",
+        "recorded_rows": 34,
+        "first_failure": {
+          "at": "2026-09-28 15:24:55+00",
+          "now": 1790609095690,
+          "capture_end": 1790609095043,
+          "entry": 0.3458171779141104,
+          "peak": 0.36305,
+          "bid": 0.36009999999914327,
+          "action": "HOLD_WITH_TIGHTER_RISK",
+          "level": 0.354299999999252,
+          "floors": {
+            "15": {
+              "floor": 0.36009999999914327,
+              "first_cross_at": "2026-09-28 15:24:55+00",
+              "return_at_floor": 0.041301655895706446
+            },
+            "30": {
+              "floor": 0.36009999999914327,
+              "first_cross_at": "2026-09-28 15:24:55+00",
+              "return_at_floor": 0.041301655895706446
+            },
+            "60": {
+              "floor": 0.3590000000003515,
+              "first_cross_at": "2026-09-28 15:25:00+00",
+              "return_at_floor": 0.038120784414923614
+            },
+            "120": {
+              "floor": 0.354299999999252,
+              "first_cross_at": "2026-09-28 15:25:05+00",
+              "return_at_floor": 0.02452978806983519
+            }
+          }
+        }
+      },
+      {
+        "position_id": "8f11a729-d8de-4d85-b35f-4f0785f70568",
+        "symbol": "HBARUSDT",
+        "recorded_pnl": -11.702624020000062,
+        "entry_at": "2026-09-28 15:01:38.742+00",
+        "closed_at": "2026-09-28 15:11:09.617+00",
+        "recorded_rows": 72,
+        "first_failure": {
+          "at": "2026-09-28 15:04:25+00",
+          "now": 1790607865784,
+          "capture_end": 1790607865061,
+          "entry": 0.1187672245651028,
+          "peak": 0.119315,
+          "bid": 0.11874999999998567,
+          "action": "HOLD_WITH_TIGHTER_RISK",
+          "level": 0.11831999999973974,
+          "floors": {
+            "15": {
+              "floor": 0.11831999999973974,
+              "first_cross_at": "2026-09-28 15:07:50+00",
+              "return_at_floor": -0.003765555413125843
+            },
+            "30": {
+              "floor": 0.11831999999973974,
+              "first_cross_at": "2026-09-28 15:07:50+00",
+              "return_at_floor": -0.003765555413125843
+            },
+            "60": {
+              "floor": 0.11831999999973974,
+              "first_cross_at": "2026-09-28 15:07:50+00",
+              "return_at_floor": -0.003765555413125843
+            },
+            "120": {
+              "floor": 0.11831999999973974,
+              "first_cross_at": "2026-09-28 15:07:50+00",
+              "return_at_floor": -0.003765555413125843
+            }
+          }
+        }
+      },
+      {
+        "position_id": "b34b0de9-b900-4f48-85fc-862e7acd2fe3",
+        "symbol": "SOONUSDT",
+        "recorded_pnl": -11.55968169999995,
+        "entry_at": "2026-09-27 03:44:29.307+00",
+        "closed_at": "2026-09-27 03:49:11.5+00",
+        "recorded_rows": 57,
+        "first_failure": {
+          "at": "2026-09-27 03:46:30+00",
+          "now": 1790480795529,
+          "capture_end": 1790480790033,
+          "entry": 0.2898,
+          "peak": 0.29065,
+          "bid": 0.28859999999937275,
+          "action": "HOLD_WITH_TIGHTER_RISK",
+          "level": 0.2884000000005607,
+          "floors": {
+            "15": {
+              "floor": 0.2884000000005607,
+              "first_cross_at": "2026-09-27 03:47:50+00",
+              "return_at_floor": -0.004830917872461371
+            },
+            "30": {
+              "floor": 0.2884000000005607,
+              "first_cross_at": "2026-09-27 03:47:50+00",
+              "return_at_floor": -0.004830917872461371
+            },
+            "60": {
+              "floor": 0.2884000000005607,
+              "first_cross_at": "2026-09-27 03:47:50+00",
+              "return_at_floor": -0.004830917872461371
+            },
+            "120": {
+              "floor": 0.2884000000005607,
+              "first_cross_at": "2026-09-27 03:47:50+00",
+              "return_at_floor": -0.004830917872461371
+            }
+          }
+        }
+      },
+      {
+        "position_id": "dd9cbaef-2d2b-4611-a46a-edcbd9b86fe8",
+        "symbol": "SOONUSDT",
+        "recorded_pnl": -5.813291350000001,
+        "entry_at": "2026-09-27 04:17:36.094+00",
+        "closed_at": "2026-09-27 04:27:45.293+00",
+        "recorded_rows": 122,
+        "first_failure": {
+          "at": "2026-09-27 04:19:45+00",
+          "now": 1790482788241,
+          "capture_end": 1790482785175,
+          "entry": 0.30138629679144385,
+          "peak": 0.30265,
+          "bid": 0.30060000000038223,
+          "action": "EMERGENCY_EXIT_THESIS_FAILURE",
+          "level": 0.30060000000038223,
+          "floors": {
+            "15": {
+              "floor": 0.30060000000038223,
+              "first_cross_at": "2026-09-27 04:19:45+00",
+              "return_at_floor": -0.002608933449969486
+            },
+            "30": {
+              "floor": 0.30060000000038223,
+              "first_cross_at": "2026-09-27 04:19:45+00",
+              "return_at_floor": -0.002608933449969486
+            },
+            "60": {
+              "floor": 0.30060000000038223,
+              "first_cross_at": "2026-09-27 04:19:45+00",
+              "return_at_floor": -0.002608933449969486
+            },
+            "120": {
+              "floor": 0.30060000000038223,
+              "first_cross_at": "2026-09-27 04:19:45+00",
+              "return_at_floor": -0.002608933449969486
+            }
+          }
+        }
+      },
+      {
+        "position_id": "eb583cdc-3414-48fb-a559-e097476281be",
+        "symbol": "SOONUSDT",
+        "recorded_pnl": 5.35370356000007,
+        "entry_at": "2026-09-26 21:29:36.435+00",
+        "closed_at": "2026-09-26 21:39:00.382+00",
+        "recorded_rows": 113,
+        "first_failure": {
+          "at": "2026-09-26 21:37:05+00",
+          "now": 1790458628542,
+          "capture_end": 1790458625075,
+          "entry": 0.23102199999999998,
+          "peak": 0.23685,
+          "bid": 0.23520000000028748,
+          "action": "HOLD_WITH_TIGHTER_RISK",
+          "level": 0.23410000000003048,
+          "floors": {
+            "15": {
+              "floor": 0.23520000000028748,
+              "first_cross_at": "2026-09-26 21:37:05+00",
+              "return_at_floor": 0.018084857720422676
+            },
+            "30": {
+              "floor": 0.23520000000028748,
+              "first_cross_at": "2026-09-26 21:37:05+00",
+              "return_at_floor": 0.018084857720422676
+            },
+            "60": {
+              "floor": 0.23520000000028748,
+              "first_cross_at": "2026-09-26 21:37:05+00",
+              "return_at_floor": 0.018084857720422676
+            },
+            "120": {
+              "floor": 0.23410000000003048,
+              "first_cross_at": null,
+              "return_at_floor": 0.013323406428956908
+            }
+          }
+        }
+      }
+    ],
+    "limitation": "Six recorded positions (two winners/four losers). Recorded sampled bid floors, not simulated fills or a profitability guarantee. Gapped windows excluded. No future evidence enters the trigger; later outcomes only score candidates."
+  },
+  "fixtures": {
+    "hbar-production-20260929": "df0f8d26803bedf83c67d8095ef1f18b2645f37b714abf434a7eb822ea2b76b1",
+    "hbar-completed-candles-20260929": "cc8d95901bbd4cf4e132b2cd7ae1b25ea8394f7f7d860eebca7b06bb1a7faaef",
+    "hold-replay-captures-20260929": "bf6109990a035e9cd16e28f321b5b14a5165757ec5d8cb53beee1f02366dc6cd",
+    "soon-hold-20260929": "14fd651920d15edea34d41f1cf4b4c38a104e5f161d1b1815dcfbab4ded4cadf"
+  }
+}

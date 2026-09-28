@@ -1,3 +1,4 @@
+import {REFERENCE_NOTE} from './compact-hold.mjs';
 import {LEADER20_PROMPT,leaderDecision} from '../leader20/decision-contract.mjs';
 /** FD1 packet construction and the single OpenAI request. No exchange client, no DB. */
 import {FACT_DEFS,FACTS_VERSION} from './facts.mjs';
@@ -29,17 +30,18 @@ export async function buildDecisionPacket({task,subjectId,symbol,dataMode,facts,
   packet.snapshot_hash=await hash({...packet,snapshot_hash:''});
   return packet;
 }
-const round=v=>v===null?null:Number(Number(v).toPrecision(5));
+const round=v=>v==null?null:Number(Number(v).toPrecision(5));
 /** What GPT sees: grouped facts, unavailable keys, non-clear risk flags, model judgments. */
 export function modelInput(packet){
   const sections={},v=packet.facts.values;
-  for(const [k,[s]] of Object.entries(FACT_DEFS)){if(v[k]===null)continue;(sections[s]??={})[k]=round(v[k]);}
+  for(const [k,[s]] of Object.entries(FACT_DEFS)){if(v[k]==null)continue;(sections[s]??={})[k]=round(v[k]);}
   const risk=riskFlags(packet);
   return {t:packet.task,candidate_id:packet.candidate_id,symbol:packet.symbol,data_mode:packet.data_mode,facts:sections,
     unavailable:Object.keys(FACT_DEFS).filter(k=>v[k]===null&&FACT_DEFS[k][0]!=='history'&&(packet.task==='HOLD'||FACT_DEFS[k][0]!=='position')),
     // ENTRY: the same facts regrouped into trend strength / current propulsion / fatigue axes.
     ...(packet.task==='ENTRY'?{entry_assessment:entryAssessment(v)}:{}),
     risk_flags:Object.fromEntries(Object.entries(risk.flags).filter(([,x])=>x.level!=='CLEAR').map(([k,x])=>[k,x.level])),
+    ...(packet.facts.technical_context?{technical_context:{...packet.facts.technical_context,missing_reason:Object.fromEntries(Object.entries(packet.facts.missing??{}).filter(([k,v])=>v&&['technical','candle'].includes(FACT_DEFS[k]?.[0])))}}:{}),
     model_judgments:packet.model_judgments,...(packet.facts.capture_context?{capture_context:dynamicEnabled(packet)?compactDynamic(packet.facts.capture_context,{fullPath:leaderDecision(packet)}):contextForModel(packet.facts.capture_context)}:{}),...(packet.position?{position:packet.position}:{}),...(packet.chase?{chase:packet.chase}:{}),
     ...(dynamicEnabled(packet)?{horizon_definitions:horizonDefinitions(packet.facts.capture_context),dynamic_policy:packet.dynamic_policy,dynamic_as_of_ms:packet.dynamic_as_of_ms,dynamic_data_state:packet.dynamic_data_state??null}: {}),
     ...(packet.leader20?{leader20:packet.leader20}:{})};
@@ -58,10 +60,12 @@ export function compactWireSchema(schema){
  const result=copy(schema);return refs.size?{...result,$defs:{...result.$defs,...definitions}}:result;
 }
 export function payloadFor(packet){
+  const schema=dynamicEnabled(packet)?compactWireSchema(boundedDynamicTransportSchema(wireSchema(packet.task,packet))):wireSchema(packet.task,packet);
+  if(packet.task==='HOLD'&&dynamicEnabled(packet))schema.properties.d={type:'string',enum:['HOLD','PROTECT','EXIT']};
   return {model:MODEL,store:false,tools:[],truncation:'disabled',service_tier:'default',
     prompt_cache_key:'boo-fd1-'+packet.task.toLowerCase(),reasoning:{effort:'none'},max_output_tokens:dynamicEnabled(packet)?(packet.task==='HOLD'?1000:1800):MAX_OUTPUT_TOKENS[packet.task],
-    input:[{role:'system',content:(dynamicEnabled(packet)?economyPrompt(packet)+DYNAMIC_PROMPT:PROMPTS[packet.task])+(leaderDecision(packet)?LEADER20_PROMPT:'')},{role:'user',content:JSON.stringify(modelInput(packet))}],
-    text:{verbosity:'low',format:{type:'json_schema',name:'fd1_'+packet.task.toLowerCase(),strict:true,schema:dynamicEnabled(packet)?compactWireSchema(boundedDynamicTransportSchema(wireSchema(packet.task,packet))):wireSchema(packet.task,packet)}}};
+    input:[{role:'system',content:(dynamicEnabled(packet)?economyPrompt(packet)+DYNAMIC_PROMPT:PROMPTS[packet.task])+(leaderDecision(packet)?LEADER20_PROMPT:'')+(packet.task==='HOLD'?REFERENCE_NOTE:'')},{role:'user',content:JSON.stringify(modelInput(packet))}],
+    text:{verbosity:'low',format:{type:'json_schema',name:'fd1_'+packet.task.toLowerCase(),strict:true,schema}}};
 }
 export function costOf(raw){
   const u=raw?.usage,c=u?.input_tokens_details?.cached_tokens??0;
@@ -82,7 +86,7 @@ export async function callDecision(packet,{apiKey,fetchFn=fetch,now=Date.now,tim
   if(!apiKey){out.error='FD_API_KEY_MISSING';out.api_cost_usd=0;out.completed_at_ms=now();out.latency_ms=0;return out;}
   const controller=new AbortController();let timer;
   try{
-    const payload=payloadFn(packet),body=JSON.stringify(payload);out.request_bytes=new TextEncoder().encode(body).length;out.schema_bytes=JSON.stringify(payload.text?.format?.schema??{}).length;out.timeout_ms=timeoutMs;out.max_output_tokens=payload.max_output_tokens;
+    const payload=payloadFn(packet),body=JSON.stringify(payload);out.request_bytes=new TextEncoder().encode(body).length;out.estimated_input_token_upper_bound=out.request_bytes+4096;out.estimated_max_cost_usd=((out.request_bytes+4096)*PRICING.inputPerMillion+payload.max_output_tokens*PRICING.outputPerMillion)/1e6;out.request_bound_bytes=130000;try{out.payload_sections_bytes=Object.fromEntries(Object.entries(JSON.parse(payload.input.find(x=>x.role==='user').content)).map(([k,v])=>[k,new TextEncoder().encode(JSON.stringify(v)).length]));}catch{out.payload_sections_bytes=null;}out.schema_bytes=JSON.stringify(payload.text?.format?.schema??{}).length;out.timeout_ms=timeoutMs;out.max_output_tokens=payload.max_output_tokens;
     ensure(out.request_bytes<=130000&&Number.isInteger(payload.max_output_tokens)&&payload.max_output_tokens<=1800,'FD_REQUEST_COST_BOUND');
     out.attempted=true;
     const req=(async()=>{

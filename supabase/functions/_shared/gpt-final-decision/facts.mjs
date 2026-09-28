@@ -6,6 +6,7 @@
  * function builds production packets (live reads) and historical replay packets
  * (Binance history endpoints), so the two cannot drift apart. The order book has no
  * history: in replay those facts are null with reason NOT_POINT_IN_TIME_REPLAY. */
+import {TECHNICAL_DEFS,technicalFacts} from './technical.mjs';
 export const FACTS_VERSION='FD1_FACTS_2';
 const MIN=60000;
 export const SLOT_ORDER_NOTIONAL_USDT=450; // 150 USDT x 3 (current live slot notional reference; sizing is unchanged)
@@ -15,6 +16,7 @@ function ensure(ok,reason){if(!ok)throw Error(reason);}
 
 /** Fact dictionary: key -> [section, unit, definition]. The ONLY keys GPT may cite. */
 export const FACT_DEFS=Object.freeze({
+  ...TECHNICAL_DEFS,
   // trend (symbol candles)
   return_1m:['trend','fraction','last completed 1m close / previous close - 1'],
   return_5m:['trend','fraction','close / close 5 completed minutes earlier - 1'],
@@ -62,6 +64,11 @@ export const FACT_DEFS=Object.freeze({
   max_ask_wall_to_order:['micro','ratio','largest single ask level within 50 bps / 450 USDT'],
   max_bid_wall_to_order:['micro','ratio','largest single bid level within 50 bps / 450 USDT'],
   est_buy_slippage_bps:['micro','bps','estimated average fill vs mid for a 450 USDT market buy, walking the asks'],
+  expected_entry_vwap:['execution_cost','price','450 USDT ask-walk VWAP'],
+  expected_exit_vwap:['execution_cost','price','bid-walk VWAP for the same estimated entry quantity'],
+  est_sell_slippage_bps:['execution_cost','bps','(1-exit VWAP/mid)*10000'],
+  fee_estimate_bps:['execution_cost','bps','one-way taker fee estimate, same 5 bps default as E1 runtime'],
+  expected_execution_cost_bps:['execution_cost','bps','entry VWAP*(1+fee)/(exit VWAP*(1-fee))-1, times 10000'],
   // position (hold review only)
   position_return:['position','fraction','current price / average entry - 1'],
   position_peak_return:['position','fraction','peak price since entry / entry - 1'],
@@ -110,7 +117,12 @@ export function bookFacts(book){
   const a25=asks.filter(([p])=>p<=mid*1.0025).reduce((s,x)=>s+n(x),0),b25=bids.filter(([p])=>p>=mid*.9975).reduce((s,x)=>s+n(x),0);
   const aw=Math.max(0,...asks.filter(([p])=>p<=mid*1.005).map(n)),bw=Math.max(0,...bids.filter(([p])=>p>=mid*.995).map(n));
   let left=O,cost=0,qty=0;for(const [p,q] of asks){const take=Math.min(left,p*q);cost+=take;qty+=take/p;left-=take;if(left<=1e-9)break;}
-  return {spread_bps:(ask-bid)/mid*1e4,ask_depth_25bps_usdt:a25,bid_depth_25bps_usdt:b25,
+  const entryVwap=left>1e-9?null:cost/qty;let sellLeft=qty,proceeds=0;
+  for(const [p,q] of bids){const take=Math.min(sellLeft,q);proceeds+=take*p;sellLeft-=take;if(sellLeft<=1e-9)break;}
+  const exitVwap=entryVwap&&sellLeft<=1e-9?proceeds/qty:null,fee=.0005;
+  return {expected_entry_vwap:entryVwap,expected_exit_vwap:exitVwap,est_sell_slippage_bps:exitVwap?(1-exitVwap/mid)*10000:null,
+    fee_estimate_bps:fee*10000,expected_execution_cost_bps:entryVwap&&exitVwap?(entryVwap*(1+fee)/(exitVwap*(1-fee))-1)*10000:null,
+    spread_bps:(ask-bid)/mid*1e4,ask_depth_25bps_usdt:a25,bid_depth_25bps_usdt:b25,
     book_imbalance_25bps:a25+b25>0?(b25-a25)/(a25+b25):null,ask_depth_to_order:a25/O,bid_depth_to_order:b25/O,
     max_ask_wall_to_order:aw/O,max_bid_wall_to_order:bw/O,est_buy_slippage_bps:left>1e-9?null:((cost/qty)/mid-1)*1e4};
 }
@@ -142,6 +154,7 @@ export function computeFacts(src,ctx){
   const asOf=Number(ctx.asOf);ensure(Number.isSafeInteger(asOf),'AS_OF_INVALID');
   const o=bars(src.one??[],MIN,asOf),f=bars(src.five??[],5*MIN,asOf),b=bars(src.btc??[],MIN,asOf);
   const v={},why={},put=(k,x,reason='INSUFFICIENT_DATA')=>{ensure(Object.hasOwn(FACT_DEFS,k),'FACT_UNKNOWN:'+k);v[k]=num(x);why[k]=v[k]===null?reason:null;};
+  const technical=technicalFacts(o,f);for(const [k,x] of Object.entries(technical.values))put(k,x,technical.missing[k]);
   const last=o.at(-1);
   const candlesComplete=!!last&&o.length>=61&&f.length>=12&&b.length>=61&&asOf-last.end<=90000&&asOf-b.at(-1).end<=90000&&asOf-f.at(-1).end<=330000;
   for(const n of [1,5,15,30,60])put('return_'+n+'m',ret(o,n));
@@ -179,6 +192,7 @@ export function computeFacts(src,ctx){
   put('funding_rate',src.funding?.rate,'FUNDING_UNAVAILABLE');
   const bk=src.book?bookFacts(src.book):null;
   for(const k of MICRO_KEYS)put(k,bk?.[k]??null,src.book?'BOOK_INVALID':(src.bookMissingReason??'BOOK_NOT_COLLECTED'));
+  for(const k of FACT_KEYS.filter(k=>FACT_DEFS[k][0]==='execution_cost'))put(k,bk?.[k]??null,src.book?'BOOK_DEPTH_INCOMPLETE':(src.bookMissingReason??'BOOK_NOT_COLLECTED'));
   const p=ctx.position;
   if(p&&last){
     const quoteAt=src.book?.requestedAtMs,receivedAt=src.book?.receivedAtMs,exchangeAt=Number(src.book?.T??src.book?.E);
@@ -194,7 +208,7 @@ export function computeFacts(src,ctx){
   }else for(const k of POSITION_KEYS)put(k,null,'NOT_A_POSITION_REVIEW');
   const h=tradeMemory(ctx.history,{asOf,bars:o,last});
   for(const k of HISTORY_KEYS)put(k,h.values?.[k]??null,h.reason);
-  return {version:FACTS_VERSION,values:v,missing:why,...(src.captureContext?{capture_context:src.captureContext}:{}),...(src.marketSensor?{market_sensor:src.marketSensor}:{}),quality:{candles_complete:candlesComplete,
+  return {version:FACTS_VERSION,values:v,missing:why,technical_context:technical.context,...(src.captureContext?{capture_context:src.captureContext}:{}),...(src.marketSensor?{market_sensor:src.marketSensor}:{}),quality:{candles_complete:candlesComplete,
     micro_complete:MICRO_KEYS.every(k=>v[k]!==null),derivatives_complete:['funding_rate','premium_index','oi_change_5m'].every(k=>v[k]!==null),
     last_close:last?.c??null,last_close_at_ms:last?.end??null}};
 }
