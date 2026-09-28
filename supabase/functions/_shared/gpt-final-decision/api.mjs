@@ -73,7 +73,7 @@ export function parseOutput(raw){
     for(const c of m.content??[]){ensure(c.type!=='refusal','FD_API_REFUSAL');if(c.type==='output_text')chunks.push(c.text);}}
   ensure(chunks.length===1,'FD_API_OUTPUT_COUNT');return JSON.parse(chunks[0]);
 }
-const SAFE=/^((FD|RC)_[A-Z_]+(:[A-Za-z0-9_,]*)?|HTTP_\d+|API_TIMEOUT|TYPE:|ENUM:|STRING:|REQUIRED:|EXTRA:|ARRAY:)/;
+const SAFE=/^((FD|RC)_[A-Z_]+(:[A-Za-z0-9_,]*)?|HTTP_\d+|API_[A-Z_]+|TYPE:|ENUM:|STRING:|REQUIRED:|EXTRA:|ARRAY:)/;
 /** One request, never retried. Any failure => ABSTAIN (entry: no order; hold: deterministic engine). */
 export async function callDecision(packet,{apiKey,fetchFn=fetch,now=Date.now,timeoutMs=REQUEST_MS,payloadFn=payloadFor,validate=validateDecision}={}){
   const started=now(),out={origin:'OPENAI_API',model:MODEL,decision:'ABSTAIN',valid:false,answer:null,error:null,wire:null,
@@ -98,7 +98,8 @@ export async function callDecision(packet,{apiKey,fetchFn=fetch,now=Date.now,tim
     })();
     const expiry=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(Error('API_TIMEOUT'));},timeoutMs);});
     out.answer=await Promise.race([req,expiry]);out.decision=out.answer.decision;out.valid=true;
-  }catch(e){out.error=SAFE.test(e?.message??'')?String(e.message).slice(0,160):'FD_API_OR_VALIDATION_ERROR';out.decision='ABSTAIN';out.valid=false;}
+  }catch(e){out.error=SAFE.test(e?.message??'')?String(e.message).slice(0,160):'FD_API_OR_VALIDATION_ERROR';out.decision='ABSTAIN';out.valid=false;
+    if(e?.budget){out.budget_block=e.budget;out.attempted=false;out.api_cost_usd=0;}}
   finally{clearTimeout(timer);out.completed_at_ms=now();out.latency_ms=out.completed_at_ms-started;}
   return out;
 }

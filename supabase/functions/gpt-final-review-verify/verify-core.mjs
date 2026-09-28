@@ -88,7 +88,8 @@ async function journaledCall({store,packet,identity,jobSeed,profile,apiKey,fetch
     source_commit:RELEASE,packet,snapshot_at_ms:snapshotAt,result:null};
   const claimed=await store.claim(key,record,cfg);
   if(!claimed.created)return {duplicate:true,jobKey:key,state:claimed.row.state};
-  const result=await callFinalReviewer(packet,{apiKey,fetchFn,now:Date.now,deadlineMs:Date.now()+LIMITS.requestMs+500,profile});
+  const paidFetch=store.transport?await store.transport(key,record,fetchFn):fetchFn;
+  const result=await callFinalReviewer(packet,{apiKey,fetchFn:paidFetch,now:Date.now,deadlineMs:Date.now()+LIMITS.requestMs+500,profile});
   record.result=result;await store.complete(key,claimed.row.owner,record);
   return {duplicate:false,jobKey:key,result};
 }

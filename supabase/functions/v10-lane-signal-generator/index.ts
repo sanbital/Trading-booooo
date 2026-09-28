@@ -11,6 +11,8 @@ const reply=(s,b)=>new Response(JSON.stringify(b),{status:s,headers:{'content-ty
 function equal(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0;}
 export async function generate(db,{diagnostic=false,leader20Only=false,scan=scanMarket,now=Date.now}={}){
   const leader20=await leaderControl(db);
+  if(leader20.observation_enabled&&leader20.active_strategy==='LEADER20_DYNAMIC_1'&&!leader20Only&&!diagnostic)
+    return {ok:true,inserted:0,skipped:'LEADER20_OBSERVER_OWNS_SCHEDULE'};
   if(leader20.observation_enabled){
     const observed=await generateLeader20(db,leader20,{diagnostic,now});
     if(diagnostic||leader20Only||leader20.active_strategy!=='LEGACY')return observed;

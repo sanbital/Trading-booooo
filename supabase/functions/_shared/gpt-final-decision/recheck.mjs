@@ -301,22 +301,45 @@ ${catText}
 ${dict}
 `;
 const round=v=>v===null||v===undefined?null:Number(Number(v).toPrecision(5));
+const PATH_TIMES=new Set(['bucket_ms','start_ms','end_ms','received_at_ms','exchange_event_ms',
+  'book_received_at_ms','flow_event_ms','flow_received_at_ms']);
+/** Wire-only, lossless encoding. The journal retains every original capture.
+ * Full paths already contain critical rows; reference those rows instead of
+ * copying them again. Safe integer millisecond offsets round-trip exactly. */
+export function recheckCaptureInput(c,{fullPath=true}={}){
+  const wire=compactDynamic(c,{fullPath});
+  if(!fullPath||c?.status!=='AVAILABLE')return wire;
+  const columns=wire.ordered_path_columns,origin=c.start_ms;
+  const relative=Number.isSafeInteger(origin)&&origin>=0?columns.filter(k=>PATH_TIMES.has(k)&&
+    c.trajectory.every(row=>row[k]==null||Number.isSafeInteger(row[k])&&row[k]>=0)):[];
+  // Recovery diagnostics stay in the journal. Market timing, validity and every
+  // original trajectory cell remain in this input, as with recovery_attempts.
+  const {critical_segments,pre_inference_refresh:_recovery,latest_six_range:_six,raw_bucket_count:_count,...compact}=wire;
+  return {...compact,representation:'LOSSLESS_FULL24_RECHECK_V1',
+    path_time_origin_ms:relative.length?origin:null,path_offset_column_indices:relative.map(k=>columns.indexOf(k)),
+    path_encoding:'Time-column indices: absolute ms = origin + cell. critical_segments lists ordered_path row indices.',
+    ordered_path:wire.ordered_path.map(row=>row.map((v,i)=>v!==null&&relative.includes(columns[i])?v-origin:v)),
+    critical_segments:critical_segments.map(({index})=>index)};
+}
 /** What GPT sees for the recheck: INITIAL, CURRENT, CHANGE, trigger reasons, flags, judgments. */
 export function recheckModelInput(packet){
   const sections={},v=packet.facts.values;
   for(const k of FACT_OK){if(v[k]===null||v[k]===undefined)continue;(sections[FACT_DEFS[k][0]]??={})[k]=round(v[k]);}
   const risk=recheckFlags(packet);
+  const currentCapture=packet.facts.capture_context?
+    (dynamicEnabled(packet)?recheckCaptureInput(packet.facts.capture_context):packet.facts.capture_context):null;
+  const fastCapture=packet.pre_dispatch?.capture_context?
+    JSON.stringify(packet.pre_dispatch.capture_context)===JSON.stringify(packet.facts.capture_context)?
+      {reference:'current.capture_context',meaning:'Exact same complete capture; supplied once'}:
+      recheckCaptureInput(packet.pre_dispatch.capture_context):null;
   return {t:RECHECK_TASK,candidate_id:packet.candidate_id,symbol:packet.symbol,data_mode:packet.data_mode,
     ...(dynamicEnabled(packet)?{dynamic_policy:packet.dynamic_policy,dynamic_as_of_ms:packet.dynamic_as_of_ms}:{}),...(packet.leader20?{leader20:packet.leader20}:{}),
     initial:{decision:packet.initial.decision,summary:packet.initial.summary,support:packet.initial.support,
       facts:Object.fromEntries(Object.entries(packet.initial.facts).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)])),
-      assessment:entryAssessment(packet.initial.facts??{}),capture_context:compactDynamic(packet.initial.capture_context,{fullPath:leaderDecision(packet)})},
-    current:{facts:sections,unavailable:FACT_OK.filter(k=>v[k]===null),assessment:entryAssessment(v),...(packet.facts.capture_context?{capture_context:dynamicEnabled(packet)?compactDynamic(packet.facts.capture_context,{fullPath:true}):packet.facts.capture_context}:{})},
+      assessment:entryAssessment(packet.initial.facts??{}),capture_context:recheckCaptureInput(packet.initial.capture_context,{fullPath:leaderDecision(packet)})},
+    current:{facts:sections,unavailable:FACT_OK.filter(k=>v[k]===null),assessment:entryAssessment(v),...(currentCapture?{capture_context:currentCapture}:{})},
     dynamic_change:packet.dynamic_change??null,
-    fast_recheck:packet.pre_dispatch?{...packet.pre_dispatch,...(packet.pre_dispatch.capture_context?{capture_context:
-      JSON.stringify(packet.pre_dispatch.capture_context)===JSON.stringify(packet.facts.capture_context)?
-        {reference:'current.capture_context',meaning:'Exact same complete capture; supplied once'}:
-        compactDynamic(packet.pre_dispatch.capture_context,{fullPath:true})}:{})}:null,
+    fast_recheck:packet.pre_dispatch?{...packet.pre_dispatch,...(fastCapture?{capture_context:fastCapture}:{})}:null,
     change:Object.fromEntries(Object.entries(packet.change.values).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)])),
     trigger_reasons:packet.trigger_reasons,
     risk_flags:Object.fromEntries(Object.entries(risk.flags).filter(([,x])=>x.level!=='CLEAR').map(([k,x])=>[k,x.level])),
@@ -392,7 +415,8 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
       recheck_sequence:sequence,initial_snapshot_hash:String(ticket?.snapshotHash??''),trigger_at_ms:num(f.v17Setup?.triggerAt)};
     key=await hash({version:RECHECK_VERSION,identity,purpose});
     record={version:RECHECK_VERSION,kind:'FD1_FINAL_RECHECK',purpose,recheck_sequence:sequence,api_approval_ref:config.approvalRef,identity,reserved_usd:0.10,
-      source_commit:RECHECK_VERSION+':'+ECONOMY_VERSION,prompt_hash:await hash(RECHECK_PROMPT+ARBITRATION_PROMPT+economyRecheckPrompt.toString()),detection,packet:null,result:null};
+      source_commit:RECHECK_VERSION+':'+ECONOMY_VERSION+':LOSSLESS_FULL24_RECHECK_V1',
+      prompt_hash:await hash(RECHECK_PROMPT+ARBITRATION_PROMPT+economyRecheckPrompt.toString()+recheckCaptureInput.toString()+recheckModelInput.toString()),detection,packet:null,result:null};
     let claimed,attempt=1;
     try{
       // A sequence with a final answer remains single-use. Only a completed timeout
@@ -423,7 +447,7 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
     if(now()>=deadline)throw Error('RC_TRIGGER_EXPIRED');
     const at=asOf??now();
     const {src,errors}=await readFresh(String(signal.symbol).toUpperCase(),at,{mode:dataMode,fetchFn,ms:policy.freshReadMs,now,deadlineMs:deadline-8000,
-      afterEndMs:record.timeout_recovery?.after_end_ms??-Infinity});
+      afterEndMs:record.timeout_recovery?.after_end_ms??(f.leader20?.batch_advice?initial?.capture_context?.end_ms??-Infinity:-Infinity)});
     const captured=asOf??now();
     const facts=computeFacts(src,{asOf:captured,referenceClose:f.referenceClose,dayReturn:f.dayReturn,rank:f.rank});
     const judgments=(()=>{try{return JSON.parse(ticket.identityJson).judgments;}catch{return modelJudgments(f);}})();
@@ -435,10 +459,13 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
     if(record.packet.facts.capture_context?.reason==='INFERENCE_CAPTURE_NOT_READY')throw Error('DYNAMIC_INFERENCE_CAPTURE_NOT_READY');
     if(record.timeout_recovery?.after_end_ms!=null&&!(record.packet.facts.capture_context?.end_ms>record.timeout_recovery.after_end_ms))
       throw Error('RC_RETRY_CAPTURE_NOT_ADVANCED');
+    if(f.leader20?.batch_advice&&!(record.packet.facts.capture_context?.end_ms>initial?.capture_context?.end_ms))
+      throw Error('RC_BATCH_CAPTURE_NOT_ADVANCED');
     if(store.snapshot)await store.snapshot(key,owner,record);
     const remaining=deadline-now();
     if(remaining<=0)throw Error('RC_TRIGGER_EXPIRED');
-    result=await review(record.packet,{apiKey,deepseekKey,fetchFn,now,deadlineMs:Math.min(deadline,record.snapshot_at_ms+policy.answerMaxAgeMs),
+    const paidFetch=store.transport?await store.transport(key,record,fetchFn):fetchFn;
+    result=await review(record.packet,{apiKey,deepseekKey,fetchFn:paidFetch,now,deadlineMs:Math.min(deadline,record.snapshot_at_ms+policy.answerMaxAgeMs),
       snapshotAtMs:record.snapshot_at_ms,inputPayload:recheckPayload,validate:validateRecheck,
       refreshPacket:asOf===null?async ms=>{
         const next=await readFresh(String(signal.symbol).toUpperCase(),now(),{mode:dataMode,fetchFn,ms,now}),captured=now();

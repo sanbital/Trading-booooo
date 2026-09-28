@@ -1,0 +1,545 @@
+{
+  "order_calls": 0,
+  "model_calls": 0,
+  "live_samples": [
+    {
+      "job_key": "126fac28ae2422c65bd153debcd253ca9279e251d23ab78748029178d2b28a9e",
+      "as_of_ms": 1790554704767,
+      "batch_size": 10,
+      "ready": 10,
+      "valid_ids": 10,
+      "input_tokens": 54906,
+      "output_tokens": 1104,
+      "cached_tokens": 0,
+      "cost_peak": 0.0177966,
+      "latency_ms": 5906
+    },
+    {
+      "job_key": "a79a7338b2d03ebf54b7e2a798ebd0b2e9741acce4e00f602368a4e588ab5e6c",
+      "as_of_ms": 1790554826027,
+      "batch_size": 10,
+      "ready": 10,
+      "valid_ids": 10,
+      "input_tokens": 54968,
+      "output_tokens": 1099,
+      "cached_tokens": 128,
+      "cost_peak": 0.017771567999999998,
+      "latency_ms": 6287
+    },
+    {
+      "job_key": "02b706fc006d34f5f0d8fe67854d0c02da9030b477450b56eb8a007a60163b96",
+      "as_of_ms": 1790554870341,
+      "batch_size": 10,
+      "ready": 10,
+      "valid_ids": 10,
+      "input_tokens": 55180,
+      "output_tokens": 1232,
+      "cached_tokens": 128,
+      "cost_peak": 0.017994768,
+      "latency_ms": 6872
+    }
+  ],
+  "temporal_replay": [
+    {
+      "hash": "ce9daa56787c535663a1a27c6e2b799304d05908e9230c882852249999f478c9",
+      "symbols": [
+        {
+          "id": "QNTUSDT",
+          "last_ms": 1790554700118,
+          "buckets": 24
+        },
+        {
+          "id": "SOONUSDT",
+          "last_ms": 1790554700118,
+          "buckets": 24
+        },
+        {
+          "id": "INXUSDT",
+          "last_ms": 1790554700118,
+          "buckets": 24
+        },
+        {
+          "id": "WUSDT",
+          "last_ms": 1790554700118,
+          "buckets": 24
+        },
+        {
+          "id": "BULLAUSDT",
+          "last_ms": 1790554700118,
+          "buckets": 24
+        },
+        {
+          "id": "GRTUSDT",
+          "last_ms": 1790554700118,
+          "buckets": 24
+        },
+        {
+          "id": "BTWUSDT",
+          "last_ms": 1790554700118,
+          "buckets": 24
+        },
+        {
+          "id": "PUMPUSDT",
+          "last_ms": 1790554700118,
+          "buckets": 24
+        },
+        {
+          "id": "NEARUSDT",
+          "last_ms": 1790554700118,
+          "buckets": 24
+        },
+        {
+          "id": "ONEUSDT",
+          "last_ms": 1790554700118,
+          "buckets": 24
+        }
+      ]
+    },
+    {
+      "hash": "f9c92eb670f82aa506b02a922d8cdf35bdcff70e829f88ab6fce375b9c59b354",
+      "symbols": [
+        {
+          "id": "QNTUSDT",
+          "last_ms": 1790554820237,
+          "buckets": 24
+        },
+        {
+          "id": "SOONUSDT",
+          "last_ms": 1790554820237,
+          "buckets": 24
+        },
+        {
+          "id": "INXUSDT",
+          "last_ms": 1790554820237,
+          "buckets": 24
+        },
+        {
+          "id": "WUSDT",
+          "last_ms": 1790554820237,
+          "buckets": 24
+        },
+        {
+          "id": "BULLAUSDT",
+          "last_ms": 1790554820237,
+          "buckets": 24
+        },
+        {
+          "id": "GRTUSDT",
+          "last_ms": 1790554820237,
+          "buckets": 24
+        },
+        {
+          "id": "BTWUSDT",
+          "last_ms": 1790554820237,
+          "buckets": 24
+        },
+        {
+          "id": "PUMPUSDT",
+          "last_ms": 1790554820237,
+          "buckets": 24
+        },
+        {
+          "id": "NEARUSDT",
+          "last_ms": 1790554820237,
+          "buckets": 24
+        },
+        {
+          "id": "ONEUSDT",
+          "last_ms": 1790554820237,
+          "buckets": 24
+        }
+      ]
+    },
+    {
+      "hash": "cfe4739b3fab02d75111852baa2e666ca137da15dca352933f640ef333fb552d",
+      "symbols": [
+        {
+          "id": "QNTUSDT",
+          "last_ms": 1790554865197,
+          "buckets": 24
+        },
+        {
+          "id": "SOONUSDT",
+          "last_ms": 1790554865197,
+          "buckets": 24
+        },
+        {
+          "id": "INXUSDT",
+          "last_ms": 1790554865197,
+          "buckets": 24
+        },
+        {
+          "id": "WUSDT",
+          "last_ms": 1790554865197,
+          "buckets": 24
+        },
+        {
+          "id": "BULLAUSDT",
+          "last_ms": 1790554865197,
+          "buckets": 24
+        },
+        {
+          "id": "GRTUSDT",
+          "last_ms": 1790554865197,
+          "buckets": 24
+        },
+        {
+          "id": "BTWUSDT",
+          "last_ms": 1790554865197,
+          "buckets": 24
+        },
+        {
+          "id": "PUMPUSDT",
+          "last_ms": 1790554865197,
+          "buckets": 24
+        },
+        {
+          "id": "NEARUSDT",
+          "last_ms": 1790554865197,
+          "buckets": 24
+        },
+        {
+          "id": "ONEUSDT",
+          "last_ms": 1790554865197,
+          "buckets": 24
+        }
+      ]
+    }
+  ],
+  "historical": {
+    "production_records": 485,
+    "paired_valid_entry": 93,
+    "gpt_buy": 48,
+    "skip_would_miss": 13,
+    "skip_miss_fraction": 0.2708333333333333,
+    "missed": [
+      {
+        "job_key": "a41aac59187fa1872d2e22ba3f3e97600bf61b032a6720bd6e12297bb0a420a2",
+        "symbol": "USUSDT"
+      },
+      {
+        "job_key": "999e64ee1aac4c3ba68908314e1d5858e6354b75b42dd2e404c4548c84bdd5a3",
+        "symbol": "HUMAUSDT"
+      },
+      {
+        "job_key": "6317a41661bd3f153118e09f94e92e582b23041c54eabe79567b2ba437a4b786",
+        "symbol": "CHIPUSDT"
+      },
+      {
+        "job_key": "a2ca127c081bcc5f44381a1794a364eb6bb150387bd7e19fa9dc07a4ca7c3762",
+        "symbol": "QNTUSDT"
+      },
+      {
+        "job_key": "d79a1c7cb257cd059f827655956049c5ad4c5b731e06f5a5cd3df8401b1419ad",
+        "symbol": "MARSCOINUSDT"
+      },
+      {
+        "job_key": "1e7666ec143b5afd6165819cd4a1560e240ea8fe0ef50e5b55b096cad01c6bd5",
+        "symbol": "USUSDT"
+      },
+      {
+        "job_key": "a3e0ac71d9368b981938515072fbf9dbc58a6524f9e802481b12b9b10c641a9f",
+        "symbol": "SOONUSDT"
+      },
+      {
+        "job_key": "6ab9cddfda4c3bd516aba492aaca3ac24084340a22d3454971533eb7867966c8",
+        "symbol": "SOONUSDT"
+      },
+      {
+        "job_key": "40bcb34d6119c30d6481b0163e850cd5b3796feccf8479c9a5f6ed076ce85cc9",
+        "symbol": "WUSDT"
+      },
+      {
+        "job_key": "da20621ac413efd5835ec2b56c0d44b35b871e81680210ab2a05ff688a5a54b8",
+        "symbol": "RAYSOLUSDT"
+      },
+      {
+        "job_key": "a27ebfc56570e4d434d702d832ac3653f2813188424d35a407b1a30db8f26080",
+        "symbol": "GRASSUSDT"
+      },
+      {
+        "job_key": "bf1831948a7bbc18875abe1919125e721ec4b28f2ef4a76702ad432f02bbddd7",
+        "symbol": "USUSDT"
+      },
+      {
+        "job_key": "9d4d322fd47cf77250174f2b15d74d0ad04738514a0b68e1b140a41fb2d3dbc8",
+        "symbol": "ARXUSDT"
+      }
+    ],
+    "capture_replay": [
+      {
+        "job_key": "a2ca127c081bcc5f44381a1794a364eb6bb150387bd7e19fa9dc07a4ca7c3762",
+        "symbol": "QNTUSDT",
+        "at": 1790440876660,
+        "capture_end": 1790440870199,
+        "buckets": 24,
+        "safety": {
+          "ok": true,
+          "reason": null,
+          "trajectory_age_ms": 6461,
+          "refresh_recommended": true,
+          "trajectory_end_ms": 1790440870199,
+          "trajectory_hash": "bfe25859b0047cb203d8d14c218798841338956a16e2005eda31db4c2c21d9c8"
+        }
+      },
+      {
+        "job_key": "999e64ee1aac4c3ba68908314e1d5858e6354b75b42dd2e404c4548c84bdd5a3",
+        "symbol": "HUMAUSDT",
+        "at": 1790437275792,
+        "buckets": 0,
+        "safety": {
+          "ok": false,
+          "decision": "WAIT",
+          "reason": "DYNAMIC_STALE_OR_FUTURE"
+        }
+      },
+      {
+        "job_key": "6317a41661bd3f153118e09f94e92e582b23041c54eabe79567b2ba437a4b786",
+        "symbol": "CHIPUSDT",
+        "at": 1790437639867,
+        "capture_end": 1790437635022,
+        "buckets": 24,
+        "safety": {
+          "ok": true,
+          "reason": null,
+          "trajectory_age_ms": 4845,
+          "refresh_recommended": false,
+          "trajectory_end_ms": 1790437635022,
+          "trajectory_hash": "1365c979434c11e8451a1fa969f43afe68eae274a10abf9e3a048723f98ec33c"
+        }
+      },
+      {
+        "job_key": "d79a1c7cb257cd059f827655956049c5ad4c5b731e06f5a5cd3df8401b1419ad",
+        "symbol": "MARSCOINUSDT",
+        "at": 1790443275537,
+        "capture_end": 1790443270181,
+        "buckets": 24,
+        "safety": {
+          "ok": true,
+          "reason": null,
+          "trajectory_age_ms": 5356,
+          "refresh_recommended": true,
+          "trajectory_end_ms": 1790443270181,
+          "trajectory_hash": "7c048c6b53aaaa4261dc8b205b1e2927279409194cd294602740d3f102cc26aa"
+        }
+      },
+      {
+        "job_key": "a41aac59187fa1872d2e22ba3f3e97600bf61b032a6720bd6e12297bb0a420a2",
+        "symbol": "USUSDT",
+        "at": 1790436742097,
+        "buckets": 0,
+        "safety": {
+          "ok": false,
+          "decision": "WAIT",
+          "reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET"
+        }
+      },
+      {
+        "job_key": "da20621ac413efd5835ec2b56c0d44b35b871e81680210ab2a05ff688a5a54b8",
+        "symbol": "RAYSOLUSDT",
+        "at": 1790502971511,
+        "capture_end": 1790502970192,
+        "buckets": 24,
+        "safety": {
+          "ok": true,
+          "reason": null,
+          "trajectory_age_ms": 1319,
+          "refresh_recommended": false,
+          "trajectory_end_ms": 1790502970192,
+          "trajectory_hash": "bc6a36f37cc09feea9b1f84bef9911a833ad8e8da7d6a8847b16379695906923"
+        }
+      },
+      {
+        "job_key": "a27ebfc56570e4d434d702d832ac3653f2813188424d35a407b1a30db8f26080",
+        "symbol": "GRASSUSDT",
+        "at": 1790503751306,
+        "capture_end": 1790503750059,
+        "buckets": 24,
+        "safety": {
+          "ok": true,
+          "reason": null,
+          "trajectory_age_ms": 1247,
+          "refresh_recommended": false,
+          "trajectory_end_ms": 1790503750059,
+          "trajectory_hash": "be427b7cc053bd636e03e5b74ae1eb1affde045ada80774d65ae3052868304df"
+        }
+      },
+      {
+        "job_key": "bf1831948a7bbc18875abe1919125e721ec4b28f2ef4a76702ad432f02bbddd7",
+        "symbol": "USUSDT",
+        "at": 1790510481567,
+        "capture_end": 1790510480092,
+        "buckets": 24,
+        "safety": {
+          "ok": true,
+          "reason": null,
+          "trajectory_age_ms": 1475,
+          "refresh_recommended": false,
+          "trajectory_end_ms": 1790510480092,
+          "trajectory_hash": "453f9f46e25724f9c2d57648fe9c14eb3186933d4a9a2e7f6ba5fe97631b77cd"
+        }
+      },
+      {
+        "job_key": "1e7666ec143b5afd6165819cd4a1560e240ea8fe0ef50e5b55b096cad01c6bd5",
+        "symbol": "USUSDT",
+        "at": 1790470453679,
+        "capture_end": 1790470450171,
+        "buckets": 24,
+        "safety": {
+          "ok": true,
+          "reason": null,
+          "trajectory_age_ms": 3508,
+          "refresh_recommended": false,
+          "trajectory_end_ms": 1790470450171,
+          "trajectory_hash": "a849567345790c9e2bf522c5d359890fca840413982dfd5058eaf721027abace"
+        }
+      },
+      {
+        "job_key": "a3e0ac71d9368b981938515072fbf9dbc58a6524f9e802481b12b9b10c641a9f",
+        "symbol": "SOONUSDT",
+        "at": 1790470938471,
+        "buckets": 0,
+        "safety": {
+          "ok": false,
+          "decision": "WAIT",
+          "reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET"
+        }
+      },
+      {
+        "job_key": "40bcb34d6119c30d6481b0163e850cd5b3796feccf8479c9a5f6ed076ce85cc9",
+        "symbol": "WUSDT",
+        "at": 1790496251894,
+        "capture_end": 1790496250159,
+        "buckets": 24,
+        "safety": {
+          "ok": true,
+          "reason": null,
+          "trajectory_age_ms": 1735,
+          "refresh_recommended": false,
+          "trajectory_end_ms": 1790496250159,
+          "trajectory_hash": "32eeb741b524775354a2baecaacaf271151724f3d733e6cd6b9af69052cc603b"
+        }
+      },
+      {
+        "job_key": "9d4d322fd47cf77250174f2b15d74d0ad04738514a0b68e1b140a41fb2d3dbc8",
+        "symbol": "ARXUSDT",
+        "at": 1790516606385,
+        "capture_end": 1790516605112,
+        "buckets": 24,
+        "safety": {
+          "ok": true,
+          "reason": null,
+          "trajectory_age_ms": 1273,
+          "refresh_recommended": false,
+          "trajectory_end_ms": 1790516605112,
+          "trajectory_hash": "930525978c26c5c32dbe1dff64508de992084f7fcae9d5cc112cf8af40f1ca26"
+        }
+      },
+      {
+        "job_key": "6ab9cddfda4c3bd516aba492aaca3ac24084340a22d3454971533eb7867966c8",
+        "symbol": "SOONUSDT",
+        "at": 1790482633131,
+        "capture_end": 1790482630107,
+        "buckets": 24,
+        "safety": {
+          "ok": true,
+          "reason": null,
+          "trajectory_age_ms": 3024,
+          "refresh_recommended": false,
+          "trajectory_end_ms": 1790482630107,
+          "trajectory_hash": "56912010144fcb204fb980134f6fabb62e11f642bbad9169b3a86c3579480453"
+        }
+      }
+    ],
+    "limitation": "Historical advisory SKIP veto counterfactual, not measured recall of the new Top10 prompt or profitable trades."
+  },
+  "measured_batch": {
+    "cost_peak": {
+      "n": 3,
+      "mean": 0.017854312,
+      "p50": 0.0177966,
+      "p95": 0.017994768,
+      "max": 0.017994768,
+      "sum": 0.053562936
+    },
+    "cost_uncached_peak": {
+      "n": 3,
+      "mean": 0.0178794,
+      "p50": 0.017809199999999997,
+      "p95": 0.0180324,
+      "max": 0.0180324,
+      "sum": 0.0536382
+    },
+    "input": {
+      "n": 3,
+      "mean": 55018,
+      "p50": 54968,
+      "p95": 55180,
+      "max": 55180,
+      "sum": 165054
+    },
+    "output": {
+      "n": 3,
+      "mean": 1145,
+      "p50": 1104,
+      "p95": 1232,
+      "max": 1232,
+      "sum": 3435
+    },
+    "latency": {
+      "n": 3,
+      "mean": 6355,
+      "p50": 6287,
+      "p95": 6872,
+      "max": 6872,
+      "sum": 19065
+    },
+    "decisions": {
+      "WAIT": 19,
+      "SKIP": 5,
+      "PASS": 6
+    },
+    "prompt_pass_fraction": 0.2,
+    "month_5m": 159.403297536,
+    "month_10m": 79.701648768,
+    "month_5m_uncached_max": 160.9932672,
+    "min_minutes_using_100": 9,
+    "min_minutes_using_80": 11
+  },
+  "gpt_final_existing": {
+    "entry_3d": {
+      "n": 257,
+      "mean": 0.01978261692607004,
+      "p50": 0.0136485,
+      "p95": 0.05198175,
+      "max": 0.05265375,
+      "sum": 5.0841325500000005
+    },
+    "entry_since_20260927_utc": {
+      "n": 80,
+      "mean": 0.032076721875,
+      "p50": 0.0250905,
+      "p95": 0.0522405,
+      "max": 0.05265375,
+      "sum": 2.5661377499999998
+    },
+    "projected_at_sample_pass_fraction_3d_cost": 353.2384078319066,
+    "projected_at_sample_pass_fraction_recent_cost": 572.7619457999999,
+    "note": "New batch GPT FINAL path was not paid-tested. Existing FINAL usage excludes GPT FIRST and DeepSeek, and excludes unknown usage."
+  },
+  "known_grounding_failure": {
+    "job_key": "02b706fc006d34f5f0d8fe67854d0c02da9030b477450b56eb8a007a60163b96",
+    "symbol": "SOONUSDT",
+    "claimed_net_taker": 160508,
+    "actual_last_net_taker": -8289.893800000014,
+    "other_symbol": "NEARUSDT",
+    "other_last_net_taker": 160508.59700000007
+  },
+  "deployment_gate": {
+    "budget": false,
+    "recall": false,
+    "grounding": false,
+    "concurrent_live_slot_transition": false,
+    "allowed": false
+  }
+}

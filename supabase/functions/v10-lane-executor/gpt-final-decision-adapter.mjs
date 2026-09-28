@@ -166,7 +166,8 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
           reserved_usd:.10,packet:null,result:null};
         let claim;try{claim=await store.claim(key,record,config);}catch{return null;}
         if(!claim.created)return null;
-        const out=await (testHooks?.review??runHoldReview)({apiKey:'',deepseekKey,exitContext,position,dynamicState:prior.dynamicTracker,
+        const paidFetch=store.transport?await store.transport(key,record):fetch;
+        const out=await (testHooks?.review??runHoldReview)({apiKey:'',deepseekKey,fetchFn:paidFetch,exitContext,position,dynamicState:prior.dynamicTracker,
           event:step.start.event,timeCandidate,stopStage:state.protectionStage??null});
         await store.complete(key,claim.row.owner,{...record,packet:out.packet,result:{...out.result,final_packet:undefined},snapshot_at_ms:now});
         // Provider completion occurs after the observation that started this tick.
@@ -196,7 +197,8 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
       const task=(async()=>{
         // GPT FINAL remains primary. If it is unavailable after the claim, answerOf may consume
         // the already-validated DeepSeek review on the next management observation.
-        const out=await (testHooks?.review??runHoldReview)({apiKey,deepseekKey,exitContext,position,dynamicState:prior.dynamicTracker,
+        const paidFetch=store.transport?await store.transport(step.start.key,record):fetch;
+        const out=await (testHooks?.review??runHoldReview)({apiKey,deepseekKey,fetchFn:paidFetch,exitContext,position,dynamicState:prior.dynamicTracker,
           event:step.start.event,timeCandidate,stopStage:state.protectionStage??null});
         await store.complete(step.start.key,owner,{...record,packet:out.packet,result:{...out.result,final_packet:undefined},
           snapshot_at_ms:out.packet?now:null});
@@ -224,7 +226,8 @@ export async function fd1ExitProbe(db,{symbol,runId,apiKey,fetchFn=fetch}){
     if(!res.ok)throw Error('QUOTE_HTTP_'+res.status);const bid=Number((await res.json()).bids?.[0]?.[0]);
     if(!(bid>0))throw Error('QUOTE_INVALID');
     const t=Date.now();
-    out=await runHoldReview({apiKey,deepseekKey:getenv('deepseek api'),fetchFn,position:{id:'fixture:'+runId,symbol,entryPrice:bid*.99,peakPrice:bid,
+    const paidFetch=await store.transport(key,record,fetchFn);
+    out=await runHoldReview({apiKey,deepseekKey:getenv('deepseek api'),fetchFn:paidFetch,position:{id:'fixture:'+runId,symbol,entryPrice:bid*.99,peakPrice:bid,
       entryAt:t-50*60000,lastHighAt:t-46*60000,stopPrice:bid*.975,entryFeatures:{}},
       event:record.identity.event,timeCandidate:null,stopStage:'retestAnchor_LOCK',exitContext:{version:'AI_EXIT_AUTHORITY_2',fixture:true,current_price:bid,entry_price:bid*.99,hard_floor:bid*.975,soft_trigger:{active:true,reason:'P142_LOCK',level:bid*1.001},exposure_increase_allowed:false}});
   }catch(e){out={packet:null,result:{valid:false,decision:'ABSTAIN',attempted:false,error:'PROBE_PREP_FAILED:'+String(e?.message??e).slice(0,100),api_cost_usd:0}};}

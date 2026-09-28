@@ -23,6 +23,7 @@ test('all twenty leaders materialize through the existing route without a legacy
  const ctl={epoch_id:'e',generation:1,active_strategy:LEADER20,observation_enabled:true},writes=[];
  const events=Array.from({length:20},(_,i)=>({id:'e'+i,epoch_id:'e',generation:1,symbol:`C${i}USDT`}));
  const db={from(table){return {select(){return this;},eq(){return this;},order(){return this;},
+   async maybeSingle(){assert.equal(table,'leader20_batch_control');return {error:{code:'42P01'}};},
    async single(){return {data:table==='leader20_epochs'?{next_refresh_at:new Date(T+100000).toISOString()}:{rank:20,price_change_percent:-1}};},
    async limit(){return {data:events};}};},async rpc(name,args){
    if(name==='leader20_schedule')return {data:{requests:20}};

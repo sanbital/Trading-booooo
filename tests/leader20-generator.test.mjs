@@ -22,6 +22,12 @@ test('disabled observation cannot fall through into a legacy scan or materializa
  const r=await h.run({leader20Only:true});
  assert.equal(r.skipped,'LEADER20_OBSERVATION_DISABLED');assert.deepEqual(h.calls,{scan:0,leader:0});
 });
+
+test('legacy five-minute tick yields to the single one-minute Top10 observer',async()=>{
+ const h=harness({observation_enabled:true,active_strategy:'LEADER20_DYNAMIC_1'});
+ const r=await h.run({});assert.equal(r.skipped,'LEADER20_OBSERVER_OWNS_SCHEDULE');
+ assert.deepEqual(h.calls,{scan:0,leader:0});
+});
 test('existing legacy diagnostic retains its normal scan route',async()=>{
  const h=harness({observation_enabled:false,active_strategy:'LEGACY'});
  const r=await h.run({diagnostic:true});assert.equal(r.legacy,true);assert.deepEqual(h.calls,{scan:1,leader:0});

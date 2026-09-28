@@ -1,0 +1,221 @@
+{
+  "sql_comparison_normalization": "line endings and trailing whitespace only",
+  "runtime_commit": "6bdb271826c172e8fa3c08a3326812049ed97830",
+  "ci": {
+    "workflow_runs": [
+      {
+        "id": 36366552038,
+        "name": "Guard v7.3.0 executable-stop parity",
+        "status": "completed",
+        "conclusion": "success",
+        "run_number": 620,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366552038/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366552038/logs",
+        "workflow_id": 324181046
+      },
+      {
+        "id": 36366551973,
+        "name": "Deploy M1 core score observation tolerance",
+        "status": "completed",
+        "conclusion": "skipped",
+        "run_number": 384,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551973/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551973/logs",
+        "workflow_id": 325685325
+      },
+      {
+        "id": 36366552121,
+        "name": "Verify Top10 15s composite pressure",
+        "status": "completed",
+        "conclusion": "skipped",
+        "run_number": 385,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366552121/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366552121/logs",
+        "workflow_id": 325671440
+      },
+      {
+        "id": 36366551966,
+        "name": "Inspect current scan status",
+        "status": "completed",
+        "conclusion": "skipped",
+        "run_number": 401,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551966/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551966/logs",
+        "workflow_id": 325658506
+      },
+      {
+        "id": 36366551910,
+        "name": "Verify M1 core score production",
+        "status": "completed",
+        "conclusion": "skipped",
+        "run_number": 383,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551910/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551910/logs",
+        "workflow_id": 325687664
+      },
+      {
+        "id": 36366551965,
+        "name": "Verify pre-breakout runtime",
+        "status": "completed",
+        "conclusion": "skipped",
+        "run_number": 409,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551965/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551965/logs",
+        "workflow_id": 325644784
+      },
+      {
+        "id": 36366551984,
+        "name": "Apply pre-breakout burst strategy",
+        "status": "completed",
+        "conclusion": "skipped",
+        "run_number": 414,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551984/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551984/logs",
+        "workflow_id": 325637697
+      },
+      {
+        "id": 36366552004,
+        "name": "Deploy Top10 15s composite pressure",
+        "status": "completed",
+        "conclusion": "skipped",
+        "run_number": 390,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366552004/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366552004/logs",
+        "workflow_id": 325667197
+      },
+      {
+        "id": 36366551958,
+        "name": "Deploy pre-breakout burst strategy",
+        "status": "completed",
+        "conclusion": "success",
+        "run_number": 492,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551958/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551958/logs",
+        "workflow_id": 324097184
+      },
+      {
+        "id": 36366551842,
+        "name": "Self evolution validation",
+        "status": "completed",
+        "conclusion": "success",
+        "run_number": 33,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551842/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551842/logs",
+        "workflow_id": 367836663
+      },
+      {
+        "id": 36366551890,
+        "name": "AI strategy and capture regression",
+        "status": "completed",
+        "conclusion": "success",
+        "run_number": 112,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551890/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551890/logs",
+        "workflow_id": 366898531
+      },
+      {
+        "id": 36366551930,
+        "name": "Entry evidence regression",
+        "status": "completed",
+        "conclusion": "success",
+        "run_number": 175,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551930/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551930/logs",
+        "workflow_id": 361026068
+      },
+      {
+        "id": 36366551808,
+        "name": "Leader20 candidate verification",
+        "status": "completed",
+        "conclusion": "success",
+        "run_number": 23,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551808/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36366551808/logs",
+        "workflow_id": 368320019
+      }
+    ]
+  },
+  "production": [
+    {
+      "result": {
+        "at": "2026-09-28T01:35:45.551197+00:00",
+        "batch": {
+          "enabled": false,
+          "singleton": true,
+          "generation": 0,
+          "last_slots": null,
+          "wake_reason": null,
+          "release_receipt": null,
+          "last_budget_block": null,
+          "last_evidence_key": null,
+          "last_requested_at": null,
+          "wake_requested_at": null
+        },
+        "tables": [
+          {
+            "rls": true,
+            "name": "ai_call_ledger",
+            "anon_select": false,
+            "auth_select": false
+          },
+          {
+            "rls": true,
+            "name": "ai_provider_limits",
+            "anon_select": false,
+            "auth_select": false
+          },
+          {
+            "rls": true,
+            "name": "leader20_batch_control",
+            "anon_select": false,
+            "auth_select": false
+          },
+          {
+            "rls": true,
+            "name": "leader20_batches",
+            "anon_select": false,
+            "auth_select": false
+          }
+        ],
+        "runtime": {
+          "last_error": null,
+          "circuit_open": false,
+          "protection_health": "FLAT",
+          "last_cycle_completed_at": "2026-09-28T01:35:12.194+00:00"
+        },
+        "providers": [
+          {
+            "enabled": false,
+            "provider": "deepseek",
+            "daily_usd": 3.225806451612903,
+            "monthly_usd": 100
+          },
+          {
+            "enabled": false,
+            "provider": "openai",
+            "daily_usd": 3,
+            "monthly_usd": 95
+          }
+        ],
+        "public_callable": null
+      }
+    }
+  ],
+  "applied_migration_sql_parity": [
+    {
+      "version": "20260928010730",
+      "name": "leader20_isolated_release_audit_setup",
+      "repository_matches_applied_sql": true
+    },
+    {
+      "version": "20260928012054",
+      "name": "leader20_batch_provider_ledger",
+      "repository_matches_applied_sql": true
+    },
+    {
+      "version": "20260928013127",
+      "name": "leader20_isolated_release_audit_cleanup",
+      "repository_matches_applied_sql": true
+    }
+  ]
+}

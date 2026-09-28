@@ -1,0 +1,3906 @@
+{
+  "checked_at": "2026-09-28 02:59:07.511943+00",
+  "release": {
+    "pr": 229,
+    "commit": "c7c1d688fb26432ef238924db91a69221d129200",
+    "workflow_id": 36370941149,
+    "workflow_url": "https://github.com/sanbital/Trading-booooo/actions/runs/36370941149",
+    "conclusion": "success",
+    "image_digest": "sha256:09547af82ba2ea5e45012defda0aa404d2f8eb6fde1b772fce4ced9c3ff70d45",
+    "artifact": {
+      "id": 10948709703,
+      "name": "btc-market-sensor-production",
+      "size_in_bytes": 14307,
+      "url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/artifacts/10948709703",
+      "archive_download_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/artifacts/10948709703/zip",
+      "expired": false,
+      "created_at": "2026-09-28T02:57:10Z",
+      "expires_at": "2026-10-28T02:57:09Z",
+      "updated_at": "2026-09-28T02:57:10Z",
+      "digest": "sha256:eeb17bcce8e96a16819a474bca3060741c9d6a862ef01b144691bef43666bdb4",
+      "workflow_run": {
+        "id": 36370941149,
+        "repository_id": 1305483278,
+        "head_repository_id": 1305483278,
+        "head_branch": "main",
+        "head_sha": "c7c1d688fb26432ef238924db91a69221d129200"
+      }
+    },
+    "ci": [
+      {
+        "id": 36370797568,
+        "name": "Guard v7.3.0 executable-stop parity",
+        "status": "completed",
+        "conclusion": "success",
+        "run_number": 624,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36370797568/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36370797568/logs",
+        "workflow_id": 324181046
+      },
+      {
+        "id": 36370797555,
+        "name": "AI strategy and capture regression",
+        "status": "completed",
+        "conclusion": "success",
+        "run_number": 116,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36370797555/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36370797555/logs",
+        "workflow_id": 366898531
+      },
+      {
+        "id": 36370797545,
+        "name": "Leader20 candidate verification",
+        "status": "completed",
+        "conclusion": "success",
+        "run_number": 27,
+        "jobs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36370797545/jobs",
+        "logs_url": "https://api.github.com/repos/sanbital/Trading-booooo/actions/runs/36370797545/logs",
+        "workflow_id": 368320019
+      }
+    ],
+    "merged_branch_node_tests": 1456,
+    "soak_samples": [
+      {
+        "at": "2026-09-28T02:45:33.783Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": 0.000020371479928060765,
+        "latency_ms": 200,
+        "coverage": {
+          "bid": 16.910277291407766,
+          "ask": 15.364810928963058
+        },
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:45:51.522Z",
+        "status": "UNAVAILABLE",
+        "reason": "STALE_OR_FUTURE",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "STALE_OR_FUTURE",
+        "watched": 11,
+        "synced": 11,
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "BTWUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "GRTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:46:08.371Z",
+        "status": "UNAVAILABLE",
+        "reason": "STALE_OR_FUTURE",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "STALE_OR_FUTURE",
+        "watched": 11,
+        "synced": 11,
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "BTWUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "GRTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:46:24.717Z",
+        "status": "UNAVAILABLE",
+        "reason": "STALE_OR_FUTURE",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "STALE_OR_FUTURE",
+        "watched": 11,
+        "synced": 11,
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "BTWUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "GRTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:46:41.618Z",
+        "status": "UNAVAILABLE",
+        "reason": "STALE_OR_FUTURE",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "STALE_OR_FUTURE",
+        "watched": 11,
+        "synced": 11,
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "BTWUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "GRTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "STALE_OR_FUTURE",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:46:57.693Z",
+        "status": "UNAVAILABLE",
+        "reason": "INCOMPLETE_TRAJECTORY",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INCOMPLETE_TRAJECTORY",
+        "watched": 11,
+        "synced": 3,
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BTWUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "GRTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:47:14.018Z",
+        "status": "UNAVAILABLE",
+        "reason": "INCOMPLETE_TRAJECTORY",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INCOMPLETE_TRAJECTORY",
+        "watched": 11,
+        "synced": 3,
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BTWUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "GRTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:47:30.149Z",
+        "status": "UNAVAILABLE",
+        "reason": "INCOMPLETE_TRAJECTORY",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INCOMPLETE_TRAJECTORY",
+        "watched": 11,
+        "synced": 3,
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BTWUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "GRTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:47:46.231Z",
+        "status": "UNAVAILABLE",
+        "reason": "INCOMPLETE_TRAJECTORY",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INCOMPLETE_TRAJECTORY",
+        "watched": 11,
+        "synced": 3,
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BTWUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "GRTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:48:02.409Z",
+        "status": "UNAVAILABLE",
+        "reason": "INCOMPLETE_TRAJECTORY",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INCOMPLETE_TRAJECTORY",
+        "watched": 11,
+        "synced": 6,
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BTWUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "GRTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:48:18.555Z",
+        "status": "UNAVAILABLE",
+        "reason": "INCOMPLETE_TRAJECTORY",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INCOMPLETE_TRAJECTORY",
+        "watched": 11,
+        "synced": 6,
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BTWUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "GRTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:48:34.732Z",
+        "status": "UNAVAILABLE",
+        "reason": "INCOMPLETE_TRAJECTORY",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INCOMPLETE_TRAJECTORY",
+        "watched": 11,
+        "synced": 6,
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BTWUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "GRTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INCOMPLETE_TRAJECTORY",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:48:50.985Z",
+        "status": "UNAVAILABLE",
+        "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "watched": 11,
+        "synced": 8,
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "BTWUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "GRTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:49:08.236Z",
+        "status": "AVAILABLE",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "watched": 11,
+        "synced": 10,
+        "return_1m": -0.0001463131485149871,
+        "latency_ms": 139,
+        "coverage": {
+          "bid": 8.366263626664331,
+          "ask": 25
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:49:24.977Z",
+        "status": "AVAILABLE",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "watched": 11,
+        "synced": 10,
+        "return_1m": -0.0001463131485149871,
+        "latency_ms": 139,
+        "coverage": {
+          "bid": 9.983923783985066,
+          "ask": 23.487705382503158
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:49:41.825Z",
+        "status": "AVAILABLE",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "watched": 11,
+        "synced": 10,
+        "return_1m": -0.0001463131485149871,
+        "latency_ms": 139,
+        "coverage": {
+          "bid": 11.06207291854657,
+          "ask": 22.40594390059978
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "INXUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:49:58.312Z",
+        "status": "AVAILABLE",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "watched": 11,
+        "synced": 10,
+        "return_1m": -0.0001463131485149871,
+        "latency_ms": 139,
+        "coverage": {
+          "bid": 12.834523369203605,
+          "ask": 20.627554840460263
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "ONEUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "NEARUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:50:14.970Z",
+        "status": "AVAILABLE",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": 0.00031785823522700873,
+        "latency_ms": 139,
+        "coverage": {
+          "bid": 15.444149651831365,
+          "ask": 18.0091849839955
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:50:32.975Z",
+        "status": "AVAILABLE",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": 0.00031785823522700873,
+        "latency_ms": 139,
+        "coverage": {
+          "bid": 15.539889812411916,
+          "ask": 17.913124045237332
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:50:50.704Z",
+        "status": "AVAILABLE",
+        "qnt_status": "UNAVAILABLE",
+        "qnt_reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": 0.00031785823522700873,
+        "latency_ms": 139,
+        "coverage": {
+          "bid": 13.062022125710374,
+          "ask": 20.399293847541106
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "WUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "QNTUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "PUMPUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "SOONUSDT",
+            "buckets": null
+          },
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:51:07.617Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": 0.000274590213077186,
+        "latency_ms": 131,
+        "coverage": {
+          "bid": 15.49201996163253,
+          "ask": 17.96115428433655
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:51:24.928Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": 0.000274590213077186,
+        "latency_ms": 131,
+        "coverage": {
+          "bid": 12.235792901561867,
+          "ask": 21.228291359346635
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:51:41.998Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": 0.000274590213077186,
+        "latency_ms": 131,
+        "coverage": {
+          "bid": 12.630963064473217,
+          "ask": 20.831797175627937
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:51:59.193Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": 0.000274590213077186,
+        "latency_ms": 131,
+        "coverage": {
+          "bid": 9.169167848543468,
+          "ask": 24.30519116425574
+        },
+        "trade_unavailable": [
+          {
+            "roles": [
+              "SCANNER_LEADER"
+            ],
+            "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+            "status": "UNAVAILABLE",
+            "symbol": "BULLAUSDT",
+            "buckets": null
+          }
+        ],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:52:16.477Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": -0.0005106695165061348,
+        "latency_ms": 131,
+        "coverage": {
+          "bid": 10.463129908901815,
+          "ask": 23.006893673612858
+        },
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:52:33.279Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": -0.0005106695165061348,
+        "latency_ms": 131,
+        "coverage": {
+          "bid": 11.1339412533198,
+          "ask": 22.33383477039319
+        },
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:52:50.192Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": -0.0005106695165061348,
+        "latency_ms": 131,
+        "coverage": {
+          "bid": 11.88849633602828,
+          "ask": 21.576751544814726
+        },
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:53:07.094Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": 0.00035501312109320615,
+        "latency_ms": 133,
+        "coverage": {
+          "bid": 13.43318205768091,
+          "ask": 20.026890341234992
+        },
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:53:24.082Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": 0.00035501312109320615,
+        "latency_ms": 133,
+        "coverage": {
+          "bid": 13.385292003770923,
+          "ask": 20.074940851155564
+        },
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:53:42.188Z",
+        "status": "UNAVAILABLE",
+        "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:53:59.772Z",
+        "status": "UNAVAILABLE",
+        "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:54:16.597Z",
+        "status": "UNAVAILABLE",
+        "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:54:33.300Z",
+        "status": "UNAVAILABLE",
+        "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:54:50.023Z",
+        "status": "UNAVAILABLE",
+        "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:55:06.814Z",
+        "status": "UNAVAILABLE",
+        "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:55:24.434Z",
+        "status": "UNAVAILABLE",
+        "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:55:41.652Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": -0.0001654436226878886,
+        "latency_ms": 135,
+        "coverage": {
+          "bid": 12.93321317496788,
+          "ask": 18.857188426183253
+        },
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:55:58.913Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": -0.0001654436226878886,
+        "latency_ms": 135,
+        "coverage": {
+          "bid": 12.573909946339478,
+          "ask": 19.217635373400753
+        },
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:56:16.239Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": -0.00014268875984291274,
+        "latency_ms": 128,
+        "coverage": {
+          "bid": 12.51402356138093,
+          "ask": 19.277712386125085
+        },
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:56:33.404Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": -0.00014268875984291274,
+        "latency_ms": 128,
+        "coverage": {
+          "bid": 11.747414399487297,
+          "ask": 20.046761785342436
+        },
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:56:50.637Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": -0.00014268875984291274,
+        "latency_ms": 128,
+        "coverage": {
+          "bid": 11.040592317881305,
+          "ask": 20.75583379260873
+        },
+        "trade_unavailable": [],
+        "open_count": 0
+      },
+      {
+        "at": "2026-09-28T02:57:07.903Z",
+        "status": "AVAILABLE",
+        "qnt_status": "AVAILABLE",
+        "watched": 11,
+        "synced": 11,
+        "return_1m": -0.00028661748198743897,
+        "latency_ms": 128,
+        "coverage": {
+          "bid": 9.111297589134713,
+          "ask": 22.691269769385702
+        },
+        "trade_unavailable": [],
+        "open_count": 0
+      }
+    ],
+    "workflow_gates": "Existing minimum ten-minute healthy source observation, thirty healthy samples, twelve strict QNT AVAILABLE samples, final QNT recovery, image-only config. Workflow success proves these gates; raw console samples include old-worker/startup rows, not all are eligible."
+  },
+  "monitor_samples": [
+    {
+      "checked_at": "2026-09-28 02:45:43.720128+00",
+      "captures": [
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "WUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "BTWUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "GRTUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "INXUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "ONEUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "QNTUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "NEARUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "PUMPUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "SOONUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "BULLAUSDT",
+          "buckets": null
+        }
+      ],
+      "collector": {
+        "metrics": {
+          "queue": 11,
+          "synced": 11,
+          "version": "DOA-CAPTURE-6-MARKET-SENSOR",
+          "watched": 11,
+          "ws_gaps": 60,
+          "llm_calls": 0,
+          "rss_bytes": 111878144,
+          "order_calls": 0,
+          "watch_roles": {
+            "WUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BTCUSDT": [
+              "MARKET_SENSOR"
+            ],
+            "BTWUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "GRTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "INXUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "ONEUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "QNTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "NEARUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "PUMPUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "SOONUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BULLAUSDT": [
+              "SCANNER_LEADER"
+            ]
+          },
+          "rest_failures": 0,
+          "source_commit": "e104c14896d1fc5a5e2d1e8498e1e7f39e4e2066",
+          "last_bucket_at": "2026-09-28T02:45:15.129Z",
+          "coverage_refreshes": 5,
+          "trade_streams_seen": 11,
+          "candle_streams_seen": 11,
+          "unavailable_symbols": {},
+          "production_continuous": true
+        },
+        "heartbeat": "2026-09-28T02:45:15.721698+00:00"
+      },
+      "new_reviews": null,
+      "orders": null,
+      "positions": null,
+      "runtime": {
+        "block": "NO_FRESH_BULL_SIGNAL",
+        "error": null,
+        "completed": "2026-09-28T02:45:15.078+00:00",
+        "protection": "FLAT",
+        "circuit_open": false
+      },
+      "next_legacy": "2026-09-28 02:54:36.081709+00",
+      "daily": [
+        {
+          "calls": 24,
+          "utc_day": "2026-09-28",
+          "settled_usd": 0.54509433,
+          "reserved_usd": 0.54509433
+        }
+      ],
+      "batch_enabled": false
+    },
+    {
+      "checked_at": "2026-09-28 02:46:44.582113+00",
+      "captures": [
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "WUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "BTWUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "GRTUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "INXUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "ONEUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "QNTUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "NEARUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "PUMPUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "SOONUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "STALE_OR_FUTURE",
+          "status": "UNAVAILABLE",
+          "symbol": "BULLAUSDT",
+          "buckets": null
+        }
+      ],
+      "collector": {
+        "metrics": {
+          "queue": 11,
+          "synced": 11,
+          "version": "DOA-CAPTURE-6-MARKET-SENSOR",
+          "watched": 11,
+          "ws_gaps": 60,
+          "llm_calls": 0,
+          "rss_bytes": 111878144,
+          "order_calls": 0,
+          "watch_roles": {
+            "WUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BTCUSDT": [
+              "MARKET_SENSOR"
+            ],
+            "BTWUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "GRTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "INXUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "ONEUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "QNTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "NEARUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "PUMPUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "SOONUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BULLAUSDT": [
+              "SCANNER_LEADER"
+            ]
+          },
+          "rest_failures": 0,
+          "source_commit": "e104c14896d1fc5a5e2d1e8498e1e7f39e4e2066",
+          "last_bucket_at": "2026-09-28T02:45:15.129Z",
+          "coverage_refreshes": 5,
+          "trade_streams_seen": 11,
+          "candle_streams_seen": 11,
+          "unavailable_symbols": {},
+          "production_continuous": true
+        },
+        "heartbeat": "2026-09-28T02:45:15.721698+00:00"
+      },
+      "new_reviews": null,
+      "orders": null,
+      "positions": null,
+      "runtime": {
+        "block": "NO_FRESH_BULL_SIGNAL",
+        "error": null,
+        "completed": "2026-09-28T02:46:08.223+00:00",
+        "protection": "FLAT",
+        "circuit_open": false
+      },
+      "next_legacy": "2026-09-28 02:54:36.081709+00",
+      "daily": [
+        {
+          "calls": 24,
+          "utc_day": "2026-09-28",
+          "settled_usd": 0.54509433,
+          "reserved_usd": 0.54509433
+        }
+      ],
+      "batch_enabled": false
+    },
+    {
+      "checked_at": "2026-09-28 02:48:13.842885+00",
+      "captures": [
+        {
+          "reason": "INCOMPLETE_TRAJECTORY",
+          "status": "UNAVAILABLE",
+          "symbol": "WUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INCOMPLETE_TRAJECTORY",
+          "status": "UNAVAILABLE",
+          "symbol": "BTWUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INCOMPLETE_TRAJECTORY",
+          "status": "UNAVAILABLE",
+          "symbol": "GRTUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INCOMPLETE_TRAJECTORY",
+          "status": "UNAVAILABLE",
+          "symbol": "INXUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INCOMPLETE_TRAJECTORY",
+          "status": "UNAVAILABLE",
+          "symbol": "ONEUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INCOMPLETE_TRAJECTORY",
+          "status": "UNAVAILABLE",
+          "symbol": "QNTUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INCOMPLETE_TRAJECTORY",
+          "status": "UNAVAILABLE",
+          "symbol": "NEARUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INCOMPLETE_TRAJECTORY",
+          "status": "UNAVAILABLE",
+          "symbol": "PUMPUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INCOMPLETE_TRAJECTORY",
+          "status": "UNAVAILABLE",
+          "symbol": "SOONUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INCOMPLETE_TRAJECTORY",
+          "status": "UNAVAILABLE",
+          "symbol": "BULLAUSDT",
+          "buckets": null
+        }
+      ],
+      "collector": {
+        "metrics": {
+          "queue": 11,
+          "synced": 6,
+          "version": "DOA-CAPTURE-6-MARKET-SENSOR",
+          "watched": 11,
+          "ws_gaps": 2,
+          "llm_calls": 0,
+          "rss_bytes": 98054144,
+          "order_calls": 0,
+          "watch_roles": {
+            "WUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BTCUSDT": [
+              "MARKET_SENSOR"
+            ],
+            "BTWUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "GRTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "INXUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "ONEUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "QNTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "NEARUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "PUMPUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "SOONUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BULLAUSDT": [
+              "SCANNER_LEADER"
+            ]
+          },
+          "rest_failures": 0,
+          "source_commit": "c7c1d688fb26432ef238924db91a69221d129200",
+          "last_bucket_at": "2026-09-28T02:48:10.064Z",
+          "coverage_refreshes": 0,
+          "trade_streams_seen": 11,
+          "candle_streams_seen": 11,
+          "unavailable_symbols": {},
+          "production_continuous": true
+        },
+        "heartbeat": "2026-09-28T02:48:10.705174+00:00"
+      },
+      "new_reviews": null,
+      "orders": null,
+      "positions": null,
+      "runtime": {
+        "block": "NO_FRESH_BULL_SIGNAL",
+        "error": null,
+        "completed": "2026-09-28T02:48:07.683+00:00",
+        "protection": "FLAT",
+        "circuit_open": false
+      },
+      "next_legacy": "2026-09-28 02:54:36.081709+00",
+      "daily": [
+        {
+          "calls": 24,
+          "utc_day": "2026-09-28",
+          "settled_usd": 0.54509433,
+          "reserved_usd": 0.54509433
+        }
+      ],
+      "batch_enabled": false
+    },
+    {
+      "checked_at": "2026-09-28 02:49:49.034254+00",
+      "captures": [
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "WUSDT",
+          "buckets": null
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "BTWUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "GRTUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "INXUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "ONEUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "QNTUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "NEARUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "PUMPUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "SOONUSDT",
+          "buckets": null
+        },
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "BULLAUSDT",
+          "buckets": null
+        }
+      ],
+      "collector": {
+        "metrics": {
+          "queue": 11,
+          "synced": 10,
+          "version": "DOA-CAPTURE-6-MARKET-SENSOR",
+          "watched": 11,
+          "ws_gaps": 3,
+          "llm_calls": 0,
+          "rss_bytes": 101228544,
+          "order_calls": 0,
+          "watch_roles": {
+            "WUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BTCUSDT": [
+              "MARKET_SENSOR"
+            ],
+            "BTWUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "GRTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "INXUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "ONEUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "QNTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "NEARUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "PUMPUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "SOONUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BULLAUSDT": [
+              "SCANNER_LEADER"
+            ]
+          },
+          "rest_failures": 0,
+          "source_commit": "c7c1d688fb26432ef238924db91a69221d129200",
+          "last_bucket_at": "2026-09-28T02:49:45.157Z",
+          "coverage_refreshes": 0,
+          "trade_streams_seen": 11,
+          "candle_streams_seen": 11,
+          "unavailable_symbols": {},
+          "production_continuous": true
+        },
+        "heartbeat": "2026-09-28T02:49:48.245096+00:00"
+      },
+      "new_reviews": null,
+      "orders": null,
+      "positions": null,
+      "runtime": {
+        "block": "NO_FRESH_BULL_SIGNAL",
+        "error": null,
+        "completed": "2026-09-28T02:49:06.909+00:00",
+        "protection": "FLAT",
+        "circuit_open": false
+      },
+      "next_legacy": "2026-09-28 02:54:36.081709+00",
+      "daily": [
+        {
+          "calls": 24,
+          "utc_day": "2026-09-28",
+          "settled_usd": 0.54509433,
+          "reserved_usd": 0.54509433
+        }
+      ],
+      "batch_enabled": false
+    },
+    {
+      "checked_at": "2026-09-28 02:51:24.181504+00",
+      "captures": [
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "WUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "BTWUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "GRTUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "INXUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "ONEUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "QNTUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "NEARUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "PUMPUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "SOONUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": "INVALID_OR_NONCAUSAL_BUCKET",
+          "status": "UNAVAILABLE",
+          "symbol": "BULLAUSDT",
+          "buckets": null
+        }
+      ],
+      "collector": {
+        "metrics": {
+          "queue": 11,
+          "synced": 11,
+          "version": "DOA-CAPTURE-6-MARKET-SENSOR",
+          "watched": 11,
+          "ws_gaps": 6,
+          "llm_calls": 0,
+          "rss_bytes": 102043648,
+          "order_calls": 0,
+          "watch_roles": {
+            "WUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BTCUSDT": [
+              "MARKET_SENSOR"
+            ],
+            "BTWUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "GRTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "INXUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "ONEUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "QNTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "NEARUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "PUMPUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "SOONUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BULLAUSDT": [
+              "SCANNER_LEADER"
+            ]
+          },
+          "rest_failures": 0,
+          "source_commit": "c7c1d688fb26432ef238924db91a69221d129200",
+          "last_bucket_at": "2026-09-28T02:51:20.198Z",
+          "coverage_refreshes": 0,
+          "trade_streams_seen": 11,
+          "candle_streams_seen": 11,
+          "unavailable_symbols": {},
+          "production_continuous": true
+        },
+        "heartbeat": "2026-09-28T02:51:20.747853+00:00"
+      },
+      "new_reviews": null,
+      "orders": null,
+      "positions": null,
+      "runtime": {
+        "block": "NO_FRESH_BULL_SIGNAL",
+        "error": null,
+        "completed": "2026-09-28T02:51:08.969+00:00",
+        "protection": "FLAT",
+        "circuit_open": false
+      },
+      "next_legacy": "2026-09-28 02:54:36.081709+00",
+      "daily": [
+        {
+          "calls": 24,
+          "utc_day": "2026-09-28",
+          "settled_usd": 0.54509433,
+          "reserved_usd": 0.54509433
+        }
+      ],
+      "batch_enabled": false
+    },
+    {
+      "checked_at": "2026-09-28 02:52:57.23857+00",
+      "captures": [
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "WUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "BTWUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "GRTUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "INXUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "ONEUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "QNTUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "NEARUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "PUMPUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "SOONUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "BULLAUSDT",
+          "buckets": 24
+        }
+      ],
+      "collector": {
+        "metrics": {
+          "queue": 11,
+          "synced": 11,
+          "version": "DOA-CAPTURE-6-MARKET-SENSOR",
+          "watched": 11,
+          "ws_gaps": 6,
+          "llm_calls": 0,
+          "rss_bytes": 102805504,
+          "order_calls": 0,
+          "watch_roles": {
+            "WUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BTCUSDT": [
+              "MARKET_SENSOR"
+            ],
+            "BTWUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "GRTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "INXUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "ONEUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "QNTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "NEARUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "PUMPUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "SOONUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BULLAUSDT": [
+              "SCANNER_LEADER"
+            ]
+          },
+          "rest_failures": 0,
+          "source_commit": "c7c1d688fb26432ef238924db91a69221d129200",
+          "last_bucket_at": "2026-09-28T02:52:55.078Z",
+          "coverage_refreshes": 0,
+          "trade_streams_seen": 11,
+          "candle_streams_seen": 11,
+          "unavailable_symbols": {},
+          "production_continuous": true
+        },
+        "heartbeat": "2026-09-28T02:52:55.707192+00:00"
+      },
+      "new_reviews": null,
+      "orders": null,
+      "positions": null,
+      "runtime": {
+        "block": "NO_FRESH_BULL_SIGNAL",
+        "error": null,
+        "completed": "2026-09-28T02:52:07.58+00:00",
+        "protection": "FLAT",
+        "circuit_open": false
+      },
+      "next_legacy": "2026-09-28 02:54:36.081709+00",
+      "daily": [
+        {
+          "calls": 24,
+          "utc_day": "2026-09-28",
+          "settled_usd": 0.54509433,
+          "reserved_usd": 0.54509433
+        }
+      ],
+      "batch_enabled": false
+    },
+    {
+      "checked_at": "2026-09-28 02:54:43.950157+00",
+      "captures": [
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "WUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "BTWUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "GRTUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "INXUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "ONEUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "QNTUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "NEARUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "PUMPUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "SOONUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "BULLAUSDT",
+          "buckets": 24
+        }
+      ],
+      "collector": {
+        "metrics": {
+          "queue": 11,
+          "synced": 11,
+          "version": "DOA-CAPTURE-6-MARKET-SENSOR",
+          "watched": 11,
+          "ws_gaps": 7,
+          "llm_calls": 0,
+          "rss_bytes": 102858752,
+          "order_calls": 0,
+          "watch_roles": {
+            "WUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BTCUSDT": [
+              "MARKET_SENSOR"
+            ],
+            "BTWUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "GRTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "INXUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "ONEUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "QNTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "NEARUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "PUMPUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "SOONUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BULLAUSDT": [
+              "SCANNER_LEADER"
+            ]
+          },
+          "rest_failures": 0,
+          "source_commit": "c7c1d688fb26432ef238924db91a69221d129200",
+          "last_bucket_at": "2026-09-28T02:54:40.118Z",
+          "coverage_refreshes": 0,
+          "trade_streams_seen": 11,
+          "candle_streams_seen": 11,
+          "unavailable_symbols": {},
+          "production_continuous": true
+        },
+        "heartbeat": "2026-09-28T02:54:40.721716+00:00"
+      },
+      "new_reviews": null,
+      "orders": null,
+      "positions": null,
+      "runtime": {
+        "block": "NO_FRESH_BULL_SIGNAL",
+        "error": null,
+        "completed": "2026-09-28T02:54:07.054+00:00",
+        "protection": "FLAT",
+        "circuit_open": false
+      },
+      "next_legacy": "2026-09-28 02:54:36.081709+00",
+      "daily": [
+        {
+          "calls": 24,
+          "utc_day": "2026-09-28",
+          "settled_usd": 0.54509433,
+          "reserved_usd": 0.54509433
+        }
+      ],
+      "batch_enabled": false
+    },
+    {
+      "checked_at": "2026-09-28 02:56:13.80829+00",
+      "captures": [
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "WUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "BTWUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "GRTUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "INXUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "ONEUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "QNTUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "NEARUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "PUMPUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "SOONUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "BULLAUSDT",
+          "buckets": 24
+        }
+      ],
+      "collector": {
+        "metrics": {
+          "queue": 11,
+          "synced": 11,
+          "version": "DOA-CAPTURE-6-MARKET-SENSOR",
+          "watched": 11,
+          "ws_gaps": 7,
+          "llm_calls": 0,
+          "rss_bytes": 100659200,
+          "order_calls": 0,
+          "watch_roles": {
+            "WUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BTCUSDT": [
+              "MARKET_SENSOR"
+            ],
+            "BTWUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "GRTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "INXUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "ONEUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "QNTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "NEARUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "PUMPUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "SOONUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BULLAUSDT": [
+              "SCANNER_LEADER"
+            ]
+          },
+          "rest_failures": 0,
+          "source_commit": "c7c1d688fb26432ef238924db91a69221d129200",
+          "last_bucket_at": "2026-09-28T02:56:10.183Z",
+          "coverage_refreshes": 0,
+          "trade_streams_seen": 11,
+          "candle_streams_seen": 11,
+          "unavailable_symbols": {},
+          "production_continuous": true
+        },
+        "heartbeat": "2026-09-28T02:56:10.874141+00:00"
+      },
+      "new_reviews": [
+        {
+          "error": null,
+          "state": "RUNNING",
+          "valid": null,
+          "symbol": "WUSDT",
+          "job_key": "c0a936ba0f3449729abd35cc66f8a9c2db2218f66b6856b794cf75c5a99d49f8",
+          "purpose": "PRODUCTION",
+          "decision": null,
+          "created_at": "2026-09-28T02:56:08.961135+00:00",
+          "latency_ms": null,
+          "api_cost_usd": null,
+          "completed_at": null
+        }
+      ],
+      "orders": null,
+      "positions": null,
+      "runtime": {
+        "block": "GPT_REVIEW_PENDING",
+        "error": null,
+        "completed": "2026-09-28T02:56:13.216+00:00",
+        "protection": "FLAT",
+        "circuit_open": false
+      },
+      "next_legacy": "2026-09-28 03:25:25.896359+00",
+      "daily": [
+        {
+          "calls": 25,
+          "utc_day": "2026-09-28",
+          "settled_usd": 0.54509433,
+          "reserved_usd": 0.79509433
+        }
+      ],
+      "batch_enabled": false
+    },
+    {
+      "checked_at": "2026-09-28 02:57:50.299904+00",
+      "captures": [
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "WUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "BTWUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "GRTUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "INXUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "ONEUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "QNTUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "NEARUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "PUMPUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "SOONUSDT",
+          "buckets": 24
+        },
+        {
+          "reason": null,
+          "status": "AVAILABLE",
+          "symbol": "BULLAUSDT",
+          "buckets": 24
+        }
+      ],
+      "collector": {
+        "metrics": {
+          "queue": 11,
+          "synced": 11,
+          "version": "DOA-CAPTURE-6-MARKET-SENSOR",
+          "watched": 11,
+          "ws_gaps": 7,
+          "llm_calls": 0,
+          "rss_bytes": 102805504,
+          "order_calls": 0,
+          "watch_roles": {
+            "WUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BTCUSDT": [
+              "MARKET_SENSOR"
+            ],
+            "BTWUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "GRTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "INXUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "ONEUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "QNTUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "NEARUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "PUMPUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "SOONUSDT": [
+              "SCANNER_LEADER"
+            ],
+            "BULLAUSDT": [
+              "SCANNER_LEADER"
+            ]
+          },
+          "rest_failures": 0,
+          "source_commit": "c7c1d688fb26432ef238924db91a69221d129200",
+          "last_bucket_at": "2026-09-28T02:57:45.219Z",
+          "coverage_refreshes": 0,
+          "trade_streams_seen": 11,
+          "candle_streams_seen": 11,
+          "unavailable_symbols": {},
+          "production_continuous": true
+        },
+        "heartbeat": "2026-09-28T02:57:48.557071+00:00"
+      },
+      "new_reviews": [
+        {
+          "error": null,
+          "state": "DONE",
+          "valid": true,
+          "symbol": "WUSDT",
+          "job_key": "c0a936ba0f3449729abd35cc66f8a9c2db2218f66b6856b794cf75c5a99d49f8",
+          "purpose": "PRODUCTION",
+          "decision": "SKIP",
+          "created_at": "2026-09-28T02:56:08.961135+00:00",
+          "latency_ms": 6109,
+          "api_cost_usd": 0.04340475,
+          "completed_at": "2026-09-28T02:56:17.660711+00:00"
+        }
+      ],
+      "orders": null,
+      "positions": null,
+      "runtime": {
+        "block": "DEFER_UNIVERSE_STALE_OR_GENERATION",
+        "error": null,
+        "completed": "2026-09-28T02:57:07.485+00:00",
+        "protection": "FLAT",
+        "circuit_open": false
+      },
+      "next_legacy": "2026-09-28 03:25:25.896359+00",
+      "daily": [
+        {
+          "calls": 25,
+          "utc_day": "2026-09-28",
+          "settled_usd": 0.58849908,
+          "reserved_usd": 0.58849908
+        }
+      ],
+      "batch_enabled": false
+    }
+  ],
+  "interval_distribution": {
+    "checked_at": "2026-09-28 02:59:14.026372+00",
+    "first_at": "2026-09-28 02:49:15+00",
+    "last_at": "2026-09-28 02:59:10+00",
+    "rows": 1320,
+    "min_interval_ms": "4802",
+    "max_interval_ms": "5008",
+    "short_rows": 0,
+    "late_rows": 0
+  },
+  "budget": {
+    "checked_at": "2026-09-28 02:59:07.511943+00",
+    "capacity": {
+      "held": [],
+      "reason": null,
+      "available": 2,
+      "snapshot_at": "2026-09-28T02:58:10.585+00:00",
+      "pending_orders": 0,
+      "available_quote": 331.34419204
+    },
+    "entry_limits": {
+      "entry_cap_usd": 2.5,
+      "protected_usd": 0.5,
+      "exposure_count": 0,
+      "entry_max_calls": 83
+    },
+    "provider_budget": {
+      "as_of": "2026-09-28T02:59:07.497829+00:00",
+      "providers": [
+        {
+          "provider": "deepseek",
+          "limit_usd": 100,
+          "days_to_cap": 133.04218854743223,
+          "last24h_usd": 0.73862178,
+          "entry_enabled": false,
+          "remaining_usd": 98.26785812,
+          "month_used_usd": 1.73214188,
+          "run_rate_31d_usd": 22.89727518,
+          "unresolved_reserve_usd": 0
+        },
+        {
+          "provider": "openai",
+          "limit_usd": 95,
+          "days_to_cap": 5.451961506381504,
+          "last24h_usd": 10.2734639,
+          "entry_enabled": false,
+          "remaining_usd": 56.01052972,
+          "month_used_usd": 38.98947028,
+          "run_rate_31d_usd": 318.4773809,
+          "unresolved_reserve_usd": 6.05
+        }
+      ],
+      "rate_basis": "REVIEW_LEDGER_LAST24H_INCLUDING_UNRESOLVED_NOT_INVOICE"
+    },
+    "trade_validator_md5": "ebb7a234dc3ecf74d872974a8243ce56",
+    "migrations": [
+      {
+        "name": "leader20_isolated_release_audit_cleanup",
+        "version": "20260928013127"
+      },
+      {
+        "name": "leader20_batch_provider_ledger",
+        "version": "20260928012054"
+      },
+      {
+        "name": "leader20_isolated_release_audit_setup",
+        "version": "20260928010730"
+      }
+    ],
+    "new_ledger_rows": 0,
+    "daily": [
+      {
+        "calls": 25,
+        "utc_day": "2026-09-28",
+        "settled_usd": 0.58849908,
+        "reserved_usd": 0.58849908
+      }
+    ],
+    "batch_enabled": false,
+    "orders_since_cutoff": 0,
+    "fills_since_cutoff": 0
+  },
+  "readiness": {
+    "db": {
+      "openPositions": [],
+      "unresolvedOrders": [],
+      "openPositionCount": 0,
+      "unresolvedOrderCount": 0
+    },
+    "ok": true,
+    "patch": "FD1-MULTISLOT-CAPACITY-1",
+    "sizing": {
+      "leverage": 3,
+      "targetMarginUsdt": 150
+    },
+    "binance": {
+      "positions": [],
+      "positionCount": 0,
+      "availableQuote": 331.34419204,
+      "positionsComplete": true,
+      "openOrdersComplete": true,
+      "ordersObservedAtMs": 1790564117633,
+      "ordinaryOrderCount": 0,
+      "conditionalOrderCount": 0
+    },
+    "runtime": {
+      "last_error": null,
+      "circuit_open": false,
+      "incident_kind": "INCOMPLETE_OR_STALE_SNAPSHOT",
+      "circuit_reason": null,
+      "protection_health": "FLAT",
+      "entry_block_reason": "NO_FRESH_BULL_SIGNAL",
+      "incident_generation": 129,
+      "last_cycle_completed_at": "2026-09-28T02:55:15.103+00:00"
+    },
+    "maxSlots": 10,
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "gptControl": {
+      "mode": "ENFORCE",
+      "updated_at": "2026-09-27T23:21:29.40427+00:00",
+      "approval_ref": "USER-APPROVED-2026-09-28-MONTHLY100-AI95-STORAGE5",
+      "daily_cap_usd": 3,
+      "enforce_approved": true,
+      "max_calls_per_day": 100
+    },
+    "observedAt": "2026-09-28T02:55:17.749Z",
+    "holdRelease": "FD1-EXIT-HARDENING-DS-SHADOW-1",
+    "deepseekShadow": {
+      "enabled": true,
+      "authority": [],
+      "keyPresent": true
+    },
+    "failsafeRelease": "PR193_EMERGENCY_VALIDATION_1",
+    "dynamicLifecycle": {
+      "version": "DYNAMIC_FLOW_LIFECYCLE_1",
+      "missingDataState": "DATA_DEGRADED",
+      "missingDataForcesExit": false,
+      "absoluteTrajectoryAgeMs": 10000,
+      "positionCaptureIntervalMs": 5000,
+      "fullTrajectoryRequiredForEntry": true
+    },
+    "openaiKeyPresent": true,
+    "nativeStopEnabled": true,
+    "protectionArbitration": {
+      "actions": [
+        "HOLD",
+        "RAISE_PROTECTION",
+        "EXIT"
+      ],
+      "version": "AI_PROTECTION_ARBITRATION_1",
+      "approver": "GPT_FINAL_ONLY",
+      "lowering": "IMPOSSIBLE",
+      "auditTable": "v11_protection_decisions",
+      "onReviewerFailure": "KEEP_LAST_APPROVED_PROTECTION",
+      "hardSafetyIndependent": true,
+      "candidateRaisesProtection": false
+    }
+  },
+  "natural_review": {
+    "job_key": "c0a936ba0f3449729abd35cc66f8a9c2db2218f66b6856b794cf75c5a99d49f8",
+    "symbol": "WUSDT",
+    "created_at": "2026-09-28 02:56:08.961135+00",
+    "completed_at": "2026-09-28 02:56:17.660711+00",
+    "decision": "SKIP",
+    "valid": true,
+    "error": null,
+    "reason": "단기 흐름과 체결 매수가 약해 기대수익이 낮습니다.",
+    "data": {
+      "capture_buckets": 24,
+      "capture_valid": true,
+      "capture_valid_at_start": true,
+      "capture_start": 1790564050087,
+      "capture_end": 1790564170147,
+      "capture_age_at_start_ms": 1277,
+      "capture_age_at_completion_ms": 7386,
+      "requires_final_recheck": true
+    },
+    "deepseek": {
+      "decision": "SKIP",
+      "usage": {
+        "total_tokens": 20529,
+        "prompt_tokens": 20262,
+        "completion_tokens": 267,
+        "prompt_tokens_details": {
+          "cached_tokens": 3456
+        },
+        "prompt_cache_hit_tokens": 3456,
+        "prompt_cache_miss_tokens": 16806
+      },
+      "latency_ms": 1770,
+      "ledger_conservative_usd": 0.006399
+    },
+    "gpt_first": {
+      "decision": "WAIT",
+      "usage": {
+        "input_tokens": 17697,
+        "total_tokens": 17782,
+        "output_tokens": 85,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "cost_usd": 0.01365525,
+      "latency_ms": 2398
+    },
+    "gpt_final": {
+      "decision": "SKIP",
+      "usage": {
+        "input_tokens": 27072,
+        "total_tokens": 27749,
+        "output_tokens": 677,
+        "input_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 0
+        }
+      },
+      "latency_ms": 3611,
+      "cost_usd": 0.0233505
+    },
+    "gpt_total_usd": 0.03700575,
+    "total_settled_usd": 0.04340475,
+    "latency_ms": 6109,
+    "reason_data": {
+      "last_5s_return": -0.0043441657,
+      "last_5s_buy_share": 0.11068418,
+      "last_5s_net_flow": -9761.4699
+    }
+  },
+  "edge_functions": [
+    {
+      "id": "9d0281b0-1168-47de-a60b-63ca3c0fead0",
+      "slug": "v10-lane-signal-generator",
+      "name": "v10-lane-signal-generator",
+      "status": "ACTIVE",
+      "version": 36,
+      "created_at": 1788227453398,
+      "updated_at": 1790559111318,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_9d0281b0-1168-47de-a60b-63ca3c0fead0_36/source/supabase/functions/v10-lane-signal-generator/index.ts",
+      "ezbr_sha256": "59e5dc8111d307f05309b7db2ee3c22ac5843050d3546e4b9bd17729385a4425"
+    },
+    {
+      "id": "523856f5-4833-467f-9395-3e13a8118046",
+      "slug": "v10-lane-executor",
+      "name": "v10-lane-executor",
+      "status": "ACTIVE",
+      "version": 138,
+      "created_at": 1788229637046,
+      "updated_at": 1790560451380,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_523856f5-4833-467f-9395-3e13a8118046_138/source/supabase/functions/v10-lane-executor/index.ts",
+      "ezbr_sha256": "d4f6e09ab921f6e55606b376c29b03598a28b3040897ef412a5e0992cc08b479"
+    },
+    {
+      "id": "c7a450c5-ecf3-477e-b6fc-8d74568c9da1",
+      "slug": "v14-bear-final-candidate-audit",
+      "name": "v14-bear-final-candidate-audit",
+      "status": "ACTIVE",
+      "version": 10,
+      "created_at": 1788414051809,
+      "updated_at": 1788612049841,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///home/runner/work/Trading-booooo/Trading-booooo/supabase/functions/v14-bear-final-candidate-audit/index.ts",
+      "ezbr_sha256": "f1dda5c18587993b833168064687d21e779cf43fa5ae64c210f16116a6bbd272"
+    },
+    {
+      "id": "c53f2f04-f470-4064-bc5e-a55bcd0173e4",
+      "slug": "v13-range-proof-parity-audit",
+      "name": "v13-range-proof-parity-audit",
+      "status": "ACTIVE",
+      "version": 9,
+      "created_at": 1788417067042,
+      "updated_at": 1788417067042,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_c53f2f04-f470-4064-bc5e-a55bcd0173e4_1/source/index.ts",
+      "ezbr_sha256": "35b253f1dfa688409f9a51567988376e2583bda18d3701083ba60cba22e4ecd1"
+    },
+    {
+      "id": "d534f507-2cde-4f70-b136-0be0110fbf8a",
+      "slug": "v13-live-fill-parity-audit",
+      "name": "v13-live-fill-parity-audit",
+      "status": "ACTIVE",
+      "version": 9,
+      "created_at": 1788417278619,
+      "updated_at": 1788417278619,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_d534f507-2cde-4f70-b136-0be0110fbf8a_1/source/index.ts",
+      "ezbr_sha256": "97ea07cfbc8a8c0603b22aaab0a4166b12a73e55c5af8854b9610ca8f78be43c"
+    },
+    {
+      "id": "d2d4debc-df74-4212-bfb4-5acb4926416e",
+      "slug": "v13-range-deep-parity-audit",
+      "name": "v13-range-deep-parity-audit",
+      "status": "ACTIVE",
+      "version": 9,
+      "created_at": 1788417899288,
+      "updated_at": 1788417899288,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_d2d4debc-df74-4212-bfb4-5acb4926416e_1/source/index.ts",
+      "ezbr_sha256": "02a860a1bb3c86cae0c14925f4e71bdfe4157e3386e53b9fe7b161a55abab20c"
+    },
+    {
+      "id": "6708e4d8-f8cd-48c4-89c7-2b585ddb4bde",
+      "slug": "v13-range-market-gate-audit",
+      "name": "v13-range-market-gate-audit",
+      "status": "ACTIVE",
+      "version": 9,
+      "created_at": 1788418974683,
+      "updated_at": 1788418974683,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_6708e4d8-f8cd-48c4-89c7-2b585ddb4bde_1/source/index.ts",
+      "ezbr_sha256": "e2acb676b9d81f975dfd6e46eebb42c3d51417ec6b5849c6ebdc1834906d644d"
+    },
+    {
+      "id": "bde992fd-6d17-4407-85ee-77f852d781a6",
+      "slug": "v13-range-entry-filter-audit",
+      "name": "v13-range-entry-filter-audit",
+      "status": "ACTIVE",
+      "version": 9,
+      "created_at": 1788419325127,
+      "updated_at": 1788419325127,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_bde992fd-6d17-4407-85ee-77f852d781a6_1/source/index.ts",
+      "ezbr_sha256": "9abd9627fc621e76fcb38f43fb7eaa1f9e7636280994f5eca429d57ab5751495"
+    },
+    {
+      "id": "52b36685-9d2b-4e84-bd3d-f059ce255f39",
+      "slug": "v15-range-selection-audit",
+      "name": "v15-range-selection-audit",
+      "status": "ACTIVE",
+      "version": 9,
+      "created_at": 1788420586435,
+      "updated_at": 1788420586435,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_52b36685-9d2b-4e84-bd3d-f059ce255f39_1/source/index.ts",
+      "ezbr_sha256": "e76ad1e3fd580224127c05501b0d0a6e182418d9f54a7428c29542dff8baba02"
+    },
+    {
+      "id": "d5d2bc0a-1ea0-470d-91f0-820fa8a66ae5",
+      "slug": "v15-range-execution-policy-audit",
+      "name": "v15-range-execution-policy-audit",
+      "status": "ACTIVE",
+      "version": 10,
+      "created_at": 1788421355181,
+      "updated_at": 1788421409254,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_d5d2bc0a-1ea0-470d-91f0-820fa8a66ae5_2/source/index.ts",
+      "ezbr_sha256": "62a0882bfe6b836732ed65129585a9dffef064c27975743fc6799832041d241d"
+    },
+    {
+      "id": "1ccff562-04a3-4f84-a3d9-29c049e7e3fe",
+      "slug": "v18-readonly-audit",
+      "name": "v18-readonly-audit",
+      "status": "ACTIVE",
+      "version": 7,
+      "created_at": 1789026202201,
+      "updated_at": 1789026202201,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_1ccff562-04a3-4f84-a3d9-29c049e7e3fe_1/source/functions/v18-readonly-audit/index.ts",
+      "ezbr_sha256": "e87a465675b5fff2766f1b07783635a707f83f39fb94911e81610c42e040c427"
+    },
+    {
+      "id": "f61337d8-51cc-46e0-a1a8-959c468f73da",
+      "slug": "gpt-key-readiness-audit-20260923",
+      "name": "gpt-key-readiness-audit-20260923",
+      "status": "ACTIVE",
+      "version": 4,
+      "created_at": 1790164857625,
+      "updated_at": 1790164947395,
+      "verify_jwt": true,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_f61337d8-51cc-46e0-a1a8-959c468f73da_2/source/index.ts",
+      "ezbr_sha256": "b719d8419de3ae2d5543647924c4b86d60ea3c19f9f3ac6cbedea4995f41d806"
+    },
+    {
+      "id": "bd0065e7-e06d-4856-9864-1be01ce2ed6a",
+      "slug": "doa-capture-ingest",
+      "name": "doa-capture-ingest",
+      "status": "ACTIVE",
+      "version": 5,
+      "created_at": 1790342585513,
+      "updated_at": 1790548649358,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_bd0065e7-e06d-4856-9864-1be01ce2ed6a_5/source/supabase/functions/doa-capture-ingest/index.ts",
+      "ezbr_sha256": "80cacf1194b5bb5006add26158228145956b5eb08567352442eb1ff59e4c7a26"
+    },
+    {
+      "id": "85869be4-3e17-4b87-b016-be57ecde1e16",
+      "slug": "self-evolution-worker",
+      "name": "self-evolution-worker",
+      "status": "ACTIVE",
+      "version": 16,
+      "created_at": 1790443072123,
+      "updated_at": 1790548664693,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_85869be4-3e17-4b87-b016-be57ecde1e16_16/source/supabase/functions/self-evolution-worker/index.ts",
+      "ezbr_sha256": "06447fdd382ea3cd89172b87ed013707e40ed4961282b1752e84ea20110a1030"
+    },
+    {
+      "id": "a60681bf-9079-4423-b523-b206178542d0",
+      "slug": "leader20-batch-audit",
+      "name": "leader20-batch-audit",
+      "status": "ACTIVE",
+      "version": 11,
+      "created_at": 1790554696324,
+      "updated_at": 1790562010108,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_a60681bf-9079-4423-b523-b206178542d0_11/source/supabase/functions/leader20-batch-audit/index.ts",
+      "ezbr_sha256": "fb2d7fe9c80efd776591953bb9403d4d93d7a301c83ec5e64c4e594c8879222f"
+    }
+  ],
+  "no_manual_orders": true,
+  "no_paid_audit_calls": true
+}
