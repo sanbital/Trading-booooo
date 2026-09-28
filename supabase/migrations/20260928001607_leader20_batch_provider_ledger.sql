@@ -196,7 +196,7 @@ begin
   select 1 from public.leader20_members where epoch_id=l.epoch_id and rank<=10 and symbol=x->>'id')) then raise exception 'BATCH_MEMBERSHIP'; end if;
  if (p_packet->>'as_of_ms')::numeric<extract(epoch from at_time)*1000-10000 or
   (p_packet->>'as_of_ms')::numeric>extract(epoch from at_time)*1000 then raise exception 'BATCH_STALE'; end if;
- reason:=case when c.last_slots=0 then 'SLOT_RELEASED' when c.last_requested_at is null or c.last_requested_at<=at_time-interval '5 minutes' then 'FIVE_MINUTE'
+ reason:=case when c.last_slots=0 then 'SLOT_RELEASED' when c.last_requested_at is null or c.last_requested_at<=at_time-interval '10 minutes' then 'TEN_MINUTE'
   when p_strong_change and strong and p_evidence_key is distinct from c.last_evidence_key and c.last_requested_at<=at_time-interval '30 seconds' then 'EVIDENCE_CHANGED' end;
  if reason is null then return jsonb_build_object('created',false,'reason','NOT_DUE'); end if;
  if reason='SLOT_RELEASED' then

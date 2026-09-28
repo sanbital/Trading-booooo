@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
+import {BATCH_INTERVAL_MS} from '../supabase/functions/_shared/leader20/batch.mjs';
 const migration=new URL('../supabase/migrations/20260928001607_leader20_batch_provider_ledger.sql',import.meta.url);
 test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
  const {PGlite}=await import(pathToFileURL(process.env.PGLITE_MODULE).href), db=new PGlite();t.after(()=>db.close());
@@ -85,12 +86,18 @@ test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
  for(let i=0;i<10;i++)await q('insert into leader20_members values($1,$2,$3)',[epoch,'S'+i,i+1]);
  const packet=(v='one')=>({epoch_id:epoch,generation:3,as_of_ms:Date.now(),batch_hash:v,
   evidence:Array.from({length:10},(_,i)=>['S'+i,100,1,.1]),symbols:Array.from({length:10},(_,i)=>({id:'S'+i,state:'READY',data_version:v+i,last_ms:Date.now()-1000}))});
- await t.test('5m batch bypasses global 30m gate; duplicate and in-flight calls coalesce',async()=>{
+ await t.test('10m batch bypasses global 30m gate; duplicate and in-flight calls coalesce',async()=>{
+  assert.equal(BATCH_INTERVAL_MS,600000);
   await assert.rejects(q('update leader20_batch_control set enabled=true'),/batch_release_requires_evidence/);
   await q(`update leader20_batch_control set enabled=true,release_receipt='{"budget_verified":true,"recall_verified":true,"concurrency_verified":true,"protection_verified":true}'`);
   assert.equal((await rpc('leader20_schedule')).reason,'BATCH_SCHEDULER_OWNS_ENTRY');
   const p=packet(),a=await rpc('leader20_batch_claim',[p,'e',false]);assert.equal(a.created,true);
-  await q("update leader20_batch_control set last_requested_at=clock_timestamp()-interval '5 minutes'");
+  assert.equal(a.row.reason,'TEN_MINUTE');
+  for(const elapsed of [300,599]){
+   await q("update leader20_batch_control set last_requested_at=clock_timestamp()-$1*interval '1 millisecond'",[elapsed*1000]);
+   assert.equal((await rpc('leader20_batch_claim',[packet('early-'+elapsed),'early',false])).reason,'NOT_DUE');
+  }
+  await q("update leader20_batch_control set last_requested_at=clock_timestamp()-$1*interval '1 millisecond'",[BATCH_INTERVAL_MS]);
   assert.equal((await rpc('leader20_batch_claim',[packet('two'),'e2',false])).reason,'BATCH_IN_FLIGHT');
   await rpc('leader20_batch_start',[a.row.id,a.row.owner]);
   const results=p.symbols.map(s=>({id:s.id,version:s.data_version,last_ms:s.last_ms,decision:'PASS',valid:true}));
@@ -98,9 +105,16 @@ test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
   assert.equal((await rpc('leader20_batch_finish',[a.row.id,a.row.owner,{results}])).events,8);
   assert.equal((await rpc('leader20_batch_finish',[a.row.id,a.row.owner,{results}])).duplicate,true);
   assert.equal((await rpc('leader20_batch_claim',[p,'e',false])).reason,'DUPLICATE_CAPTURE');
-  assert.equal((await rpc('leader20_batch_claim',[packet('two'),'e2',false])).created,true);
+  const next=await rpc('leader20_batch_claim',[packet('two'),'e2',false]);assert.equal(next.created,true);assert.equal(next.row.reason,'TEN_MINUTE');
  });
- await t.test('1→0 blocks late results; 0→1 requests fresh data without 5m wait',async()=>{
+ await t.test('strong new evidence can request a batch before the 10m periodic deadline',async()=>{
+  await q("update leader20_batches set state='DONE'");
+  await q("update leader20_batch_control set last_requested_at=clock_timestamp()-interval '31 seconds'");
+  const changed=packet('strong');changed.evidence[0][1]=100.3;
+  const a=await rpc('leader20_batch_claim',[changed,'strong-evidence',true]);
+  assert.equal(a.created,true);assert.equal(a.row.reason,'EVIDENCE_CHANGED');
+ });
+ await t.test('1→0 blocks late results; 0→1 requests fresh data without 10m wait',async()=>{
   await q("update leader20_batches set state='DONE'");
   await q("update trading_account_snapshots set available_quote=0,captured_at=clock_timestamp()");
   await rpc('leader20_batch_note_full');

@@ -1,0 +1,26 @@
+{
+  "requested_period_minutes": 10,
+  "batch_interval_ms": 600000,
+  "symbols_per_request": 10,
+  "days": 31,
+  "periodic_requests": 4464,
+  "base_month_mean_peak_usd": 79.701648768,
+  "base_month_max_sample_uncached_peak_usd": 80.4966336,
+  "deepseek_monthly_limit_usd": 100,
+  "remaining_at_mean": 20.298351232,
+  "remaining_at_max": 19.503366400000004,
+  "full_slots_suspend_paid_entry": true,
+  "slot_release_and_strong_evidence_can_wake_early": true,
+  "measurement_sample_count": 3,
+  "new_paid_measurements": 0,
+  "release_allowed": false,
+  "remaining_gates": [
+    "CROSS_SYMBOL_GROUNDING",
+    "PAIRED_TOP10_RECALL",
+    "NEW_GPT_FINAL_COST",
+    "MULTI_SESSION_SLOT_ORDER_RACES"
+  ],
+  "production_checked_at": "2026-09-28 00:51:58.970364+00",
+  "production_cadence": "LEGACY_GLOBAL_30_MINUTES",
+  "batch_tables_applied": false
+}

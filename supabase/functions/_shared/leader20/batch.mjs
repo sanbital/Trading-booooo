@@ -4,7 +4,7 @@ import {hash} from '../gpt-final-decision/snapshot-hash.mjs';
 
 export const BATCH_VERSION = 'TOP10_DEEPSEEK_BATCH_1';
 export const BATCH_MODEL = 'deepseek-flash';
-export const BATCH_INTERVAL_MS = 300000;
+export const BATCH_INTERVAL_MS = 600000;
 // All source fields survive. Column names appear once; timestamps are exact offsets,
 // never rounded/sorted/repaired. Original numeric precision is preserved.
 export const TIME_COLUMNS = new Set(['bucket_ms','start_ms','end_ms','received_at_ms',
