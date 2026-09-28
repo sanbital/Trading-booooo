@@ -1,4 +1,5 @@
 import {LEADER20, fetchEpoch} from './universe.mjs';
+import {batchControl,runEntryBatch} from './batch-runtime.mjs';
 import {isLeader20} from './campaign.mjs';
 import {POLICY, STRATEGY} from '../leader-momentum-v17.mjs';
 import {validateCapture120} from '../gpt-final-decision/capture-context.mjs';
@@ -40,7 +41,9 @@ export async function generateLeader20(db, ctl, {now = Date.now, fetchFn = fetch
       ctl = await leaderControl(db);
     } catch (e) { refreshError = String(e.message); }
   }
-  const scheduled = await db.rpc('leader20_schedule');
+  const batchMode=await batchControl(db);
+  const batchOutcome=batchMode.enabled?await runEntryBatch(db,ctl,{now,fetchFn}):null;
+  const scheduled = batchMode.enabled?{data:batchOutcome}:await db.rpc('leader20_schedule');
   if (scheduled.error) throw Error('LEADER20_SCHEDULE_FAILED');
   if (ctl.active_strategy !== LEADER20) return {ok: true, strategy: LEADER20, inserted: 0, state: 'OBSERVATION_ONLY', refreshError};
   const queue = await db.from('leader20_review_events').select('*').eq('state', 'REQUESTED')
@@ -50,6 +53,7 @@ export async function generateLeader20(db, ctl, {now = Date.now, fetchFn = fetch
   const outcomes = [];
   for (const e of queue.data ?? []) {
     try {
+      if(batchMode.enabled&&!e.result?.batch_advice){outcomes.push({symbol:e.symbol,reason:'BATCH_ADVICE_REQUIRED'});continue;}
       const at = now(), raw = await db.rpc('doa_context_for_role_v1', {p_symbol: e.symbol,
         p_as_of: new Date(at).toISOString(), p_role: 'TRADE_CANDIDATE', p_position_id: null});
       if (raw.error) throw Error('CAPTURE_READ');
@@ -64,7 +68,8 @@ export async function generateLeader20(db, ctl, {now = Date.now, fetchFn = fetch
         exitPolicy: {stopPct: POLICY.stopPct, trailArmPct: POLICY.trailArmPct, trailGapPct: POLICY.trailGapPct,
           staleMs: POLICY.staleMs, maxHoldMs: POLICY.maxHoldMs},
         sizingContractVersion: POLICY.sizingContractVersion, targetMarginUsdt: POLICY.marginUsdt,
-        leverage: POLICY.leverage, maxSlots: POLICY.maxSlots, storageLaneOnly: 'BULL'};
+        leverage: POLICY.leverage, maxSlots: POLICY.maxSlots, storageLaneOnly: 'BULL',
+        ...(e.result?.batch_advice?{batch_advice:e.result.batch_advice,batch_id:e.result.batch_id}:{})};
       const r = await db.rpc('leader20_materialize_event', {p_event_id: e.id, p_features: features});
       if (r.error) throw Error('EVENT_MATERIALIZE:' + r.error.message);
       outcomes.push({symbol: e.symbol, ...r.data});

@@ -176,6 +176,7 @@ export class FinalReviewCoordinator {
   }
   async work(key,owner,record){
     try{
+      const fetchFn=this.store.transport?await this.store.transport(key,record,this.fetchFn):this.fetchFn;
       const deadlineMs=record.expires_at_ms-LIMITS.executionReserveMs;
       ensure(this.now()<deadlineMs,'REVIEW_TRIGGER_EXPIRED');
       let captured;
@@ -195,8 +196,8 @@ export class FinalReviewCoordinator {
         {now:this.now(),executionDeadline:deadlineMs,ordinaryDeadline:record.valid_until_ms}):record.valid_until_ms;
       ensure(Number.isFinite(analysisDeadline)&&analysisDeadline>this.now(),'REVIEW_RECHECK_ROOM_REQUIRED');
       record.analysis_deadline_ms=analysisDeadline;
-      record.result=this.engine?await this.engine.call(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,deadlineMs:analysisDeadline,identity:record.identity}):
-        await callFinalReviewer(record.packet,{apiKey:this.apiKey(),fetchFn:this.fetchFn,now:this.now,
+      record.result=this.engine?await this.engine.call(record.packet,{apiKey:this.apiKey(),fetchFn,now:this.now,deadlineMs:analysisDeadline,identity:record.identity}):
+        await callFinalReviewer(record.packet,{apiKey:this.apiKey(),fetchFn,now:this.now,
         deadlineMs:record.valid_until_ms,profile:this.profile});
       if(this.engine&&record.result.final_packet){
         record.packet=record.result.final_packet;

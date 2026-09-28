@@ -1,0 +1,105 @@
+{
+  "checked_at_utc": "2026-09-28T00:37:03.727249Z",
+  "base_main": "e104c14896d1fc5a5e2d1e8498e1e7f39e4e2066",
+  "initial_main": "091edc5caee09eaf67e62f4ff2a17d9807a08e70",
+  "project": "etaajwpernzrcdrifdnw",
+  "applied_migrations": 548,
+  "last_migration": {
+    "version": "20260927232129",
+    "name": "leader20_monthly_100_ai_95_budget"
+  },
+  "functions": [
+    {
+      "name": "v10-lane-signal-generator",
+      "version": 35,
+      "ezbr_sha256": "382bc4bcc2579b3c6b6a4909f26adbb2ca3cf3393632e412264318add4677a2d",
+      "updated_at": 1790548660097
+    },
+    {
+      "name": "v10-lane-executor",
+      "version": 136,
+      "ezbr_sha256": "5aaf6096c2262a6d61cd113418ff6f21d3b498e31dda608b007f4283780fef95",
+      "updated_at": 1790548655214
+    },
+    {
+      "name": "doa-capture-ingest",
+      "version": 5,
+      "ezbr_sha256": "80cacf1194b5bb5006add26158228145956b5eb08567352442eb1ff59e4c7a26",
+      "updated_at": 1790548649358
+    },
+    {
+      "name": "self-evolution-worker",
+      "version": 16,
+      "ezbr_sha256": "06447fdd382ea3cd89172b87ed013707e40ed4961282b1752e84ea20110a1030",
+      "updated_at": 1790548664693
+    },
+    {
+      "name": "leader20-batch-audit",
+      "version": 2,
+      "ezbr_sha256": "3fbc616e932ccf64c8e21baca1b5ccd6b560a043c394eb0ff070dd8d56ba3107",
+      "updated_at": 1790555763933
+    }
+  ],
+  "candidate_migration_applied": false,
+  "candidate_trading_route_deployed": false,
+  "audit_v1": {
+    "version": 1,
+    "ezbr_sha256": "2f5110fc61e4f875e7d74c3dc3b44cc78cd0cfb6bfa2456bb6efacd69dd4b1b9",
+    "paid_calls": 3,
+    "orders": 0
+  },
+  "audit_current": {
+    "version": 2,
+    "status": 410,
+    "body": {
+      "state": "AUDIT_CLOSED",
+      "reason": "BUDGET_AND_GROUNDING_GATES_FAILED",
+      "orders": 0
+    }
+  },
+  "cost_conservation": [
+    {
+      "checked_at": "2026-09-28 00:31:54.213976+00",
+      "legacy_total": "40.22535171599999989680",
+      "attributable_deepseek": "1.57592993599999999750",
+      "openai_and_unknown": "38.64942177999999989930",
+      "conservation_total": "40.22535171599999989680",
+      "daily": [
+        {
+          "calls": 4,
+          "utc_day": "2026-09-28",
+          "settled_usd": 0.092238636,
+          "reserved_usd": 0.092238636
+        },
+        {
+          "calls": 220,
+          "utc_day": "2026-09-27",
+          "settled_usd": 6.97952025,
+          "reserved_usd": 14.62952025
+        },
+        {
+          "calls": 187,
+          "utc_day": "2026-09-26",
+          "settled_usd": 5.5673034,
+          "reserved_usd": 7.5673034
+        },
+        {
+          "calls": 188,
+          "utc_day": "2026-09-25",
+          "settled_usd": 0.80218515,
+          "reserved_usd": 1.40218515
+        }
+      ],
+      "exposures": 0,
+      "unresolved_orders": 0
+    }
+  ],
+  "recent24_known_costs": {
+    "rows": 151,
+    "gpt_known": 6.842336400000001,
+    "ds_known": 0.55774254,
+    "gpt_first_unknown": 10,
+    "ds_unknown": 19,
+    "gpt_final_attempted_unknown": 17
+  }
+}

@@ -423,7 +423,7 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
     if(now()>=deadline)throw Error('RC_TRIGGER_EXPIRED');
     const at=asOf??now();
     const {src,errors}=await readFresh(String(signal.symbol).toUpperCase(),at,{mode:dataMode,fetchFn,ms:policy.freshReadMs,now,deadlineMs:deadline-8000,
-      afterEndMs:record.timeout_recovery?.after_end_ms??-Infinity});
+      afterEndMs:record.timeout_recovery?.after_end_ms??(f.leader20?.batch_advice?initial?.capture_context?.end_ms??-Infinity:-Infinity)});
     const captured=asOf??now();
     const facts=computeFacts(src,{asOf:captured,referenceClose:f.referenceClose,dayReturn:f.dayReturn,rank:f.rank});
     const judgments=(()=>{try{return JSON.parse(ticket.identityJson).judgments;}catch{return modelJudgments(f);}})();
@@ -435,10 +435,13 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
     if(record.packet.facts.capture_context?.reason==='INFERENCE_CAPTURE_NOT_READY')throw Error('DYNAMIC_INFERENCE_CAPTURE_NOT_READY');
     if(record.timeout_recovery?.after_end_ms!=null&&!(record.packet.facts.capture_context?.end_ms>record.timeout_recovery.after_end_ms))
       throw Error('RC_RETRY_CAPTURE_NOT_ADVANCED');
+    if(f.leader20?.batch_advice&&!(record.packet.facts.capture_context?.end_ms>initial?.capture_context?.end_ms))
+      throw Error('RC_BATCH_CAPTURE_NOT_ADVANCED');
     if(store.snapshot)await store.snapshot(key,owner,record);
     const remaining=deadline-now();
     if(remaining<=0)throw Error('RC_TRIGGER_EXPIRED');
-    result=await review(record.packet,{apiKey,deepseekKey,fetchFn,now,deadlineMs:Math.min(deadline,record.snapshot_at_ms+policy.answerMaxAgeMs),
+    const paidFetch=store.transport?await store.transport(key,record,fetchFn):fetchFn;
+    result=await review(record.packet,{apiKey,deepseekKey,fetchFn:paidFetch,now,deadlineMs:Math.min(deadline,record.snapshot_at_ms+policy.answerMaxAgeMs),
       snapshotAtMs:record.snapshot_at_ms,inputPayload:recheckPayload,validate:validateRecheck,
       refreshPacket:asOf===null?async ms=>{
         const next=await readFresh(String(signal.symbol).toUpperCase(),now(),{mode:dataMode,fetchFn,ms,now}),captured=now();

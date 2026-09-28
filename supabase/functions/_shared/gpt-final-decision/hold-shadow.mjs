@@ -26,7 +26,8 @@ export async function recordHoldShadow({packet,snapshotAt,parentKey,identity,sto
     let result,attempted=false;
     try{
       const input=await sharedReview(packet,{snapshotAtMs:snapshotAt});
-      attempted=true;result=await invoke(input,{...MODEL_CANDIDATES[0],apiKey,timeoutMs:8000});
+      const fetchFn=store.transport?await store.transport(key,record):fetch;
+      attempted=true;result=await invoke(input,{...MODEL_CANDIDATES[0],apiKey,timeoutMs:8000,fetchFn});
     }catch{result={valid:false,attempted,error:'SHADOW_FAILED'};}
     // Unknown usage keeps the full reservation; known usage settles to a peak-rate ceiling.
     const ceiling=flashCostCeiling(result);

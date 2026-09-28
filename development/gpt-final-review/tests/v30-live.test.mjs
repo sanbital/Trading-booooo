@@ -60,7 +60,7 @@ test('entry branch: B06133 branch when B06133 also admitted, V30_SCORE otherwise
   assert.deepEqual(Object.keys(P142_STYLE_BY_BRANCH),['R62','BUYER_SHARE_RESCUE','BOTH','V30_SCORE']);
 });
 test('production coordinator: FD1 engine (GPT final entry decision) on the live V30 baseline',()=>{
-  const c=coordinatorFor({});assert.equal(c.engine?.id,'GPT_FINAL_DECISION_FD1:ENTRY:FD1_GPT_FINAL_ARBITRATION_2:DYNAMIC_FLOW_LIFECYCLE_1:MONTHLY40_FULL24_V1:LEADER_ENTRY_ANALYSIS_1');assert.equal(c.baseline(b06133Rejected()),baselineAllowedLive(b06133Rejected()));
+  const c=coordinatorFor({});assert.equal(c.engine?.id,'GPT_FINAL_DECISION_FD1:ENTRY:FD1_GPT_FINAL_ARBITRATION_2:DYNAMIC_FLOW_LIFECYCLE_1:MONTHLY40_FULL24_V1:LEADER_ENTRY_ANALYSIS_1:TOP10_BATCH_GPT_FINAL_1');assert.equal(c.baseline(b06133Rejected()),baselineAllowedLive(b06133Rejected()));
   assert.equal(c.allowDecision(),'BUY');
 });
 test('V30 executor hooks change no sizing, slot, leverage, stop or lease control',()=>{

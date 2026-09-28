@@ -1,4 +1,5 @@
 import {LEADER20_PROMPT} from '../leader20/decision-contract.mjs';
+import {batchFinalDecision,BATCH_FINAL} from '../leader20/final.mjs';
 import {ECONOMY_VERSION,economyPrompt} from './economy-prompt.mjs';
 import {ENTRY_ANALYSIS,entryAnalysisDeadline,isEntryAnalysis} from './entry-analysis.mjs';
 /** FD1 ENTRY engine for the durable FinalReviewCoordinator (journal, budget ledger,
@@ -40,7 +41,7 @@ export async function readHistory(reader,identity,timeoutMs=1500){
   finally{clearTimeout(timer);}
 }
 export const FD1_ENTRY_ENGINE=Object.freeze({
-  id:FD_VERSION+':ENTRY:'+DUAL_VERSION+':'+DYNAMIC_VERSION+':'+ECONOMY_VERSION+':'+ENTRY_ANALYSIS.version,
+  id:FD_VERSION+':ENTRY:'+DUAL_VERSION+':'+DYNAMIC_VERSION+':'+ECONOMY_VERSION+':'+ENTRY_ANALYSIS.version+':'+BATCH_FINAL,
   allow:'BUY',
   // An initial BUY that aged past its answer validity while its trigger is still live is
   // not dropped: it may enter the order path only to be re-decided by a forced GPT FINAL
@@ -52,7 +53,7 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   reobserveWait:identity=>identity.leader20?.version!=='LEADER20_DYNAMIC_1',
   model:MODEL,
   // The binding covers the ENTRY prompt and the dual-AI arbitration addendum.
-  promptText:PROMPTS.ENTRY+'\n['+DUAL_VERSION+']'+ARBITRATION_PROMPT+DYNAMIC_PROMPT+LEADER20_PROMPT+ECONOMY_VERSION+economyPrompt.toString(),
+  promptText:PROMPTS.ENTRY+'\n['+DUAL_VERSION+']'+ARBITRATION_PROMPT+DYNAMIC_PROMPT+LEADER20_PROMPT+ECONOMY_VERSION+economyPrompt.toString()+batchFinalDecision.toString(),
   schema:wireSchema('ENTRY',{dynamic_policy:DYNAMIC_VERSION}),
   identity:fd1EntryIdentity,
   // Same-symbol trade memory reader (symbol, beforeMs) => closed trades; injected by the
@@ -84,7 +85,7 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   deepseekKey:null,
   async call(packet,{apiKey,fetchFn,now,deadlineMs,identity}){
     const dsKey=typeof this.deepseekKey==='function'?this.deepseekKey():null;
-    const r=await dualEntryDecision(packet,{apiKey,deepseekKey:dsKey,fetchFn,now,deadlineMs,snapshotAtMs:packet?.execution_ref?.at??now(),
+    const r=packet?.leader20?.batch_advice?await batchFinalDecision(packet,{apiKey,fetchFn,now,deadlineMs}):await dualEntryDecision(packet,{apiKey,deepseekKey:dsKey,fetchFn,now,deadlineMs,snapshotAtMs:packet?.execution_ref?.at??now(),
       refreshPacket:identity?ms=>this.prepare(identity,{fetchFn,now,deadlineMs:now()+ms}):null});
     // Stored for re-validation: the exact wire the API returned (never re-generated).
     return {...r,origin:'OPENAI_API',model_requested:MODEL,raw_response:r.wire?{model:MODEL,wire:r.wire}:null,
@@ -92,6 +93,10 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   },
   revalidate(result,packet){
     if(result?.raw_response?.model!==MODEL||!result.raw_response.wire)throw Error('FD_NO_STORED_WIRE');
+    if(result.review_route===BATCH_FINAL){
+      if(packet?.leader20?.batch_advice?.decision!=='PASS')throw Error('BATCH_ADVICE_MISSING');
+      return validateDecision(result.raw_response.wire,packet);
+    }
     return revalidateArbitration(result,packet);
   }
 });

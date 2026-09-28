@@ -39,7 +39,8 @@ export async function storedDynamicReplay(db,{sourceJobKey,runId,apiKey,deepseek
  const claimed=await store.claim(key,record,config);
  if(!claimed.created)return {orderCalls:0,duplicate:true,jobKey:key};
  const realStart=Date.now(),clock=()=>at+Date.now()-realStart;
- const result=await dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn,now:clock,snapshotAtMs:at,deadlineMs:at+8000,
+ const paidFetch=await store.transport(key,record,fetchFn);
+ const result=await dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn:paidFetch,now:clock,snapshotAtMs:at,deadlineMs:at+8000,
   policy:baselinePolicy(),reviewTier:packet.task==='HOLD'?'FAST':'FULL',
   ...(packet.task==='RECHECK'?{inputPayload:recheckPayload,validate:validateRecheck}:{})});
  await store.complete(key,claimed.row.owner,{...record,result:{...result,final_packet:undefined},
