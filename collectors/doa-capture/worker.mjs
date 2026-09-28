@@ -1,4 +1,4 @@
-import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval} from './core.mjs';
+import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue} from './core.mjs';
 import {randomUUID} from 'node:crypto';
 import {summarizeCapture} from './context.mjs';
 const endpoint=process.env.CAPTURE_ENDPOINT;
@@ -103,9 +103,11 @@ async function recover(){
   }catch(e){restFailures++;log('RECOVERY_ERROR',{reason:e.message});}finally{busyRest=false;}
 }
 function bucket(now){
+  let emitted=false;
   for(const [key,t] of seen)if(now-t>600000)seen.delete(key);
   const btc=states.get('BTCUSDT')?.lastCandle;
   for(const s of states.values()){
+    if(!captureBucketDue(s.lastBucket,now))continue;
     const m=s.book.metrics(now),flow=s.flow.metrics(now);
     const full=completeCaptureInterval(s,now,s.marketSocket?.readyState===WebSocket.OPEN);
     const row={kind:'micro',symbol:s.symbol,at:iso(Math.floor(now/5000)*5000),payload:{...m,...flow,available_at:iso(now),interval_start:iso(s.lastBucket),interval_end:iso(now),interval_ms:now-s.lastBucket,
@@ -115,7 +117,9 @@ function bucket(now){
     s.lastBucket=now;s.ring.push(row);s.ring=s.ring.filter(x=>Date.parse(x.at)>=now-240000);
     if(production||inWindow(Date.parse(row.at),windows,s.symbol))enqueue(row);
     s.book.add=0;s.book.remove=0;s.book.bidAdd=0;s.book.bidRemove=0;s.flow.reset();
+    emitted=true;
   }
+  return emitted;
 }
 let pending=null;
 async function flush(){
@@ -136,13 +140,13 @@ process.on('SIGTERM',()=>{stop=true;});process.on('SIGINT',()=>{stop=true;});
 // A rolling release waits for the previous worker's DB lease; it never steals it.
 for(let i=0;i<24&&!stop&&!deadline;i++){await watch();if(!deadline&&!stop)await new Promise(r=>setTimeout(r,5000));}
 if(!deadline&&!stop)throw Error('LEASE_START_TIMEOUT');
-let previousBucket=Math.floor(Date.now()/5000),watchTask=null,flushTask=null,bucketFlushDue=false;
+let watchTask=null,flushTask=null,bucketFlushDue=false;
 log('STARTED',{worker_id,protocol_sha256:expected,deadline:iso(deadline)});
 const timer=setInterval(()=>{
   const now=Date.now();
   if(stop || now>=deadline || now-lastControl>90000 || (!production&&now-boot>14*86400000) || process.memoryUsage().rss>230000000){clearInterval(timer);for(const s of states.values()){s.socket?.close();s.marketSocket?.close();}log('STOPPED',{reason:stop?'CONTROL_OR_SIGNAL':now>=deadline?'DEADLINE':now-lastControl>90000?'CONTROL_STALE':'RESOURCE_CAP'});setTimeout(()=>process.exit(stop?0:1),1000);return;}
   try{
-    const b=Math.floor(now/5000);if(b!==previousBucket){bucket(now);previousBucket=b;bucketFlushDue=true;}
+    if(bucket(now))bucketFlushDue=true;
     for(const s of states.values())if((!s.socket && now>=s.bookReconnectAt)||(!s.marketSocket && now>=s.marketReconnectAt))openSocket(s);
     void recover();
     if(!watchTask&&now-lastWatch>=15000){lastWatch=now;watchTask=watch().catch(e=>log('CONTROL_ERROR',{reason:e.message})).finally(()=>{watchTask=null;});}
