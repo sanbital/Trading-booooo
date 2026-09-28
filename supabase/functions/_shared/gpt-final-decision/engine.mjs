@@ -1,5 +1,5 @@
 import {LEADER20_PROMPT} from '../leader20/decision-contract.mjs';
-import {batchFinalDecision,BATCH_FINAL} from '../leader20/final.mjs';
+import {batchFinalDecision,batchFinalPayload,BATCH_FINAL} from '../leader20/final.mjs';
 import {ECONOMY_VERSION,economyPrompt} from './economy-prompt.mjs';
 import {ENTRY_ANALYSIS,entryAnalysisDeadline,isEntryAnalysis} from './entry-analysis.mjs';
 /** FD1 ENTRY engine for the durable FinalReviewCoordinator (journal, budget ledger,
@@ -53,7 +53,7 @@ export const FD1_ENTRY_ENGINE=Object.freeze({
   reobserveWait:identity=>identity.leader20?.version!=='LEADER20_DYNAMIC_1',
   model:MODEL,
   // The binding covers the ENTRY prompt and the dual-AI arbitration addendum.
-  promptText:PROMPTS.ENTRY+'\n['+DUAL_VERSION+']'+ARBITRATION_PROMPT+DYNAMIC_PROMPT+LEADER20_PROMPT+ECONOMY_VERSION+economyPrompt.toString()+batchFinalDecision.toString(),
+  promptText:PROMPTS.ENTRY+'\n['+DUAL_VERSION+']'+ARBITRATION_PROMPT+DYNAMIC_PROMPT+LEADER20_PROMPT+ECONOMY_VERSION+economyPrompt.toString()+batchFinalDecision.toString()+batchFinalPayload.toString(),
   schema:wireSchema('ENTRY',{dynamic_policy:DYNAMIC_VERSION}),
   identity:fd1EntryIdentity,
   // Same-symbol trade memory reader (symbol, beforeMs) => closed trades; injected by the

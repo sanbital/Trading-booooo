@@ -1,5 +1,7 @@
 # Top 10 batch entry audit — 2026-09-28
 
+> 이 문서는 최초 감사 당시의 기록이다. 이후 실환경 배포 상태·추가 실측·정합성 결과는 [10분 production 후속 보고서](RELEASE_20260928_10M.md)를 기준으로 한다.
+
 **판정: 실거래 전환 금지.** 5분 묶음의 비용 기준과 판단 근거 품질 기준이 실패했다. 신규 전략·예산 migration·scheduler 변경은 production에 적용하지 않았다. 주문 없는 측정만 3회 수행했고 진단 Edge v2는 종료 상태(HTTP 410)다. 수동 주문은 0건이다.
 
 **후속 요청 반영 — 기본 주기 10분:** 사용자의 10분 상시 Top 10 조회 지시에 따라 후보 코드와 DB 예약 간격을 600초로 변경했다. 한 주기에 10개 종목 전체를 한 요청으로 처리하며, 슬롯이 가득 차면 신규 진입 유료 리뷰를 멈추고 기본 캡처는 계속한다. 슬롯 해제·강한 증거 변화에 따른 즉시 재검토 예외는 유지한다. 아래 5분 측정·미통과 기록은 역사적 감사 증거로 보존한다. 10분 환산은 4,464요청/31일, DS 평균 $79.70, 최대 표본/cache 0 기준 $80.50이며 추가 보호·즉시 검토 여유는 $19.50–20.30이다. 의미적 근거 혼입과 새 경로 recall 미검증은 그대로이므로 실거래 활성화는 아직 하지 않았다.
@@ -17,7 +19,7 @@
 - 기존 ENFORCE 설정은 일 $3, 월 $95, 일 100 review jobs다. 무포지션 시 신규 진입 $2.50/83 jobs, 보호 $0.50; 노출이 있으면 보호 예산은 기존 함수에 따라 증가한다. 2026-09-27 일일 offset은 $14.0111288와 208 calls이며 월 누적액을 지우는 값이 아니다.
 - 기존 parent journal의 api_cost_usd에는 GPT FIRST + DeepSeek + GPT FINAL 비용이 합산되지만 top-level usage는 FINAL 토큰이다. daily.reserved_usd는 정산액과 미정산 예약을 모두 포함한다. `ai_monthly_spend_used()`에는 evolution·shadow·FD1 관련 장부도 포함된다.
 
-후보 구현은 [migration](../../supabase/migrations/20260928001607_leader20_batch_provider_ledger.sql), [batch](../../supabase/functions/_shared/leader20/batch.mjs), [runtime](../../supabase/functions/_shared/leader20/batch-runtime.mjs), [paid transport](../../supabase/functions/_shared/leader20/paid-transport.mjs), [GPT FINAL](../../supabase/functions/_shared/leader20/final.mjs)에 있다.
+후보 구현은 [migration](../../supabase/migrations/20260928012054_leader20_batch_provider_ledger.sql), [batch](../../supabase/functions/_shared/leader20/batch.mjs), [runtime](../../supabase/functions/_shared/leader20/batch-runtime.mjs), [paid transport](../../supabase/functions/_shared/leader20/paid-transport.mjs), [GPT FINAL](../../supabase/functions/_shared/leader20/final.mjs)에 있다.
 
 - 한 요청/공통 지침 1회/10개 ID. 각 종목의 원본 24개 버킷 34개 열을 행렬로 보존하고 시간은 정확한 offset으로 직렬화한다. 평균 대체나 숫자 반올림은 없다. 중복 ID, 누락, 버전 불일치, JSON 실패, 시각 역전, stale은 종목별 BLOCKED로 기록한다. 전체 JSON이 깨지면 전부 차단한다.
 - 데이터 버전에서 요청 시각을 제외해 동일 capture 재과금을 막는다. SKIP은 영구 제외가 아니다. 최신 evidence의 가격·flow·imbalance 변화는 재검토 요청만 만들고 판단 통과율을 조작하지 않는다.

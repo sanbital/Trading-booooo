@@ -5,7 +5,8 @@ import {buildBatch,unpackSymbol,validateBatchResponse,callBatch,deepseekCost} fr
 const T=1800000000200;
 const rows=()=>Array.from({length:10},(_,i)=>({symbol:`C${i}USDT`,rank:i+1,capture:rawCapture(T)}));
 const build=r=>buildBatch(r,{asOf:T,epochId:'e',generation:1});
-const response=b=>({results:b.symbols.map(s=>({id:s.id,version:s.data_version,decision:'PASS',reason:'Flow reversal warrants review',uncertainty:'OI unknown',last_ms:s.last_ms}))});
+const response=b=>({results:b.symbols.map(s=>({id:s.id,version:s.review_ref,decision:'PASS',reason:'Flow reversal warrants review',uncertainty:'OI unknown',last_ms:s.last_ms,
+ evidence:[[0,'mid',s.matrix[0]?.[b.columns.indexOf('mid')]],[23,'aggressive_buy',s.matrix[23]?.[b.columns.indexOf('aggressive_buy')]]]}))});
 test('one request contains all ten IDs and 240 lossless ordered buckets',async()=>{
  const r=rows(),b=await build(r);let calls=0;
  for(let i=0;i<10;i++)assert.deepEqual(unpackSymbol(b,b.symbols[i]),r[i].capture.trajectory);
@@ -45,4 +46,18 @@ test('held overlap is blocked and provider failure never retries the same captur
 test('usage preserves cache; invalid or unknown tokens retain reservation',()=>{
  assert.equal(deepseekCost({prompt_tokens:1000,completion_tokens:100,prompt_cache_hit_tokens:1000}).cost_usd,.000126);
  assert.equal(deepseekCost({prompt_tokens:1000,completion_tokens:100,prompt_cache_hit_tokens:1001}),null);
+});
+test('cross-symbol numeric evidence and unbound quantitative prose block only that symbol',async()=>{
+ const r=rows();r[1].capture.trajectory[23].aggressive_buy=160508.597;
+ const b=await build(r),w=response(b);
+ w.results[0].evidence[1][2]=160508.597;
+ let result=validateBatchResponse(w,b);
+ assert.equal(result.results[0].reason,'CROSS_SYMBOL_OR_CELL_MISMATCH');
+ assert.equal(result.results.filter(x=>x.valid).length,9);
+ const prose=response(b);prose.results[0].reason='Net buy +160508 supports entry';
+ assert.equal(validateBatchResponse(prose,b).results[0].reason,'UNCITED_QUANTITATIVE_PROSE');
+ const missing=response(b);delete missing.results[0].evidence;
+ assert.equal(validateBatchResponse(missing,b).results[0].reason,'EVIDENCE_REQUIRED');
+ const repeated=response(b);repeated.results[0].evidence[0]=repeated.results[0].evidence[1];
+ assert.equal(validateBatchResponse(repeated,b).results[0].reason,'EVIDENCE_DUPLICATE');
 });

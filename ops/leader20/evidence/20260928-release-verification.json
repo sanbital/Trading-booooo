@@ -1,0 +1,1373 @@
+{
+  "project": "etaajwpernzrcdrifdnw",
+  "base_main": "e104c14896d1fc5a5e2d1e8498e1e7f39e4e2066",
+  "deployment_state": "RUNTIME_INSTALLED_BATCH_AND_PROVIDER_ACTIVATION_DISABLED",
+  "no_manual_orders": true,
+  "closed_audit": [
+    {
+      "id": 23510,
+      "status_code": 410,
+      "content": {
+        "state": "AUDIT_CLOSED",
+        "orders": 0,
+        "reason": "VERIFICATION_WINDOW_ENDED"
+      }
+    }
+  ],
+  "deployments": [
+    {
+      "id": "523856f5-4833-467f-9395-3e13a8118046",
+      "slug": "v10-lane-executor",
+      "name": "v10-lane-executor",
+      "status": "ACTIVE",
+      "version": 137,
+      "created_at": 1788229637046,
+      "updated_at": 1790559101167,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_523856f5-4833-467f-9395-3e13a8118046_137/source/supabase/functions/v10-lane-executor/index.ts",
+      "ezbr_sha256": "3bf44b62ec364ada753ba791bf1f01efc4273b7aa64216f73039ec08bdd2f3d9"
+    },
+    {
+      "id": "9d0281b0-1168-47de-a60b-63ca3c0fead0",
+      "slug": "v10-lane-signal-generator",
+      "name": "v10-lane-signal-generator",
+      "status": "ACTIVE",
+      "version": 36,
+      "created_at": 1788227453398,
+      "updated_at": 1790559111318,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_9d0281b0-1168-47de-a60b-63ca3c0fead0_36/source/supabase/functions/v10-lane-signal-generator/index.ts",
+      "ezbr_sha256": "59e5dc8111d307f05309b7db2ee3c22ac5843050d3546e4b9bd17729385a4425"
+    },
+    {
+      "id": "a60681bf-9079-4423-b523-b206178542d0",
+      "slug": "leader20-batch-audit",
+      "name": "leader20-batch-audit",
+      "status": "ACTIVE",
+      "version": 9,
+      "created_at": 1790554696324,
+      "updated_at": 1790559024314,
+      "verify_jwt": false,
+      "import_map": false,
+      "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_a60681bf-9079-4423-b523-b206178542d0_9/source/supabase/functions/leader20-batch-audit/index.ts",
+      "ezbr_sha256": "1eeb5bfb170053881431bba95e787e5cce4e1f8b5a321a5b9d079b3a71ac0e6c"
+    }
+  ],
+  "bundle_parity": {
+    "executor_files": 81,
+    "generator_files": 15,
+    "remote_vs_local_differences": []
+  },
+  "concurrency": {
+    "scope": "PRIVATE_SCHEMA_REAL_POSTGRES_SESSIONS_NO_REAL_TRADING_WRITES",
+    "duplicate": [
+      {
+        "pid": 225406,
+        "created": true,
+        "owner": "076b7644-a430-48b8-ad5f-2bc30582906a"
+      },
+      {
+        "pid": 225421,
+        "created": false,
+        "owner": "076b7644-a430-48b8-ad5f-2bc30582906a"
+      },
+      {
+        "pid": 225432,
+        "created": false,
+        "owner": "076b7644-a430-48b8-ad5f-2bc30582906a"
+      },
+      {
+        "pid": 225433,
+        "created": false,
+        "owner": "076b7644-a430-48b8-ad5f-2bc30582906a"
+      }
+    ],
+    "budget": [
+      {
+        "pid": 225436,
+        "created": true,
+        "owner": "bcdfdc30-5a7d-480d-8527-398881f192cd"
+      },
+      {
+        "pid": 225437,
+        "created": false,
+        "reason": "API_BUDGET_EXHAUSTED",
+        "additional_usd": 0.01
+      }
+    ],
+    "batch": [
+      {
+        "pid": 225442,
+        "created": true,
+        "owner": "44bd35c1-91aa-4e19-b2a7-931488cce23c"
+      },
+      {
+        "pid": 225443,
+        "created": false,
+        "reason": "NOT_DUE"
+      },
+      {
+        "pid": 225444,
+        "created": false,
+        "reason": "NOT_DUE"
+      }
+    ]
+  },
+  "ledger_after_install": [
+    {
+      "checked_at": "2026-09-28 01:22:27.081053+00",
+      "batch": {
+        "enabled": false,
+        "singleton": true,
+        "generation": 0,
+        "last_slots": null,
+        "wake_reason": null,
+        "release_receipt": null,
+        "last_budget_block": null,
+        "last_evidence_key": null,
+        "last_requested_at": null,
+        "wake_requested_at": null
+      },
+      "limits": [
+        {
+          "enabled": false,
+          "provider": "deepseek",
+          "daily_usd": 3.225806451612903,
+          "monthly_usd": 100
+        },
+        {
+          "enabled": false,
+          "provider": "openai",
+          "daily_usd": 3,
+          "monthly_usd": 95
+        }
+      ],
+      "legacy_month": "40.30520621999999989980",
+      "total_month": "40.30520621999999989980",
+      "deepseek_month": "1.61635244000000000050",
+      "gpt_month": "38.68885377999999989930",
+      "capacity": {
+        "held": [],
+        "reason": null,
+        "available": 2,
+        "snapshot_at": "2026-09-28T01:22:22.343+00:00",
+        "pending_orders": 0,
+        "available_quote": 331.34419204
+      },
+      "migrations": [
+        {
+          "name": "leader20_batch_provider_ledger",
+          "version": "20260928012054"
+        },
+        {
+          "name": "leader20_isolated_release_audit_setup",
+          "version": "20260928010730"
+        },
+        {
+          "name": "leader20_monthly_100_ai_95_budget",
+          "version": "20260927232129"
+        }
+      ]
+    }
+  ],
+  "ledger_after_measurements": [
+    {
+      "at": "2026-09-28 01:31:02.686368+00",
+      "batch_enabled": false,
+      "any_provider_enabled": false,
+      "ledger_rows": 0,
+      "total": "40.49639852399999989680",
+      "legacy_total": "40.49639852399999989680",
+      "providers": {
+        "as_of": "2026-09-28T01:31:02.686368+00:00",
+        "providers": [
+          {
+            "provider": "deepseek",
+            "limit_usd": 100,
+            "days_to_cap": 127.02594104152737,
+            "last24h_usd": 0.774096444,
+            "entry_enabled": false,
+            "remaining_usd": 98.330329256,
+            "month_used_usd": 1.669670744,
+            "run_rate_31d_usd": 23.996989764,
+            "unresolved_reserve_usd": 0
+          },
+          {
+            "provider": "openai",
+            "limit_usd": 95,
+            "days_to_cap": 4.772300647129005,
+            "last24h_usd": 11.77069015,
+            "entry_enabled": false,
+            "remaining_usd": 56.17327222,
+            "month_used_usd": 38.82672778,
+            "run_rate_31d_usd": 364.89139465,
+            "unresolved_reserve_usd": 6.85
+          }
+        ],
+        "rate_basis": "REVIEW_LEDGER_LAST24H_INCLUDING_UNRESOLVED_NOT_INVOICE"
+      },
+      "capacity": {
+        "held": [],
+        "reason": null,
+        "available": 2,
+        "snapshot_at": "2026-09-28T01:30:10.603+00:00",
+        "pending_orders": 0,
+        "available_quote": 331.34419204
+      }
+    }
+  ],
+  "release_readiness": {
+    "id": 23517,
+    "status_code": 200,
+    "body": {
+      "db": {
+        "openPositions": [],
+        "unresolvedOrders": [],
+        "openPositionCount": 0,
+        "unresolvedOrderCount": 0
+      },
+      "ok": true,
+      "patch": "FD1-MULTISLOT-CAPACITY-1",
+      "sizing": {
+        "leverage": 3,
+        "targetMarginUsdt": 150
+      },
+      "binance": {
+        "positions": [],
+        "positionCount": 0,
+        "availableQuote": 331.34419204,
+        "positionsComplete": true,
+        "openOrdersComplete": true,
+        "ordersObservedAtMs": 1790559131565,
+        "ordinaryOrderCount": 0,
+        "conditionalOrderCount": 0
+      },
+      "runtime": {
+        "last_error": null,
+        "circuit_open": false,
+        "incident_kind": "INCOMPLETE_OR_STALE_SNAPSHOT",
+        "circuit_reason": null,
+        "protection_health": "FLAT",
+        "entry_block_reason": "NO_FRESH_BULL_SIGNAL",
+        "incident_generation": 129,
+        "last_cycle_completed_at": "2026-09-28T01:32:08.473+00:00"
+      },
+      "maxSlots": 10,
+      "revision": "V11-LONG-REGIME-1.0.1",
+      "gptControl": {
+        "mode": "ENFORCE",
+        "updated_at": "2026-09-27T23:21:29.40427+00:00",
+        "approval_ref": "USER-APPROVED-2026-09-28-MONTHLY100-AI95-STORAGE5",
+        "daily_cap_usd": 3,
+        "enforce_approved": true,
+        "max_calls_per_day": 100
+      },
+      "observedAt": "2026-09-28T01:32:11.719Z",
+      "holdRelease": "FD1-EXIT-HARDENING-DS-SHADOW-1",
+      "deepseekShadow": {
+        "enabled": true,
+        "authority": [],
+        "keyPresent": true
+      },
+      "failsafeRelease": "PR193_EMERGENCY_VALIDATION_1",
+      "dynamicLifecycle": {
+        "version": "DYNAMIC_FLOW_LIFECYCLE_1",
+        "missingDataState": "DATA_DEGRADED",
+        "missingDataForcesExit": false,
+        "absoluteTrajectoryAgeMs": 10000,
+        "positionCaptureIntervalMs": 5000,
+        "fullTrajectoryRequiredForEntry": true
+      },
+      "openaiKeyPresent": true,
+      "nativeStopEnabled": true,
+      "protectionArbitration": {
+        "actions": [
+          "HOLD",
+          "RAISE_PROTECTION",
+          "EXIT"
+        ],
+        "version": "AI_PROTECTION_ARBITRATION_1",
+        "approver": "GPT_FINAL_ONLY",
+        "lowering": "IMPOSSIBLE",
+        "auditTable": "v11_protection_decisions",
+        "onReviewerFailure": "KEEP_LAST_APPROVED_PROTECTION",
+        "hardSafetyIndependent": true,
+        "candidateRaisesProtection": false
+      }
+    }
+  },
+  "paid_calls": [
+    {
+      "job_key": "b6233789d3407d0261efc2b5dfe85ab88efc656e4063b95db1b16351a0f1801c",
+      "created_at": "2026-09-28 01:06:25.213197+00",
+      "kind": "TOP10_BATCH_AUDIT",
+      "state": "DONE",
+      "decision": null,
+      "valid": false,
+      "error": null,
+      "model": "deepseek-flash",
+      "input_tokens": 50017,
+      "output_tokens": 1146,
+      "cached_input_tokens": 0,
+      "api_cost_usd": "0.0163803",
+      "settled_usd": "0.0163803",
+      "latency_ms": 5666
+    },
+    {
+      "job_key": "1bea75f96b57288d67f7baf293ae37fa6206098306741ecaa3067d134945ea6c",
+      "created_at": "2026-09-28 01:08:52.012142+00",
+      "kind": "TOP10_BATCH_AUDIT",
+      "state": "DONE",
+      "decision": null,
+      "valid": false,
+      "error": null,
+      "model": "deepseek-flash",
+      "input_tokens": 54929,
+      "output_tokens": 917,
+      "cached_input_tokens": 384,
+      "api_cost_usd": "0.017466204000000003",
+      "settled_usd": "0.017466204000000003",
+      "latency_ms": 5428
+    },
+    {
+      "job_key": "2a73f5db64ff7549982e697ae1e2b6c5cacb3d0ec90eaac8b57e1ded663e222e",
+      "created_at": "2026-09-28 01:22:51.571278+00",
+      "kind": "TOP10_BATCH_AUDIT",
+      "state": "DONE",
+      "decision": null,
+      "valid": false,
+      "error": null,
+      "model": "deepseek-flash",
+      "input_tokens": 53694,
+      "output_tokens": 841,
+      "cached_input_tokens": 0,
+      "api_cost_usd": "0.017117399999999998",
+      "settled_usd": "0.017117399999999998",
+      "latency_ms": 5199
+    },
+    {
+      "job_key": "ed1f23af936217176512ddf7593b888942f27a9cfbe9d8780b18362e2f94ab80",
+      "created_at": "2026-09-28 01:22:58.073111+00",
+      "kind": "TOP10_PAIRED_FROZEN_GPT",
+      "state": "DONE",
+      "decision": "SKIP",
+      "valid": true,
+      "error": null,
+      "model": "gpt-5.4-mini-2026-03-17",
+      "input_tokens": 32354,
+      "output_tokens": 795,
+      "cached_input_tokens": 0,
+      "api_cost_usd": "0.027843",
+      "settled_usd": "0.027843",
+      "latency_ms": 5830
+    },
+    {
+      "job_key": "7cd75a2e7081a4e0c02e931c89268428a1e6140f458edb78562d82d660bb35f4",
+      "created_at": "2026-09-28 01:23:05.16487+00",
+      "kind": "TOP10_PAIRED_FROZEN_GPT",
+      "state": "DONE",
+      "decision": "SKIP",
+      "valid": true,
+      "error": null,
+      "model": "gpt-5.4-mini-2026-03-17",
+      "input_tokens": 30688,
+      "output_tokens": 748,
+      "cached_input_tokens": 0,
+      "api_cost_usd": "0.026382",
+      "settled_usd": "0.026382",
+      "latency_ms": 5373
+    },
+    {
+      "job_key": "e21554a5827b8e2d3bcd28e75e881a6d1f40a5e0d2b2d37dfe5d31357310417b",
+      "created_at": "2026-09-28 01:23:11.706183+00",
+      "kind": "TOP10_PAIRED_FROZEN_GPT",
+      "state": "DONE",
+      "decision": "SKIP",
+      "valid": true,
+      "error": null,
+      "model": "gpt-5.4-mini-2026-03-17",
+      "input_tokens": 29833,
+      "output_tokens": 829,
+      "cached_input_tokens": 0,
+      "api_cost_usd": "0.02610525",
+      "settled_usd": "0.02610525",
+      "latency_ms": 5690
+    },
+    {
+      "job_key": "dca6f2aab36d8cbceab3f680fef0386ca04347de4fc605a286bbbefad030c4f8",
+      "created_at": "2026-09-28 01:23:18.542859+00",
+      "kind": "TOP10_PAIRED_FROZEN_GPT",
+      "state": "DONE",
+      "decision": "SKIP",
+      "valid": true,
+      "error": null,
+      "model": "gpt-5.4-mini-2026-03-17",
+      "input_tokens": 31056,
+      "output_tokens": 777,
+      "cached_input_tokens": 0,
+      "api_cost_usd": "0.0267885",
+      "settled_usd": "0.0267885",
+      "latency_ms": 4652
+    },
+    {
+      "job_key": "250bb8d18ede97636ad921165d4bd0f8b4554e29163ce3768d6d666c20ed2aed",
+      "created_at": "2026-09-28 01:26:52.184408+00",
+      "kind": "TOP10_BATCH_AUDIT",
+      "state": "DONE",
+      "decision": null,
+      "valid": false,
+      "error": null,
+      "model": "deepseek-flash",
+      "input_tokens": 48723,
+      "output_tokens": 950,
+      "cached_input_tokens": 128,
+      "api_cost_usd": "0.015719268",
+      "settled_usd": "0.015719268",
+      "latency_ms": 5071
+    },
+    {
+      "job_key": "a1286b5d90a07dbb30fe99dc6160162f945a18bbc23f78a3205f60cd70ed46e3",
+      "created_at": "2026-09-28 01:29:43.387965+00",
+      "kind": "TOP10_BATCH_AUDIT",
+      "state": "DONE",
+      "decision": null,
+      "valid": false,
+      "error": null,
+      "model": "deepseek-flash",
+      "input_tokens": 48807,
+      "output_tokens": 798,
+      "cached_input_tokens": 256,
+      "api_cost_usd": "0.015524435999999999",
+      "settled_usd": "0.015524435999999999",
+      "latency_ms": 4863
+    }
+  ],
+  "measured_costs": {
+    "deepseek_mixed_verification_samples": {
+      "n": 5,
+      "input_mean": 51234,
+      "output_mean": 930.4,
+      "cost_mean": 0.0164415216,
+      "cost_max": 0.017466204000000003,
+      "cost_total": 0.082207608,
+      "latency_ms_mean": 5245.4,
+      "latency_ms_max": 5666
+    },
+    "gpt_frozen_final_samples": {
+      "n": 4,
+      "input_mean": 30982.75,
+      "output_mean": 787.25,
+      "cost_mean": 0.026779687499999996,
+      "cost_max": 0.027843,
+      "cost_total": 0.10711874999999998,
+      "latency_ms_mean": 5386.25,
+      "latency_ms_max": 5830
+    }
+  },
+  "frozen_comparison": {
+    "job_key": "2a73f5db64ff7549982e697ae1e2b6c5cacb3d0ec90eaac8b57e1ded663e222e",
+    "as_of_ms": 1790558555955,
+    "orders": 0,
+    "ready": 10,
+    "batch_size": 10,
+    "result": {
+      "model": "deepseek-flash",
+      "usage": {
+        "total_tokens": 54535,
+        "prompt_tokens": 53694,
+        "completion_tokens": 841,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 53694
+      },
+      "errors": [],
+      "purpose": "ENTRY",
+      "results": [
+        {
+          "id": "QNTUSDT",
+          "valid": true,
+          "reason": "Firm late session: buyers dominate taker flow while price near highs and book supports bid.",
+          "last_ms": 1790558560158,
+          "version": "c08fcdc4b401bd89cf728ce07a3f0446ac3afcfc82a1255d4ddd67328ddeb13f",
+          "decision": "PASS",
+          "evidence": [
+            [
+              3,
+              "aggressive_buy",
+              172295.96
+            ],
+            [
+              22,
+              "imbalance",
+              0.32207052
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "c08fcdc4b401bd89",
+          "uncertainty": "Depth swings book noise; no clear exhaustion signal.",
+          "requires_final_recheck": true
+        },
+        {
+          "id": "SOONUSDT",
+          "valid": false,
+          "reason": "EVIDENCE_REQUIRED",
+          "last_ms": 1790558560158,
+          "version": "f1e4d8cc592cf66d7f92535dc3725c26bea26a1e73a8e05ca110974c05a4d640",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "INXUSDT",
+          "valid": true,
+          "reason": "Buy share firm but late book deterioration and sell pressure argue against clean entry.",
+          "last_ms": 1790558560158,
+          "version": "535bcc3f9f999f34e69be5ee4db184e77b7b5cfcc7eae2deda8875f0dc2fd3ff",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              2,
+              "aggressive_buy",
+              0
+            ],
+            [
+              21,
+              "aggressive_sell",
+              197.06376
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "535bcc3f9f999f34",
+          "uncertainty": "Book net swings contradict price resilience.",
+          "requires_final_recheck": true
+        },
+        {
+          "id": "WUSDT",
+          "valid": true,
+          "reason": "Mid drifts off peak while sell-side taker volume and book removals build late.",
+          "last_ms": 1790558565078,
+          "version": "85826c5be58b5bf6a64b5e53abe58b183e322700b00cb0ecfd5c2f537333a650",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              10,
+              "d_mid_bps",
+              13.328132
+            ],
+            [
+              21,
+              "aggressive_sell",
+              376.31729
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "85826c5be58b5bf6",
+          "uncertainty": "Depth asymmetries unresolved toward close.",
+          "requires_final_recheck": true
+        },
+        {
+          "id": "BULLAUSDT",
+          "valid": true,
+          "reason": "Late aggressive buying absent while price fades and sell flow persists.",
+          "last_ms": 1790558565078,
+          "version": "71682f15141c4ae4fb2eefb6869ecef492ef03f6b33f0df39d43557fa63e86d5",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              11,
+              "aggressive_buy",
+              24.99731
+            ],
+            [
+              22,
+              "aggressive_sell",
+              0
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "71682f15141c4ae4",
+          "uncertainty": "Sparse volume makes late reads noisy.",
+          "requires_final_recheck": true
+        },
+        {
+          "id": "GRTUSDT",
+          "valid": true,
+          "reason": "Buyers take control late but mid slips and spread widens, showing fragile bid.",
+          "last_ms": 1790558565078,
+          "version": "0b5494700e29551e1eef0f9ac8f7100dcfa203ecdb1625886824225c43393bdb",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              8,
+              "aggressive_buy",
+              12695.556
+            ],
+            [
+              21,
+              "spread_bps",
+              2.9006526
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "0b5494700e29551e",
+          "uncertainty": "Book net contradictory across buckets.",
+          "requires_final_recheck": true
+        },
+        {
+          "id": "BTWUSDT",
+          "valid": true,
+          "reason": "Late sell pressure and dropping mid offset earlier buy dominance; momentum negative.",
+          "last_ms": 1790558565078,
+          "version": "bcd3f9d624fbc1834c4585b443b827bba3512812da4b524c34dc1d7830131c6d",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              7,
+              "aggressive_sell",
+              209.9223
+            ],
+            [
+              21,
+              "d_mid_bps",
+              1.6293279
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "bcd3f9d624fbc183",
+          "uncertainty": "Bid depth adds while price falls.",
+          "requires_final_recheck": true
+        },
+        {
+          "id": "PUMPUSDT",
+          "valid": false,
+          "reason": "EVIDENCE_PATH_COVERAGE",
+          "last_ms": 1790558565078,
+          "version": "de370306232b6160f154a466f57a10b1da82942e23386a52c4b53bb8579e7395",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "NEARUSDT",
+          "valid": false,
+          "reason": "EVIDENCE_PATH_COVERAGE",
+          "last_ms": 1790558565078,
+          "version": "c7dd30d5479ba244f2e5b6a4c3ecd35272753afe7eb3ea87bb2eba6f31ce5803",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "ONEUSDT",
+          "valid": false,
+          "reason": "EVIDENCE_PATH_COVERAGE",
+          "last_ms": 1790558570237,
+          "version": "f629308ab38aad55b8ac41319c2c3ca2a384e96a9a606b7d78356104c43ba17f",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        }
+      ],
+      "cost_usd": 0.017117399999999998,
+      "provider": "deepseek",
+      "attempted": true,
+      "batch_hash": "a627afda5b04cf93bab18911674868b7bd152a219f3cb682b1ea4ce8299f23d9",
+      "cost_basis": "DEEPSEEK_PEAK_TOKEN_RATE_20260928_NOT_INVOICE",
+      "latency_ms": 5199,
+      "request_id": "00aa5277-9dd0-4e59-9e9b-3fd6fc4eaa14",
+      "http_status": 200,
+      "raw_content": "{\"results\":[{\"id\":\"QNTUSDT\",\"version\":\"c08fcdc4b401bd89\",\"decision\":\"PASS\",\"reason\":\"Firm late session: buyers dominate taker flow while price near highs and book supports bid.\",\"uncertainty\":\"Depth swings book noise; no clear exhaustion signal.\",\"last_ms\":1790558560158,\"evidence\":[[3,\"aggressive_buy\"],[22,\"imbalance\"]]},{\"id\":\"SOONUSDT\",\"version\":\"f1e4d8cc592cf66d\",\"decision\":\"WAIT\",\"reason\":\"Late prints show thin aggressive flow and weakening book; momentum faded near session end.\",\"uncertainty\":\"Mixed taker and depth signals near close.\",\"last_ms\":1790558560158,\"evidence\":[[9,\"aggressive_sell\"],[21,\"multiplying\"]]},{\"id\":\"INXUSDT\",\"version\":\"535bcc3f9f999f34\",\"decision\":\"WAIT\",\"reason\":\"Buy share firm but late book deterioration and sell pressure argue against clean entry.\",\"uncertainty\":\"Book net swings contradict price resilience.\",\"last_ms\":1790558560158,\"evidence\":[[2,\"aggressive_buy\"],[21,\"aggressive_sell\"]]},{\"id\":\"WUSDT\",\"version\":\"85826c5be58b5bf6\",\"decision\":\"WAIT\",\"reason\":\"Mid drifts off peak while sell-side taker volume and book removals build late.\",\"uncertainty\":\"Depth asymmetries unresolved toward close.\",\"last_ms\":1790558565078,\"evidence\":[[10,\"d_mid_bps\"],[21,\"aggressive_sell\"]]},{\"id\":\"BULLAUSDT\",\"version\":\"71682f15141c4ae4\",\"decision\":\"WAIT\",\"reason\":\"Late aggressive buying absent while price fades and sell flow persists.\",\"uncertainty\":\"Sparse volume makes late reads noisy.\",\"last_ms\":1790558565078,\"evidence\":[[11,\"aggressive_buy\"],[22,\"aggressive_sell\"]]},{\"id\":\"GRTUSDT\",\"version\":\"0b5494700e29551e\",\"decision\":\"WAIT\",\"reason\":\"Buyers take control late but mid slips and spread widens, showing fragile bid.\",\"uncertainty\":\"Book net contradictory across buckets.\",\"last_ms\":1790558565078,\"evidence\":[[8,\"aggressive_buy\"],[21,\"spread_bps\"]]},{\"id\":\"BTWUSDT\",\"version\":\"bcd3f9d624fbc183\",\"decision\":\"WAIT\",\"reason\":\"Late sell pressure and dropping mid offset earlier buy dominance; momentum negative.\",\"uncertainty\":\"Bid depth adds while price falls.\",\"last_ms\":1790558565078,\"evidence\":[[7,\"aggressive_sell\"],[21,\"d_mid_bps\"]]},{\"id\":\"PUMPUSDT\",\"version\":\"de370306232b6160\",\"decision\":\"WAIT\",\"reason\":\"Late taker flow turns sell-heavy and mid retreats from sampled peak.\",\"uncertainty\":\"Depth changes unclear directionally.\",\"last_ms\":1790558565078,\"evidence\":[[14,\"aggressive_sell\"],[23,\"mid\"]]},{\"id\":\"NEARUSDT\",\"version\":\"c7dd30d5479ba244\",\"decision\":\"WAIT\",\"reason\":\"Late aggressive selling dominates and mid slips despite earlier massive buy flow.\",\"uncertainty\":\"Book swings contradict taker direction.\",\"last_ms\":1790558565078,\"evidence\":[[15,\"aggressive_sell\"],[23,\"imbalance\"]]},{\"id\":\"ONEUSDT\",\"version\":\"f629308ab38aad55\",\"decision\":\"WAIT\",\"reason\":\"Late buy share fades and mid drifts lower after earlier spike.\",\"uncertainty\":\"Mixed depth additions without clear trend.\",\"last_ms\":1790558570237,\"evidence\":[[13,\"aggressive_sell\"],[23,\"d_mid_bps\"]]}]}",
+      "api_cost_usd": 0.017117399999999998,
+      "input_tokens": 53694,
+      "output_tokens": 841,
+      "completed_at_ms": 1790558577910,
+      "uncached_peak_usd": 0.017117399999999998,
+      "cached_input_tokens": 0
+    },
+    "pairs": [
+      {
+        "symbol": "SOONUSDT",
+        "skipped": "DATA_OR_ADVICE_INVALID"
+      },
+      {
+        "gpt": "SKIP",
+        "error": null,
+        "usage": {
+          "input_tokens": 32354,
+          "total_tokens": 33149,
+          "output_tokens": 795,
+          "input_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0
+          },
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        },
+        "valid": true,
+        "symbol": "QNTUSDT",
+        "job_key": "ed1f23af936217176512ddf7593b888942f27a9cfbe9d8780b18362e2f94ab80",
+        "cost_usd": 0.027843,
+        "deepseek": "PASS",
+        "latency_ms": 5830,
+        "capture_end_ms": 1790558560158,
+        "matched_capture": true
+      },
+      {
+        "symbol": "WUSDT",
+        "skipped": "canceling statement due to lock timeout"
+      },
+      {
+        "gpt": "SKIP",
+        "error": null,
+        "usage": {
+          "input_tokens": 30688,
+          "total_tokens": 31436,
+          "output_tokens": 748,
+          "input_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0
+          },
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        },
+        "valid": true,
+        "symbol": "INXUSDT",
+        "job_key": "7cd75a2e7081a4e0c02e931c89268428a1e6140f458edb78562d82d660bb35f4",
+        "cost_usd": 0.026382,
+        "deepseek": "WAIT",
+        "latency_ms": 5373,
+        "capture_end_ms": 1790558560158,
+        "matched_capture": true
+      },
+      {
+        "symbol": "GRTUSDT",
+        "skipped": "canceling statement due to lock timeout"
+      },
+      {
+        "gpt": "SKIP",
+        "error": null,
+        "usage": {
+          "input_tokens": 29833,
+          "total_tokens": 30662,
+          "output_tokens": 829,
+          "input_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0
+          },
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        },
+        "valid": true,
+        "symbol": "BULLAUSDT",
+        "job_key": "e21554a5827b8e2d3bcd28e75e881a6d1f40a5e0d2b2d37dfe5d31357310417b",
+        "cost_usd": 0.02610525,
+        "deepseek": "WAIT",
+        "latency_ms": 5690,
+        "capture_end_ms": 1790558565078,
+        "matched_capture": true
+      },
+      {
+        "symbol": "PUMPUSDT",
+        "skipped": "DATA_OR_ADVICE_INVALID"
+      },
+      {
+        "gpt": "SKIP",
+        "error": null,
+        "usage": {
+          "input_tokens": 31056,
+          "total_tokens": 31833,
+          "output_tokens": 777,
+          "input_tokens_details": {
+            "cached_tokens": 0,
+            "cache_write_tokens": 0
+          },
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        },
+        "valid": true,
+        "symbol": "BTWUSDT",
+        "job_key": "dca6f2aab36d8cbceab3f680fef0386ca04347de4fc605a286bbbefad030c4f8",
+        "cost_usd": 0.0267885,
+        "deepseek": "WAIT",
+        "latency_ms": 4652,
+        "capture_end_ms": 1790558565078,
+        "matched_capture": true
+      },
+      {
+        "symbol": "NEARUSDT",
+        "skipped": "DATA_OR_ADVICE_INVALID"
+      },
+      {
+        "symbol": "ONEUSDT",
+        "skipped": "DATA_OR_ADVICE_INVALID"
+      }
+    ]
+  },
+  "historical_positive_cohort": {
+    "job_key": "250bb8d18ede97636ad921165d4bd0f8b4554e29163ce3768d6d666c20ed2aed",
+    "as_of_ms": 1790558811638,
+    "orders": 0,
+    "ready": 10,
+    "batch_size": 10,
+    "result": {
+      "model": "deepseek-flash",
+      "usage": {
+        "total_tokens": 49673,
+        "prompt_tokens": 48723,
+        "completion_tokens": 950,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 48595
+      },
+      "errors": [],
+      "purpose": "ENTRY",
+      "results": [
+        {
+          "id": "QNTUSDT@a2ca127c",
+          "valid": true,
+          "reason": "Late collapse, mid dropped sharply with extreme sell imbalance and negative buyer aggression.",
+          "last_ms": 1790440870199,
+          "version": "fe18c94dedd5986fd365574eb41b30286db8fc0d5e0ed1a8cc4b1c517cd30ea9",
+          "decision": "SKIP",
+          "evidence": [
+            [
+              22,
+              "mid",
+              121.44
+            ],
+            [
+              22,
+              "aggressive_sell",
+              63270.547
+            ],
+            [
+              22,
+              "imbalance",
+              0.025819137
+            ],
+            [
+              22,
+              "d_mid_bps",
+              6.1797058
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "fe18c94dedd5986f",
+          "uncertainty": "Momentum may reverse; taker flow one-sided.",
+          "requires_final_recheck": true
+        },
+        {
+          "id": "CHIPUSDT@6317a416",
+          "valid": false,
+          "reason": "EVIDENCE_REQUIRED",
+          "last_ms": 1790437635022,
+          "version": "90472dc87c14c4a4da6742427a88d098f6a164c87179119d9fe59742efb36a85",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "MARSCOINUSDT@d79a1c7c",
+          "valid": true,
+          "reason": "Mid falling with negative drift and heavy sell pressure despite some buy volume.",
+          "last_ms": 1790443270181,
+          "version": "b4b69c80294358bdef99c12e5d45cff89fa37123876fb60fd3a51d72c5c82b90",
+          "decision": "SKIP",
+          "evidence": [
+            [
+              14,
+              "d_mid_bps",
+              42.690207
+            ],
+            [
+              14,
+              "aggressive_sell",
+              29216.319
+            ],
+            [
+              23,
+              "imbalance",
+              -0.15720728
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "b4b69c80294358bd",
+          "uncertainty": "Book imbalance volatile, could be whipsaw.",
+          "requires_final_recheck": true
+        },
+        {
+          "id": "RAYSOLUSDT@da20621a",
+          "valid": true,
+          "reason": "Late rally with buy dominance and rising mid despite final sell burst.",
+          "last_ms": 1790502970192,
+          "version": "89f075e6856f4b3bdab86aa1b6398b42d2e1c147bf2dda153dd9cac3b9727ae3",
+          "decision": "PASS",
+          "evidence": [
+            [
+              13,
+              "aggressive_buy",
+              67203.306
+            ],
+            [
+              13,
+              "mid",
+              2.28875
+            ],
+            [
+              22,
+              "aggressive_buy",
+              11959.385
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "89f075e6856f4b3b",
+          "uncertainty": "Last bucket negative imbalance, possible exhaustion.",
+          "requires_final_recheck": true
+        },
+        {
+          "id": "GRASSUSDT@a27ebfc5",
+          "valid": true,
+          "reason": "Strong upward mid move on aggressive buying with supportive imbalance.",
+          "last_ms": 1790503750059,
+          "version": "eedf4243c2a15b190329b906eedc86aa1bf39a2b00c2c12b2b4e99aa56fdd2b9",
+          "decision": "PASS",
+          "evidence": [
+            [
+              21,
+              "mid",
+              0.60095
+            ],
+            [
+              21,
+              "aggressive_buy",
+              8.47692
+            ],
+            [
+              21,
+              "imbalance",
+              -0.19622313
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "eedf4243c2a15b19",
+          "uncertainty": "Final bucket negative imbalance, depth falling.",
+          "requires_final_recheck": true
+        },
+        {
+          "id": "USUSDT@bf183194",
+          "valid": true,
+          "reason": "Mid range-bound, flow balanced, no clear directional push.",
+          "last_ms": 1790510480092,
+          "version": "929b875ed75ca80f3aa614b0591647bacb6a50fa7108ed4f90695e2f576a5f4c",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              23,
+              "imbalance",
+              0.29212757
+            ],
+            [
+              23,
+              "aggressive_buy",
+              10531.227
+            ],
+            [
+              23,
+              "mid",
+              0.033824
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "929b875ed75ca80f",
+          "uncertainty": "Mixed taker flow, depth fluctuating.",
+          "requires_final_recheck": true
+        },
+        {
+          "id": "USUSDT@1e7666ec",
+          "valid": false,
+          "reason": "EVIDENCE_REQUIRED",
+          "last_ms": 1790470450171,
+          "version": "2057a2f17d388ee797e71091ed557a5ed0eabddd41a9a738eb7706ddc1fb8155",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "WUSDT@40bcb34d",
+          "valid": true,
+          "reason": "Late mid drop with negative imbalance and sell pressure on taker flow.",
+          "last_ms": 1790496250159,
+          "version": "2589d83a0389fec8819033772c2e0bcbc97d68c1c14630119fe56a22457bb337",
+          "decision": "SKIP",
+          "evidence": [
+            [
+              23,
+              "mid",
+              0.0153455
+            ],
+            [
+              23,
+              "imbalance",
+              0.13353524
+            ],
+            [
+              23,
+              "aggressive_sell",
+              10963.703
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "2589d83a0389fec8",
+          "uncertainty": "Buy volume present but overwhelmed.",
+          "requires_final_recheck": true
+        },
+        {
+          "id": "ARXUSDT@9d4d322f",
+          "valid": true,
+          "reason": "Steady uptrend on buy-side taker flow and positive mid drift.",
+          "last_ms": 1790516605112,
+          "version": "1417815b1fe46ab4dbebcc4b4a82317dece79755f152ac43a3e37085fa90b724",
+          "decision": "PASS",
+          "evidence": [
+            [
+              21,
+              "mid",
+              0.27875
+            ],
+            [
+              21,
+              "aggressive_buy",
+              6648.1371
+            ],
+            [
+              21,
+              "imbalance",
+              0.050307339
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "1417815b1fe46ab4",
+          "uncertainty": "Ask depth rising, potential resistance.",
+          "requires_final_recheck": true
+        },
+        {
+          "id": "SOONUSDT@6ab9cddf",
+          "valid": true,
+          "reason": "Choppy mid with balanced taker flow, no clear directional momentum.",
+          "last_ms": 1790482630107,
+          "version": "724612dd033eebb067e61f18c7182ad0ab105b00a41009e35aed966c823a1f2d",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              23,
+              "mid",
+              0.29925
+            ],
+            [
+              23,
+              "aggressive_buy",
+              15463.817
+            ],
+            [
+              23,
+              "imbalance",
+              0.030224155
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V1",
+          "review_ref": "724612dd033eebb0",
+          "uncertainty": "Book depth swings, mixed imbalance signals.",
+          "requires_final_recheck": true
+        }
+      ],
+      "cost_usd": 0.015719268,
+      "provider": "deepseek",
+      "attempted": true,
+      "batch_hash": "26975b2844839c15f71ddf55c9ff243f6faaec317488d3fa624f6d62470b186e",
+      "cost_basis": "DEEPSEEK_PEAK_TOKEN_RATE_20260928_NOT_INVOICE",
+      "latency_ms": 5071,
+      "request_id": "fbfbb05f-beaf-47fe-bacb-3948001e7411",
+      "http_status": 200,
+      "raw_content": "{\"results\":[{\"id\":\"QNTUSDT@a2ca127c\",\"version\":\"fe18c94dedd5986f\",\"decision\":\"SKIP\",\"reason\":\"Late collapse, mid dropped sharply with extreme sell imbalance and negative buyer aggression.\",\"uncertainty\":\"Momentum may reverse; taker flow one-sided.\",\"last_ms\":1790440870199,\"evidence\":[[22,\"mid\"],[22,\"aggressive_sell\"],[22,\"imbalance\"],[22,\"d_mid_bps\"]]},{\"id\":\"CHIPUSDT@6317a416\",\"version\":\"90472dc87c14c4a4\",\"decision\":\"WAIT\",\"reason\":\"Choppy range, flat net taker flow, no directional edge.\",\"uncertainty\":\"Thin book depth, mixed imbalance signals.\",\"last_ms\":1790437635022,\"evidence\":[[22,\"net_taker_quote_5s\"],[23,\"aggressive_buy\"],[23,\"imbalance\"]]},{\"id\":\"MARSCOINUSDT@d79a1c7c\",\"version\":\"b4b69c80294358bd\",\"decision\":\"SKIP\",\"reason\":\"Mid falling with negative drift and heavy sell pressure despite some buy volume.\",\"uncertainty\":\"Book imbalance volatile, could be whipsaw.\",\"last_ms\":1790443270181,\"evidence\":[[14,\"d_mid_bps\"],[14,\"aggressive_sell\"],[23,\"imbalance\"]]},{\"id\":\"RAYSOLUSDT@da20621a\",\"version\":\"89f075e6856f4b3b\",\"decision\":\"PASS\",\"reason\":\"Late rally with buy dominance and rising mid despite final sell burst.\",\"uncertainty\":\"Last bucket negative imbalance, possible exhaustion.\",\"last_ms\":1790502970192,\"evidence\":[[13,\"aggressive_buy\"],[13,\"mid\"],[22,\"aggressive_buy\"]]},{\"id\":\"GRASSUSDT@a27ebfc5\",\"version\":\"eedf4243c2a15b19\",\"decision\":\"PASS\",\"reason\":\"Strong upward mid move on aggressive buying with supportive imbalance.\",\"uncertainty\":\"Final bucket negative imbalance, depth falling.\",\"last_ms\":1790503750059,\"evidence\":[[21,\"mid\"],[21,\"aggressive_buy\"],[21,\"imbalance\"]]},{\"id\":\"USUSDT@bf183194\",\"version\":\"929b875ed75ca80f\",\"decision\":\"WAIT\",\"reason\":\"Mid range-bound, flow balanced, no clear directional push.\",\"uncertainty\":\"Mixed taker flow, depth fluctuating.\",\"last_ms\":1790510480092,\"evidence\":[[23,\"imbalance\"],[23,\"aggressive_buy\"],[23,\"mid\"]]},{\"id\":\"USUSDT@1e7666ec\",\"version\":\"2057a2f17d388ee7\",\"decision\":\"WAIT\",\"reason\":\"Price flat, taker flow balanced, no sustained momentum.\",\"uncertainty\":\"Low volume, book depth thin.\",\"last_ms\":1790470450171,\"evidence\":[[23,\"mid\"],[23,\"net_taker_quote_5s\"],[23,\"imbalance\"]]},{\"id\":\"WUSDT@40bcb34d\",\"version\":\"2589d83a0389fec8\",\"decision\":\"SKIP\",\"reason\":\"Late mid drop with negative imbalance and sell pressure on taker flow.\",\"uncertainty\":\"Buy volume present but overwhelmed.\",\"last_ms\":1790496250159,\"evidence\":[[23,\"mid\"],[23,\"imbalance\"],[23,\"aggressive_sell\"]]},{\"id\":\"ARXUSDT@9d4d322f\",\"version\":\"1417815b1fe46ab4\",\"decision\":\"PASS\",\"reason\":\"Steady uptrend on buy-side taker flow and positive mid drift.\",\"uncertainty\":\"Ask depth rising, potential resistance.\",\"last_ms\":1790516605112,\"evidence\":[[21,\"mid\"],[21,\"aggressive_buy\"],[21,\"imbalance\"]]},{\"id\":\"SOONUSDT@6ab9cddf\",\"version\":\"724612dd033eebb0\",\"decision\":\"WAIT\",\"reason\":\"Choppy mid with balanced taker flow, no clear directional momentum.\",\"uncertainty\":\"Book depth swings, mixed imbalance signals.\",\"last_ms\":1790482630107,\"evidence\":[[23,\"mid\"],[23,\"aggressive_buy\"],[23,\"imbalance\"]]}]}",
+      "api_cost_usd": 0.015719268,
+      "input_tokens": 48723,
+      "output_tokens": 950,
+      "completed_at_ms": 1790558819000,
+      "uncached_peak_usd": 0.0157569,
+      "cached_input_tokens": 128
+    },
+    "pairs": [
+      {
+        "valid": true,
+        "reason": "Late collapse, mid dropped sharply with extreme sell imbalance and negative buyer aggression.",
+        "symbol": "QNTUSDT",
+        "deepseek": "SKIP",
+        "source_job": "a2ca127c081bcc5f44381a1794a364eb6bb150387bd7e19fa9dc07a4ca7c3762",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790440876660,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": false,
+        "reason": "EVIDENCE_REQUIRED",
+        "symbol": "CHIPUSDT",
+        "deepseek": "BLOCKED",
+        "source_job": "6317a41661bd3f153118e09f94e92e582b23041c54eabe79567b2ba437a4b786",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790437639867,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": true,
+        "reason": "Mid falling with negative drift and heavy sell pressure despite some buy volume.",
+        "symbol": "MARSCOINUSDT",
+        "deepseek": "SKIP",
+        "source_job": "d79a1c7cb257cd059f827655956049c5ad4c5b731e06f5a5cd3df8401b1419ad",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790443275537,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": true,
+        "reason": "Late rally with buy dominance and rising mid despite final sell burst.",
+        "symbol": "RAYSOLUSDT",
+        "deepseek": "PASS",
+        "source_job": "da20621ac413efd5835ec2b56c0d44b35b871e81680210ab2a05ff688a5a54b8",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790502971511,
+        "missed_in_this_snapshot": false
+      },
+      {
+        "valid": true,
+        "reason": "Strong upward mid move on aggressive buying with supportive imbalance.",
+        "symbol": "GRASSUSDT",
+        "deepseek": "PASS",
+        "source_job": "a27ebfc56570e4d434d702d832ac3653f2813188424d35a407b1a30db8f26080",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790503751306,
+        "missed_in_this_snapshot": false
+      },
+      {
+        "valid": true,
+        "reason": "Mid range-bound, flow balanced, no clear directional push.",
+        "symbol": "USUSDT",
+        "deepseek": "WAIT",
+        "source_job": "bf1831948a7bbc18875abe1919125e721ec4b28f2ef4a76702ad432f02bbddd7",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790510481567,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": false,
+        "reason": "EVIDENCE_REQUIRED",
+        "symbol": "USUSDT",
+        "deepseek": "BLOCKED",
+        "source_job": "1e7666ec143b5afd6165819cd4a1560e240ea8fe0ef50e5b55b096cad01c6bd5",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790470453679,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": true,
+        "reason": "Late mid drop with negative imbalance and sell pressure on taker flow.",
+        "symbol": "WUSDT",
+        "deepseek": "SKIP",
+        "source_job": "40bcb34d6119c30d6481b0163e850cd5b3796feccf8479c9a5f6ed076ce85cc9",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790496251894,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": true,
+        "reason": "Steady uptrend on buy-side taker flow and positive mid drift.",
+        "symbol": "ARXUSDT",
+        "deepseek": "PASS",
+        "source_job": "9d4d322fd47cf77250174f2b15d74d0ad04738514a0b68e1b140a41fb2d3dbc8",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790516606385,
+        "missed_in_this_snapshot": false
+      },
+      {
+        "valid": true,
+        "reason": "Choppy mid with balanced taker flow, no clear directional momentum.",
+        "symbol": "SOONUSDT",
+        "deepseek": "WAIT",
+        "source_job": "6ab9cddfda4c3bd516aba492aaca3ac24084340a22d3454971533eb7867966c8",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790482633131,
+        "missed_in_this_snapshot": true
+      }
+    ]
+  },
+  "latest_actual_top10_failure": {
+    "job_key": "a1286b5d90a07dbb30fe99dc6160162f945a18bbc23f78a3205f60cd70ed46e3",
+    "as_of_ms": 1790558982891,
+    "orders": 0,
+    "ready": 9,
+    "batch_size": 10,
+    "result": {
+      "model": "deepseek-flash",
+      "usage": {
+        "total_tokens": 49605,
+        "prompt_tokens": 48807,
+        "completion_tokens": 798,
+        "prompt_tokens_details": {
+          "cached_tokens": 256
+        },
+        "prompt_cache_hit_tokens": 256,
+        "prompt_cache_miss_tokens": 48551
+      },
+      "errors": [],
+      "purpose": "ENTRY",
+      "results": [
+        {
+          "id": "QNTUSDT",
+          "valid": false,
+          "reason": "DYNAMIC_INVALID_OR_NONCAUSAL_BUCKET",
+          "last_ms": null,
+          "version": "a22db396d1957787d5eadb3000ff9329e1659b6760c60b906fd9d092953125bf",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "SOONUSDT",
+          "valid": false,
+          "reason": "EVIDENCE_REQUIRED",
+          "last_ms": 1790558980038,
+          "version": "fc121bef142d6c40b5c0912ed4d1569f7c9b378c0ecde024e816bf8805b57569",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "INXUSDT",
+          "valid": false,
+          "reason": "EVIDENCE_REQUIRED",
+          "last_ms": 1790558980038,
+          "version": "98d99990cc095e5c25fc2d7b51ec2b81d00c909513141f66b9c542ac89ff0820",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "WUSDT",
+          "valid": false,
+          "reason": "EVIDENCE_REQUIRED",
+          "last_ms": 1790558980038,
+          "version": "22a6e20afc8c83982462d6a6d75217093f20843b7f7067cb8466d102e9360e35",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "BULLAUSDT",
+          "valid": false,
+          "reason": "EVIDENCE_REQUIRED",
+          "last_ms": 1790558980038,
+          "version": "25849909f1461add8cb97c5bb359f99c508f68e3c780ec3c9a02d51395848700",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "GRTUSDT",
+          "valid": false,
+          "reason": "EVIDENCE_REQUIRED",
+          "last_ms": 1790558980038,
+          "version": "33879673f5567e48afb9367bb2b8a1687deb20bea93e2ca0b34e417c03bc8bcf",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "BTWUSDT",
+          "valid": false,
+          "reason": "EVIDENCE_REQUIRED",
+          "last_ms": 1790558980038,
+          "version": "e80a98511a16f099ed1af971898fcafcf1bdc652e1f715e2f03a09a5900eebba",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "PUMPUSDT",
+          "valid": false,
+          "reason": "EVIDENCE_REQUIRED",
+          "last_ms": 1790558980038,
+          "version": "9f938fb9b44e69c5b1b9fbf18b441765aadf4815fa93ce6baaab21f129fc0553",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "NEARUSDT",
+          "valid": false,
+          "reason": "EVIDENCE_REQUIRED",
+          "last_ms": 1790558980038,
+          "version": "7bedb385da9135ea335789970be9c4b594c9a110a311d8a59393bf28330a62c0",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        },
+        {
+          "id": "ONEUSDT",
+          "valid": false,
+          "reason": "EVIDENCE_REQUIRED",
+          "last_ms": 1790558980038,
+          "version": "665cc3971d8b2800c52d0f73aa92c909b04c0884b83ec8cb273a2794522b1f80",
+          "decision": "BLOCKED",
+          "authority": [],
+          "uncertainty": "DATA_OR_RESPONSE_INVALID"
+        }
+      ],
+      "cost_usd": 0.015524435999999999,
+      "provider": "deepseek",
+      "attempted": true,
+      "batch_hash": "25a97625bd289d868cf2c75fc2898389b178b9036328b0516b668179a1308748",
+      "cost_basis": "DEEPSEEK_PEAK_TOKEN_RATE_20260928_NOT_INVOICE",
+      "latency_ms": 4863,
+      "request_id": "6a988e0d-9c68-47f0-803f-94a4236b1bf8",
+      "http_status": 200,
+      "raw_content": "{\"results\":[{\"id\":\"QNTUSDT\",\"version\":\"a22db396d1957787\",\"decision\":\"BLOCKED\",\"reason\":\"Data invalid or noncausal bucket; position state blocks review.\",\"uncertainty\":\"No matrix supplied for this symbol.\",\"last_ms\":null,\"evidence\":[]},{\"id\":\"SOONUSDT\",\"version\":\"fc121bef142d6c40\",\"decision\":\"PASS\",\"reason\":\"Late aggressive buy dominates with positive mid shift and thin ask depth.\",\"uncertainty\":\"Mid drift small and taker flow jittery.\",\"last_ms\":1790558980038,\"evidence\":[[22,0],[22,16],[15,0],[5,17]]},{\"id\":\"INXUSDT\",\"version\":\"98d99990cc095e5c\",\"decision\":\"WAIT\",\"reason\":\"Spread wide, taker flow choppy and midpoint stalled near late range.\",\"uncertainty\":\"Book depth thin on both sides.\",\"last_ms\":1790558980038,\"evidence\":[[23,17],[22,16],[20,0],[23,30]]},{\"id\":\"WUSDT\",\"version\":\"22a6e20afc8c8398\",\"decision\":\"WAIT\",\"reason\":\"Late buying pressure offset by negative net taker and mid weakness.\",\"uncertainty\":\"Taker flow mixed across buckets.\",\"last_ms\":1790558980038,\"evidence\":[[23,17],[21,16],[20,0],[22,16]]},{\"id\":\"BULLAUSDT\",\"version\":\"25849909f1461add\",\"decision\":\"WAIT\",\"reason\":\"Book thin, taker flow small and midpoint flat with wide spread.\",\"uncertainty\":\"Sparse matrix rows show many zeros.\",\"last_ms\":1790558980038,\"evidence\":[[23,17],[22,16],[20,0],[23,30]]},{\"id\":\"GRTUSDT\",\"version\":\"33879673f5567e48\",\"decision\":\"PASS\",\"reason\":\"High taker volume with positive buy share and mid firming.\",\"uncertainty\":\"Late sell pressure appears in final buckets.\",\"last_ms\":1790558980038,\"evidence\":[[20,17],[22,0],[21,16],[22,5]]},{\"id\":\"BTWUSDT\",\"version\":\"e80a98511a16f099\",\"decision\":\"WAIT\",\"reason\":\"Mid hovering, mixed buy share and modest aggressive flow late.\",\"uncertainty\":\"Book depth stable but direction unclear.\",\"last_ms\":1790558980038,\"evidence\":[[23,17],[22,16],[20,0],[21,5]]},{\"id\":\"PUMPUSDT\",\"version\":\"9f938fb9b44e69c5\",\"decision\":\"WAIT\",\"reason\":\"Huge taker volume but buy share fades and mid stalls.\",\"uncertainty\":\"Late reversal risk after heavy flow.\",\"last_ms\":1790558980038,\"evidence\":[[22,16],[21,5],[22,0],[20,17]]},{\"id\":\"NEARUSDT\",\"version\":\"7bedb385da9135ea\",\"decision\":\"PASS\",\"reason\":\"Late buys dominate with positive mid shift and deep bid support.\",\"uncertainty\":\"Ask depth thin relative to bid.\",\"last_ms\":1790558980038,\"evidence\":[[22,0],[22,16],[18,0],[5,17]]},{\"id\":\"ONEUSDT\",\"version\":\"665cc3971d8b2800\",\"decision\":\"PASS\",\"reason\":\"Strong late taker buy with rising mid and imbalance.\",\"uncertainty\":\"Earlier buckets show sell spikes.\",\"last_ms\":1790558980038,\"evidence\":[[23,0],[23,16],[23,17],[20,5]]}]}",
+      "api_cost_usd": 0.015524435999999999,
+      "input_tokens": 48807,
+      "output_tokens": 798,
+      "completed_at_ms": 1790558989352,
+      "uncached_peak_usd": 0.015599700000000001,
+      "cached_input_tokens": 256
+    },
+    "pairs": []
+  },
+  "gates": {
+    "budget": "10_MINUTE_BASE_CADENCE_FITS_SMALL_SAMPLE_EXTRA_AND_HOLD_ALLOWANCE_UNPROVEN",
+    "recall": "FAILED_7_OF_10_SELECTED_HISTORICAL_POSITIVES_NOT_FORWARDED",
+    "response_reliability": "FAILED_9_OF_9_READY_IDS_REJECTED_LATEST_NUMERIC_FIELD_COORDINATES",
+    "concurrency": "PASSED_ISOLATED_REAL_POSTGRES_NO_PRODUCTION_SLOT_FLIP",
+    "protection": "REGRESSION_PASSED_READINESS_HEALTHY_NO_LIVE_HELD_POSITION"
+  }
+}

@@ -1,4 +1,4 @@
--- Candidate only. No activation, cron, legacy ledger reset, capture or order changes.
+-- Install disabled. Activation requires a recorded release validation receipt.
 -- Historic balances stay in their original journal. New physical calls are charged once.
 create table public.ai_provider_limits (
  provider text primary key check(provider in ('deepseek','openai')),
@@ -31,7 +31,7 @@ create table public.leader20_batches (
 create table public.leader20_batch_control (
  singleton boolean primary key default true check(singleton),enabled boolean not null default false,
  last_slots integer, last_requested_at timestamptz,last_evidence_key text,
- generation bigint not null default 0, wake_reason text,wake_requested_at timestamptz,
+ generation bigint not null default 0, wake_reason text,wake_requested_at timestamptz,last_budget_block jsonb,
  release_receipt jsonb,
  constraint batch_release_requires_evidence check(not enabled or coalesce(
   release_receipt @> '{"budget_verified":true,"recall_verified":true,"concurrency_verified":true,"protection_verified":true}'::jsonb,false))
@@ -46,6 +46,7 @@ grant all on public.ai_provider_limits,public.ai_call_ledger,public.leader20_bat
 
 -- Attribution never credits money whose original settlement is unknown. All unknown
 -- historical cost stays explicitly charged to OpenAI, rather than disappearing.
+alter function public.ai_monthly_spend_used(date) rename to ai_monthly_spend_used_before_provider_ledger;
 create function public.ai_legacy_deepseek_used(p_day date,p_daily boolean default false) returns numeric
 language sql stable set search_path='' as $$
  select coalesce(sum(least(coalesce(settled_usd,reserved_usd,0),case
@@ -63,7 +64,7 @@ $$;
 create function public.ai_provider_month_used(p_provider text,p_day date default (now() at time zone 'UTC')::date)
 returns numeric language sql stable set search_path='' as $$
  select case when p_provider='deepseek' then public.ai_legacy_deepseek_used(p_day)
- else greatest(0,public.ai_monthly_spend_used(p_day)-public.ai_legacy_deepseek_used(p_day)) end
+ else greatest(0,public.ai_monthly_spend_used_before_provider_ledger(p_day)-public.ai_legacy_deepseek_used(p_day)) end
  +coalesce((select sum(case when state='CANCELLED' then 0 else coalesce(actual_usd,reserved_usd) end)
  from public.ai_call_ledger where provider=p_provider
  and created_at>=date_trunc('month',p_day) at time zone 'UTC'
@@ -175,6 +176,7 @@ create function public.leader20_batch_claim(p_packet jsonb,p_evidence_key text,p
 returns jsonb language plpgsql set search_path='' as $$
 declare c public.leader20_batch_control%rowtype;l public.leader20_control%rowtype;cap jsonb;b public.leader20_batches%rowtype;
  reason text;at_time timestamptz:=clock_timestamp();strong boolean:=false;last_packet jsonb;
+ estimate numeric;remaining_ticks integer;day_used numeric;entry_room numeric;
 begin
  perform pg_advisory_xact_lock(20260928,52);
  select * into c from public.leader20_batch_control where singleton for update;
@@ -190,6 +192,7 @@ begin
    or (sign((n->>2)::numeric)<>sign((o->>2)::numeric) and abs((n->>3)::numeric-(o->>3)::numeric)>=.15)) into strong;
  if l.epoch_id::text is distinct from p_packet->>'epoch_id' or l.generation is distinct from (p_packet->>'generation')::bigint
  or not l.observation_enabled or l.active_strategy<>'LEADER20_DYNAMIC_1' then raise exception 'BATCH_GENERATION'; end if;
+ if p_packet->>'version' is distinct from 'TOP10_DEEPSEEK_BATCH_2' then raise exception 'BATCH_LIVE_PROTOCOL_REQUIRED'; end if;
  if jsonb_array_length(p_packet->'symbols')<>10 or
  (select count(distinct x->>'id') from jsonb_array_elements(p_packet->'symbols')x)<>10 or
  exists(select 1 from jsonb_array_elements(p_packet->'symbols')x where not exists(
@@ -199,6 +202,25 @@ begin
  reason:=case when c.last_slots=0 then 'SLOT_RELEASED' when c.last_requested_at is null or c.last_requested_at<=at_time-interval '10 minutes' then 'TEN_MINUTE'
   when p_strong_change and strong and p_evidence_key is distinct from c.last_evidence_key and c.last_requested_at<=at_time-interval '30 seconds' then 'EVIDENCE_CHANGED' end;
  if reason is null then return jsonb_build_object('created',false,'reason','NOT_DUE'); end if;
+ -- Extra evidence wakes cannot consume the remaining day's periodic review allowance.
+ -- This is cost admission only, never a filter on model decisions or candidate quality.
+ if reason='EVIDENCE_CHANGED' then
+  select greatest(.0001,coalesce(max((input_tokens*.3+output_tokens*1.2)/1000000),.02)) into estimate
+   from public.ai_call_ledger where provider='deepseek' and parent_key like 'batch:%' and state='SETTLED'
+    and created_at>at_time-interval '7 days';
+  remaining_ticks:=ceil(extract(epoch from (date_trunc('day',at_time)+interval '1 day'-at_time))/600);
+  select coalesce(sum(case when state='CANCELLED' then 0 else coalesce(actual_usd,reserved_usd) end),0) into day_used
+   from public.ai_call_ledger where provider='deepseek' and created_at>=date_trunc('day',at_time);
+  day_used:=day_used+public.ai_legacy_deepseek_used((at_time at time zone 'UTC')::date,true);
+  select daily_usd-least(daily_usd,coalesce((public.leader20_entry_budget_limits()->>'protected_usd')::numeric,.5))-day_used
+   into entry_room from public.ai_provider_limits where provider='deepseek';
+  if entry_room < estimate*(remaining_ticks+1) then
+   update public.leader20_batch_control set wake_reason='EXTRA_BATCH_BUDGET_RESERVED',
+    last_budget_block=jsonb_build_object('at',at_time,'reason','EXTRA_BATCH_BUDGET_RESERVED',
+     'extra_required_usd',estimate*(remaining_ticks+1)-entry_room,'periodic_requests_reserved',remaining_ticks) where singleton;
+   return jsonb_build_object('created',false,'reason','EXTRA_BATCH_BUDGET_RESERVED','additional_usd',estimate*(remaining_ticks+1)-entry_room);
+  end if;
+ end if;
  if reason='SLOT_RELEASED' then
   update public.leader20_batches set state='SUPERSEDED' where state in ('RESERVED','DISPATCHED');
  end if;
@@ -272,7 +294,10 @@ begin
  perform pg_advisory_xact_lock(20260928,52);c:=public.leader20_batch_capacity();
  if (c->>'available')::integer=0 then
   update public.leader20_batch_control set last_slots=0,wake_reason=c->>'reason' where singleton;
-  update public.leader20_review_events set state='RETIRED' where result?'batch_id' and state in ('REQUESTED','REVIEWING');
+  update public.leader20_review_events e set state='RETIRED' where result?'batch_id' and state in ('REQUESTED','REVIEWING')
+   and not exists(select 1 from public.v11_long_regime_orders o where o.signal_id=e.signal_id and o.intent='OPEN_LONG'
+    and o.state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED')
+    and o.response_payload->>'v18ExposureFinal' is distinct from 'true');
  end if;
  return c;
 end $$;
@@ -309,7 +334,7 @@ begin
  end if;
  update public.leader20_review_events set state='RETIRED' where result?'batch_id' and result->>'batch_id'<>b.id::text and state in ('REQUESTED','REVIEWING');
  for r in select * from jsonb_array_elements(p_result->'results') loop
-  if r->>'decision'<>'PASS' or r->>'valid'<>'true' then continue; end if;
+  if r->>'decision'<>'PASS' or r->>'valid'<>'true' or r->>'grounding' is distinct from 'SYMBOL_CELLS_VERIFIED_V1' then continue; end if;
   select x into s from jsonb_array_elements(b.packet->'symbols') x where x->>'id'=r->>'id';
   if s is null or s->>'state'<>'READY' or s->>'data_version' is distinct from r->>'version' or s->>'last_ms' is distinct from r->>'last_ms'
    or (select count(*) from jsonb_array_elements(p_result->'results')x where x->>'id'=r->>'id')<>1
@@ -356,7 +381,10 @@ begin
  c:=public.leader20_batch_capacity();
  if (c->>'available')::integer<1 then
   update public.leader20_batch_control set last_slots=0,wake_reason=c->>'reason' where singleton;
-  update public.leader20_review_events set state='RETIRED' where result?'batch_id' and state in ('REQUESTED','REVIEWING');
+  update public.leader20_review_events e set state='RETIRED' where result?'batch_id' and state in ('REQUESTED','REVIEWING')
+   and not exists(select 1 from public.v11_long_regime_orders o where o.signal_id=e.signal_id and o.intent='OPEN_LONG'
+    and o.state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED')
+    and o.response_payload->>'v18ExposureFinal' is distinct from 'true');
  elsif ctl.last_slots=0 and (ctl.wake_requested_at is null or ctl.wake_requested_at<clock_timestamp()-interval '10 seconds') then
   select t.token into token from public.edge_internal_tokens t where name='v10-lane-signal-generator';
   if token is null then raise exception 'BATCH_WAKE_TOKEN_MISSING'; end if;
@@ -430,3 +458,14 @@ create function public.ai_provider_budget_status() returns jsonb language sql st
 $$;
 revoke all on function public.ai_provider_budget_status() from public,anon,authenticated;
 grant execute on function public.ai_provider_budget_status() to service_role;
+
+-- The legacy total is retained as a raw input to provider attribution. The public
+-- reporting total includes new physical calls exactly once; it is never fed back
+-- into attribution (which would double charge OpenAI).
+create function public.ai_monthly_spend_used(p_day date default (now() at time zone 'UTC')::date)
+returns numeric language sql stable set search_path='' as $$
+ select public.ai_provider_month_used('deepseek',p_day)+public.ai_provider_month_used('openai',p_day);
+$$;
+revoke all on function public.ai_monthly_spend_used(date),public.ai_monthly_spend_used_before_provider_ledger(date) from public,anon,authenticated;
+grant execute on function public.ai_monthly_spend_used(date),public.ai_monthly_spend_used_before_provider_ledger(date) to service_role;
+notify pgrst,'reload schema';

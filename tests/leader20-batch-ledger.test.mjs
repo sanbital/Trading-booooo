@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 import {BATCH_INTERVAL_MS} from '../supabase/functions/_shared/leader20/batch.mjs';
-const migration=new URL('../supabase/migrations/20260928001607_leader20_batch_provider_ledger.sql',import.meta.url);
+const migration=new URL('../supabase/migrations/20260928012054_leader20_batch_provider_ledger.sql',import.meta.url);
 test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
  const {PGlite}=await import(pathToFileURL(process.env.PGLITE_MODULE).href), db=new PGlite();t.after(()=>db.close());
  await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;
@@ -19,10 +19,10 @@ test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
  create table leader20_members(epoch_id uuid,symbol text,rank int);
  create table trading_account_snapshots(exchange text,captured_at timestamptz,positions_complete boolean,available_quote numeric,positions jsonb);
  create table v11_long_regime_positions(symbol text,state text,remaining_quantity numeric,metadata jsonb);
- create table v11_long_regime_orders(state text,response_payload jsonb);
+ create table v11_long_regime_orders(state text,response_payload jsonb,signal_id uuid,intent text);
  create table v11_long_regime_signals(id uuid primary key,features jsonb);
  create table leader20_review_events(id uuid default gen_random_uuid(),epoch_id uuid,symbol text,generation bigint,requested_at timestamptz,
- snapshot_end_ms bigint,snapshot_hash text,reason text,priority int,state text default 'REQUESTED',result jsonb);
+ snapshot_end_ms bigint,snapshot_hash text,reason text,priority int,state text default 'REQUESTED',result jsonb,signal_id uuid);
  create function leader20_schedule() returns jsonb language sql as 'select ''{"legacy30m":true}''::jsonb';
  create function leader20_entry_authority(uuid) returns jsonb language sql as 'select ''{"allowed":true}''::jsonb';
  create table edge_internal_tokens(name text,token text);
@@ -77,14 +77,14 @@ test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
   assert.equal((await rpc('leader20_batch_capacity')).available,0);
   await q("insert into trading_account_snapshots values('binance_futures',clock_timestamp(),true,350,'[]')");
   assert.equal((await rpc('leader20_batch_capacity')).available,2);
-  await q("insert into v11_long_regime_orders values('DISPATCHED','{}')");
+  await q("insert into v11_long_regime_orders(state,response_payload) values('DISPATCHED','{}')");
   assert.equal((await rpc('leader20_batch_capacity')).available,0);
   await q("update v11_long_regime_orders set response_payload='{"+'"v18ExposureFinal":true'+"}'");
   assert.equal((await rpc('leader20_batch_capacity')).available,2);
  });
  const epoch=crypto.randomUUID();await q("insert into leader20_control values(true,$1,3,true,'LEADER20_DYNAMIC_1')",[epoch]);
  for(let i=0;i<10;i++)await q('insert into leader20_members values($1,$2,$3)',[epoch,'S'+i,i+1]);
- const packet=(v='one')=>({epoch_id:epoch,generation:3,as_of_ms:Date.now(),batch_hash:v,
+ const packet=(v='one')=>({version:'TOP10_DEEPSEEK_BATCH_2',epoch_id:epoch,generation:3,as_of_ms:Date.now(),batch_hash:v,
   evidence:Array.from({length:10},(_,i)=>['S'+i,100,1,.1]),symbols:Array.from({length:10},(_,i)=>({id:'S'+i,state:'READY',data_version:v+i,last_ms:Date.now()-1000}))});
  await t.test('10m batch bypasses global 30m gate; duplicate and in-flight calls coalesce',async()=>{
   assert.equal(BATCH_INTERVAL_MS,600000);
@@ -100,7 +100,7 @@ test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
   await q("update leader20_batch_control set last_requested_at=clock_timestamp()-$1*interval '1 millisecond'",[BATCH_INTERVAL_MS]);
   assert.equal((await rpc('leader20_batch_claim',[packet('two'),'e2',false])).reason,'BATCH_IN_FLIGHT');
   await rpc('leader20_batch_start',[a.row.id,a.row.owner]);
-  const results=p.symbols.map(s=>({id:s.id,version:s.data_version,last_ms:s.last_ms,decision:'PASS',valid:true}));
+  const results=p.symbols.map(s=>({id:s.id,version:s.data_version,last_ms:s.last_ms,decision:'PASS',valid:true,grounding:'SYMBOL_CELLS_VERIFIED_V1'}));
   results.pop();results.push(results[0]);
   assert.equal((await rpc('leader20_batch_finish',[a.row.id,a.row.owner,{results}])).events,8);
   assert.equal((await rpc('leader20_batch_finish',[a.row.id,a.row.owner,{results}])).duplicate,true);
@@ -108,11 +108,20 @@ test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
   const next=await rpc('leader20_batch_claim',[packet('two'),'e2',false]);assert.equal(next.created,true);assert.equal(next.row.reason,'TEN_MINUTE');
  });
  await t.test('strong new evidence can request a batch before the 10m periodic deadline',async()=>{
+  await q("insert into ai_call_ledger(call_key,provider,model,purpose,parent_key,data_version,state,reserved_usd,actual_usd,input_tokens,output_tokens) values('measured-batch','deepseek','deepseek-flash','ENTRY','batch:measured','sample','SETTLED',.02,.0084,20000,2000)");
   await q("update leader20_batches set state='DONE'");
   await q("update leader20_batch_control set last_requested_at=clock_timestamp()-interval '31 seconds'");
   const changed=packet('strong');changed.evidence[0][1]=100.3;
   const a=await rpc('leader20_batch_claim',[changed,'strong-evidence',true]);
   assert.equal(a.created,true);assert.equal(a.row.reason,'EVIDENCE_CHANGED');
+ });
+ await t.test('extra evidence wake reports reserved periodic budget instead of consuming it',async()=>{
+  await db.exec("update leader20_batches set state='DONE'; update leader20_batch_control set last_requested_at=clock_timestamp()-interval '31 seconds'; update ai_provider_limits set daily_usd=.5 where provider='deepseek'");
+  const changed=packet('extra');changed.evidence[0][1]=101;
+  const r=await rpc('leader20_batch_claim',[changed,'extra-evidence',true]);
+  assert.equal(r.created,false);assert.equal(r.reason,'EXTRA_BATCH_BUDGET_RESERVED');assert.ok(Number(r.additional_usd)>0);
+  assert.equal((await q('select last_budget_block from leader20_batch_control'))[0].last_budget_block.reason,'EXTRA_BATCH_BUDGET_RESERVED');
+  await q("update ai_provider_limits set daily_usd=100.0/31 where provider='deepseek'");
  });
  await t.test('1→0 blocks late results; 0→1 requests fresh data without 10m wait',async()=>{
   await q("update leader20_batches set state='DONE'");
@@ -123,8 +132,19 @@ test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
   assert.equal((await q('select count(*)::int n from net.requests'))[0].n,1);
   const a=await rpc('leader20_batch_claim',[packet('freed'),'e4',false]);assert.equal(a.created,true);assert.equal(a.row.reason,'SLOT_RELEASED');
   await rpc('leader20_batch_start',[a.row.id,a.row.owner]);
-  await q("insert into v11_long_regime_orders values('PLANNED','{}')");
+  await q("insert into v11_long_regime_orders(state,response_payload) values('PLANNED','{}')");
   assert.equal((await rpc('leader20_batch_finish',[a.row.id,a.row.owner,{results:[]}])).reason,'CAPACITY_OR_VERSION_CHANGED');
+ });
+ await t.test('a pending order reserves entry capacity without retiring its own final authority',async()=>{
+  await q("update v11_long_regime_orders set response_payload='{\"v18ExposureFinal\":true}'");
+  await q("update trading_account_snapshots set available_quote=160,captured_at=clock_timestamp()");
+  const own=crypto.randomUUID(),other=crypto.randomUUID();
+  await q("insert into leader20_review_events(signal_id,state,result) values($1,'REVIEWING','{\"batch_id\":\"current\"}'),($2,'REVIEWING','{\"batch_id\":\"other\"}')",[own,other]);
+  await q("insert into v11_long_regime_orders(state,response_payload,signal_id,intent) values('PLANNED','{}',$1,'OPEN_LONG')",[own]);
+  assert.equal((await rpc('leader20_batch_capacity')).available,0);
+  await rpc('leader20_batch_note_full');
+  assert.equal((await q('select state from leader20_review_events where signal_id=$1',[own]))[0].state,'REVIEWING');
+  assert.equal((await q('select state from leader20_review_events where signal_id=$1',[other]))[0].state,'RETIRED');
  });
  await t.test('new parent mode requires metered transport, never debits the legacy parent reservation',async()=>{
   await assert.rejects(rpc('gpt_final_review_claim',['unmetered',{api_approval_ref:'test'},3,100,.25]),/API_UNMETERED_CALLER/);
@@ -139,5 +159,6 @@ test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
  await t.test('forecasts retain unresolved costs and update from the measured rate',async()=>{
   const p=(await rpc('ai_provider_budget_status')).providers;assert.equal(p.length,2);
   for(const r of p){assert.ok(Number(r.month_used_usd)>=0);assert.ok(Math.abs(Number(r.run_rate_31d_usd)-31*Number(r.last24h_usd))<1e-10);}
+  assert.ok(Math.abs(Number(await rpc('ai_monthly_spend_used'))-p.reduce((s,r)=>s+Number(r.month_used_usd),0))<1e-10);
  });
 });
