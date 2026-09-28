@@ -1,10 +1,40 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Book,Flow,WeightBudget,vwap,inWindow,streamURLs,transportFresh,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval} from './core.mjs';
+import {Book,Flow,WeightBudget,vwap,inWindow,streamURLs,transportFresh,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue} from './core.mjs';
 test('Binance public book and market trade/kline routes are separated',()=>{const u=streamURLs('BTCUSDT');assert.equal(new URL(u.book).pathname,'/public/stream');assert.equal(new URL(u.market).pathname,'/market/stream');assert.equal(new URL(u.market).searchParams.get('streams'),'btcusdt@aggTrade/btcusdt@kline_1m/btcusdt@forceOrder');});
 test('bounded pre-snapshot buffer discards old events without declaring continuity',()=>{const b=new Book();for(let i=1;i<=300;i++)b.event({U:i,u:i,pu:i-1,b:[],a:[],E:i},i);assert.equal(b.buffer.length,200);assert.equal(b.ready,false);assert.throws(()=>b.snapshot(snap),/GAP/);});
 const snap={lastUpdateId:10,bids:[[99,10],[98,10]],asks:[[101,10],[102,10]]};
 const event=(u,pu=10)=>({U:u,u,pu,b:[],a:[],E:1000});
+
+test('production timer jitter waits for the unchanged minimum and conserves trades across the deferred tick',()=>{
+ const end=Date.parse('2026-09-28T02:29:00.638Z'),early=Date.parse('2026-09-28T02:29:05.040Z'),next=early+200;
+ const s={lastBucket:end,started:end-10000,book:{syncAt:end-10000},marketResetAt:end-10000,marketSequenceVerified:true};
+ const flow=new Flow();flow.event({a:1,T:end-1,E:end-1,p:100,q:1,m:false},end-1);flow.reset();
+ flow.event({a:2,T:early-10,E:early-10,p:100,q:2,m:false},early-10);
+ assert.equal(completeCaptureInterval(s,early,true),false,'the observed 4402ms interval remains invalid');
+ assert.equal(captureBucketDue(s.lastBucket,early),false,'do not emit or clear accumulated trades yet');
+ flow.event({a:3,T:next-10,E:next-10,p:100,q:3,m:true},next-10);
+ assert.equal(captureBucketDue(s.lastBucket,next),true);
+ assert.equal(completeCaptureInterval(s,next,true),true,'4602ms is within the original 4500..5500 bounds');
+ assert.equal(Math.floor(next/5000),Math.floor(early/5000),'same five-second grid cell');
+ const m=flow.metrics(next);assert.equal(m.buy_quote_5s,200);assert.equal(m.sell_quote_5s,300);assert.equal(m.trade_count,2);assert.equal(m.flow_causal,true);
+ s.lastBucket=next;flow.reset();
+ assert.equal(captureBucketDue(s.lastBucket,next+200),false,'one row per grid cell');
+ assert.equal(flow.metrics(next+200).trade_count,0);
+});
+
+test('bucket admission keeps delayed clocks, stream gaps and new-symbol warmup fail-closed',()=>{
+ const s={lastBucket:10000,started:0,book:{syncAt:0},marketResetAt:0,marketSequenceVerified:true};
+ assert.equal(captureBucketDue(s.lastBucket,17000),true,'persist an actual overdue interval, never synthesize missing rows');
+ assert.equal(completeCaptureInterval(s,17000,true),false);
+ assert.equal(captureBucketDue(s.lastBucket,9000),false,'clock reversal cannot emit a future observation');
+ assert.equal(captureBucketDue(s.lastBucket,15000),true);
+ assert.equal(completeCaptureInterval({...s,marketSequenceVerified:false},15000,true),false);
+ assert.equal(completeCaptureInterval({...s,book:{syncAt:11000}},15000,true),false);
+ assert.equal(completeCaptureInterval(s,15000,false),false);
+ assert.equal(captureBucketDue(14900,15000),false,'new-symbol warmup does not advance other symbol clocks');
+ assert.equal(captureBucketDue(s.lastBucket,15000),true);
+});
 test('snapshot is unusable until bridging event; loss of sequence rejects',()=>{const b=new Book();b.snapshot(snap);assert.equal(b.metrics(1000).book_complete,false);b.event({...event(11),U:10},1000);assert.equal(b.metrics(1000).book_complete,true);assert.throws(()=>b.event(event(14,12),1100),/GAP/);});
 test('synthetic USD-M snapshot boundary: first diff U=lastUpdateId+1 bridges without resync',()=>{
  const b=new Book();b.event({U:11,u:12,pu:10,E:1000,b:[],a:[]},1000);

@@ -101,6 +101,13 @@ export function retireMarketCapture(s,now){
 export function snapshotStillCurrent(s,generation,socket){
   return s.bookGeneration===generation && s.socket===socket;
 }
+// A late timer tick must not make the following bucket artificially short.
+// Wait without resetting flow until the existing minimum interval is present.
+// Emit overdue intervals as-is so completeCaptureInterval still rejects them.
+export function captureBucketDue(lastBucket,now){
+  return Number.isSafeInteger(lastBucket)&&Number.isSafeInteger(now)&&
+    Math.floor(now/5000)>Math.floor(lastBucket/5000)&&now-lastBucket>=4500;
+}
 export function completeCaptureInterval(s,now,marketOpen){
   return s.started<=s.lastBucket && s.book.syncAt<=s.lastBucket &&
     s.marketResetAt<=s.lastBucket && s.marketSequenceVerified && marketOpen &&
