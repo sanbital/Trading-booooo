@@ -415,6 +415,9 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
       recheck_sequence:sequence,initial_snapshot_hash:String(ticket?.snapshotHash??''),trigger_at_ms:num(f.v17Setup?.triggerAt)};
     key=await hash({version:RECHECK_VERSION,identity,purpose});
     record={version:RECHECK_VERSION,kind:'FD1_FINAL_RECHECK',purpose,recheck_sequence:sequence,api_approval_ref:config.approvalRef,identity,reserved_usd:0.10,
+      // The provider dispatch fence and expired-worker recovery must use this
+      // same immutable candidate deadline. Never invent a longer recheck TTL.
+      expires_at_ms:deadline,
       source_commit:RECHECK_VERSION+':'+ECONOMY_VERSION+':LOSSLESS_FULL24_RECHECK_V1',
       prompt_hash:await hash(RECHECK_PROMPT+ARBITRATION_PROMPT+economyRecheckPrompt.toString()+recheckCaptureInput.toString()+recheckModelInput.toString()),detection,packet:null,result:null};
     let claimed,attempt=1;
