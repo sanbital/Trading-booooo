@@ -21,6 +21,12 @@ test('stored replay pairs the actual final packet with its final clock after pre
 
 test('production ONE recheck preserves all three complete paths and every original cell',()=>{
   const original=structuredClone(fixture.packet),input=recheckModelInput(original);
+  const window=input.horizon_definitions.windows.s60;
+  assert.equal(input.horizon_definitions.unit,'seconds');assert.equal(window.nominal_seconds,60);
+  assert.equal(window.start_ms,original.facts.capture_context.trajectory.at(-12).start_ms);
+  assert.equal(window.end_ms,original.facts.capture_context.end_ms);
+  assert.equal(window.actual_seconds,original.facts.capture_context.dynamics.horizons.s60.actual_seconds);
+  assert.match(recheckPayload(original).input[0].content,/For RECHECK these definitions describe current.capture_context/);
   const pairs=[[original.initial.capture_context,input.initial.capture_context],
     [original.facts.capture_context,input.current.capture_context],
     [original.pre_dispatch.capture_context,input.fast_recheck.capture_context]];

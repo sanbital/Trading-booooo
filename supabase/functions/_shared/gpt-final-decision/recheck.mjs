@@ -1,6 +1,7 @@
 import {sameClockCapture} from '../leader20/clock.mjs';
 import {LEADER20_PROMPT,leaderDecision} from '../leader20/decision-contract.mjs';
 import {ECONOMY_VERSION} from './economy-prompt.mjs';
+import {horizonDefinitions} from './horizon-time.mjs';
 /** GPT FINAL RECHECK (FD1-RC1): the pre-dispatch confirmation of an INITIAL GPT BUY.
  *
  * GPT stays the only strategy decision maker. This module adds no strategy gate:
@@ -334,7 +335,8 @@ export function recheckModelInput(packet){
       {reference:'current.capture_context',meaning:'Exact same complete capture; supplied once'}:
       recheckCaptureInput(packet.pre_dispatch.capture_context):null;
   return {t:RECHECK_TASK,candidate_id:packet.candidate_id,symbol:packet.symbol,data_mode:packet.data_mode,
-    ...(dynamicEnabled(packet)?{dynamic_policy:packet.dynamic_policy,dynamic_as_of_ms:packet.dynamic_as_of_ms}:{}),...(packet.leader20?{leader20:packet.leader20}:{}),
+    ...(dynamicEnabled(packet)?{dynamic_policy:packet.dynamic_policy,dynamic_as_of_ms:packet.dynamic_as_of_ms,
+      horizon_definitions:horizonDefinitions(packet.facts.capture_context)}:{}),...(packet.leader20?{leader20:packet.leader20}:{}),
     initial:{decision:packet.initial.decision,summary:packet.initial.summary,support:packet.initial.support,
       facts:Object.fromEntries(Object.entries(packet.initial.facts).filter(([,x])=>x!==null).map(([k,x])=>[k,round(x)])),
       assessment:entryAssessment(packet.initial.facts??{}),capture_context:recheckCaptureInput(packet.initial.capture_context,{fullPath:leaderDecision(packet)})},
@@ -420,7 +422,7 @@ export async function runFinalRecheck({signal,ticket,detection,preDispatch,store
       // same immutable candidate deadline. Never invent a longer recheck TTL.
       expires_at_ms:deadline,
       source_commit:RECHECK_VERSION+':'+ECONOMY_VERSION+':LOSSLESS_FULL24_RECHECK_V1',
-      prompt_hash:await hash(RECHECK_PROMPT+ARBITRATION_PROMPT+economyRecheckPrompt.toString()+recheckCaptureInput.toString()+recheckModelInput.toString()),detection,packet:null,result:null};
+      prompt_hash:await hash(RECHECK_PROMPT+ARBITRATION_PROMPT+DYNAMIC_PROMPT+economyRecheckPrompt.toString()+recheckCaptureInput.toString()+recheckModelInput.toString()),detection,packet:null,result:null};
     let claimed,attempt=1;
     try{
       // A sequence with a final answer remains single-use. Only a completed timeout
