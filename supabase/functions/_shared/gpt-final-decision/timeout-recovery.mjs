@@ -8,7 +8,14 @@ export function isReviewTimeout(result){
 }
 /** Acquisition delay is recoverable, but is not a provider timeout or a market opinion. */
 export function isReviewRecoverable(result){
-  return isReviewTimeout(result)||result?.valid!==true&&['DYNAMIC_INFERENCE_CAPTURE_NOT_READY','RETRY_CAPTURE_NOT_ADVANCED',
+  // A rejected reservation made no provider call. Reuse the existing fresh-capture,
+  // original-deadline and four-attempt recovery, never the stale account snapshot.
+  // Actual full slots, pending orders, exhausted budgets and ambiguous calls stay blocked.
+  const accountPending=result?.valid===false&&result.attempted===false&&result.api_cost_usd===0&&
+    result.error==='API_NO_ENTRY_CAPACITY'&&result.budget_block?.created===false&&
+    result.budget_block.reason==='API_NO_ENTRY_CAPACITY'&&
+    result.budget_block.capacity?.reason==='ACCOUNT_SNAPSHOT_STALE_OR_INCOMPLETE';
+  return accountPending||isReviewTimeout(result)||result?.valid!==true&&['DYNAMIC_INFERENCE_CAPTURE_NOT_READY','RETRY_CAPTURE_NOT_ADVANCED',
     'RC_RETRY_CAPTURE_NOT_ADVANCED','RC_BATCH_CAPTURE_NOT_ADVANCED',
     'DYNAMIC_TRAJECTORY_STALE_OR_FUTURE'].includes(result?.error);
 }
