@@ -104,6 +104,7 @@ export function snapshotStillCurrent(s,generation,socket){
 // A late timer tick must not make the following bucket artificially short.
 // Wait without resetting flow until the existing minimum interval is present.
 // Emit overdue intervals as-is so completeCaptureInterval still rejects them.
+export function initialBucketBoundary(now){return Math.floor(now/5000)*5000;}
 export function captureBucketDue(lastBucket,now){
   return Number.isSafeInteger(lastBucket)&&Number.isSafeInteger(now)&&
     Math.floor(now/5000)>Math.floor(lastBucket/5000)&&now-lastBucket>=4500;

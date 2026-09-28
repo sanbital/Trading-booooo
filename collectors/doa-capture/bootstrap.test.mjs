@@ -1,9 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {exchangeMinuteWeight,restWeightLimit,recoveryOrder} from './bootstrap.mjs';
-import {WeightBudget,Book,completeCaptureInterval} from './core.mjs';
+import {WeightBudget,Book,completeCaptureInterval,captureBucketDue,initialBucketBoundary} from './core.mjs';
 const slot=1800000,window={version:'TOP20_CLOCK_CAPTURE_1',slot_ms:slot};
 const candidates=Array.from({length:20},(_,i)=>({symbol:`C${i}USDT`,roles:['SCANNER_LEADER'],book:new Book()}));
+
+test('new sockets at every timer phase align before capture without certifying a partial first interval',()=>{
+ for(let phase=1;phase<5000;phase+=137){
+  const connected=slot-150000+phase;
+  const s={started:connected,lastBucket:initialBucketBoundary(connected),marketResetAt:connected,marketSequenceVerified:true,book:{syncAt:connected}};
+  let first=true,valid=0;
+  for(let now=connected+200;now<=slot;now+=200){
+   if(!captureBucketDue(s.lastBucket,now))continue;
+   const complete=completeCaptureInterval(s,now,true);
+   if(first){assert.equal(complete,false);first=false;}
+   if(now>=slot-120000){assert.ok(now%5000<1000);assert.equal(complete,true);valid++;}
+   s.lastBucket=now;
+  }
+  assert.equal(valid,24);
+ }
+});
 test('clock REST capacity admits all twenty real depth snapshots without relaxing book or interval checks',()=>{
  const budget=new WeightBudget(),at=slot-150000,limit=restWeightLimit(window,candidates,at,2400);
  assert.equal(limit,600);

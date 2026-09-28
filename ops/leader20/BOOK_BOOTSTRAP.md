@@ -5,6 +5,13 @@ The old rolling REST budget of 100 weight can initialize at most five depth1000
 books per minute, before retries. Twenty initial books need 400 weight. Repeated
 attempts in watch order could also consume the allowance before later candidates.
 
+The 12:40 UTC cohort also exposed timer phase drift: ALGO had 25 complete books,
+but its first persisted seed ended 1.227 seconds after its grid timestamp and was
+correctly rejected. New socket state now anchors only its initial timer to the
+five-second grid. Actual connection and book synchronization timestamps continue
+to reject the first partial interval. Later intervals retain their actual ends;
+no timestamp rounding or validity tolerance is introduced for captured evidence.
+
 During an admitted candidate preparation/capture only, use min(600, one quarter
 of live exchangeInfo's minute REQUEST_WEIGHT limit). Retain 100 otherwise, including
 missing limit metadata, unfunded/empty watches and held-only watches. The same

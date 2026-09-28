@@ -1,6 +1,6 @@
 import {captureDisposition} from './clock.mjs';
 import {exchangeMinuteWeight,restWeightLimit,recoveryOrder} from './bootstrap.mjs';
-import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue} from './core.mjs';
+import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue,initialBucketBoundary} from './core.mjs';
 import {randomUUID} from 'node:crypto';
 import {summarizeCapture} from './context.mjs';
 const endpoint=process.env.CAPTURE_ENDPOINT;
@@ -29,7 +29,10 @@ async function publicGet(path,weight){
 }
 function enqueue(row){const key=row.kind+':'+row.symbol+':'+row.at;if(seen.has(key))return;seen.set(key,Date.now());queue.set(key,row);if(queue.size>1200)throw Error('PERSIST_QUEUE_CAP');}
 function connect(symbol,candles){
-  const s={symbol,candles,book:new Book(),flow:new Flow(),ring:[],socket:null,marketSocket:null,started:Date.now(),lastBucket:Date.now(),marketResetAt:Date.now(),marketSequenceVerified:true,bookGeneration:0,lastTradeAt:0,lastCandle:null,needBackfill:candles,bookReconnectAt:0,marketReconnectAt:0};
+  const now=Date.now();
+  // Only the first timer anchor uses the grid. Actual connection/sync times still
+  // invalidate its partial interval; every later interval uses its real end.
+  const s={symbol,candles,book:new Book(),flow:new Flow(),ring:[],socket:null,marketSocket:null,started:now,lastBucket:initialBucketBoundary(now),marketResetAt:now,marketSequenceVerified:true,bookGeneration:0,lastTradeAt:0,lastCandle:null,needBackfill:candles,bookReconnectAt:0,marketReconnectAt:0};
   states.set(symbol,s);openSocket(s);return s;
 }
 function openSocket(s){
