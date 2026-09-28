@@ -23,6 +23,31 @@ No strategy, position sizing, budget, freshness/spread/gap limit, capture window
 retry count, exchange lease or deadline is relaxed. PR #258 remains intact.
 Expired signals are never replayed.
 
+The named `clockExecutionStep` obtains a new gateway quote; admission/E1 `q`
+cannot be passed to it. Each safety boundary refreshes a stale gateway response
+once, with a maximum of two refreshes across the execution attempt. Timeout is
+bounded by remaining slot TTL. Refreshes never send orders, re-run AI or acquire
+another trajectory. Execution metadata is held separately from the frozen ticket.
+
+Wake analysis: NMR's API answer completed at 14:21:14.669 UTC and its durable
+journal completed at 14:21:14.820075. The admission quote arrived at 14:21:32.105;
+the first safety check ran at 14:21:34.298. The latter 2193ms is directly evidenced.
+Historical wake/lease timestamps were not recorded, so the preceding 17.285s
+cannot be attributed exactly between resumption, queue work and prerequisites.
+There is no fixed 20-second clock-BUY sleep. Code inspection found sequential
+review reads and unrelated WAIT/SKIP lifecycle writes before execution. Clock
+review reads now have bounded concurrency four, results keep queue order, a
+durably validated ready BUY is prioritized by the existing resume mechanism,
+and unrelated diagnostics remain attached to the request without blocking it.
+Protection/exit scheduling and lease admission remain unchanged.
+
+The additive execution journal records every valid clock BUY plus wake, execution,
+quote, intent, actual gateway-send and exchange fill timestamps when known. It
+derives GPT-to-wake/quote/order and quote-to-order latency. First execution failure
+is preserved independently of later terminal expiry. Existing facts are backfilled;
+unknown historical timestamps remain NULL. Journal writes use existing audit/order
+transactions or background wake notes, never an await between quote and send.
+
 Regression coverage executes the actual IOC dispatcher with the original NMR
 coordinator and a mock exchange: slow durable I/O followed by a fresh quote sends
 once without a new capture or AI call. Stale/missing/unavailable quotes,

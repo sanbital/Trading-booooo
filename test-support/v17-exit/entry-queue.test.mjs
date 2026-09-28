@@ -1,4 +1,5 @@
 import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
+import {clockReviewDiagnostics} from '../../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 // Every signal from one 5m bar expires together at signal5Close+120s, but the executor runs
 // once a minute and used to price exactly one candidate per run. So one refusal killed the
 // whole bar: on 2026-09-09 13:30 IOSTUSDT no-filled at 13:31, and BULLAUSDT and XTZUSDT were
@@ -280,6 +281,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
     rec: x => (x && typeof x === 'object' && !Array.isArray(x) ? x : {}),
     openNow: model.pair().positions, manual: [], signalRanges, seen, SIGNAL_MAX: 1_200_000,
     REVISION: 'V11-LONG-REGIME-1.0.1', STRATEGY: 'P10',
+    clockReviewDiagnostics,
     gptFilterExecutable: async (_db, executable, options) => reviews ? reviews(executable, options) :
       ({candidates: executable, reason: 'TEST_GPT_PASS', reviews: executable.map(s => ({signalId: s.id, allowed: true}))}),
     ...lifecycle,lifecycleNote, gptTerminalReason, notes, terminals, attempts, model,PATCH:'TEST',

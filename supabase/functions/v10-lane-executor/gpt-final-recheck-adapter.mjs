@@ -21,6 +21,12 @@ import {CLOCK_FINAL,clockExecutionSafety,clockTicketCheck} from '../_shared/lead
 import {sameClockCapture} from '../_shared/leader20/clock.mjs';
 export {RECHECK_VERSION,postRecheckSafety};
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
+const clockTraces=new WeakMap();
+export function clockExecutionTrace(ticket){
+ if(!clockTraces.has(ticket))clockTraces.set(ticket,{gpt_buy_completed_at:ticket.clockFinalAuthority?.completed_at_ms,
+  old_quote_used:false,quote_refresh_attempts:0,quote_requests:0});
+ return clockTraces.get(ticket);
+}
 let testHooks=null;
 /** Test-only dependency injection (store, config, apiKey, fetchFn, log). */
 export function setRecheckTestHooks(h){testHooks=h;}
@@ -66,16 +72,53 @@ export function executionDynamicSafety(s,ticket,record,at){
 /** Final venue boundary: intent/lease I/O is already complete. Never restamp an
  * old quote or widen its 1000ms limit. Reuse the frozen strategy authority only. */
 export async function authorizeClockExecution(s,ticket,record,readQuote,authorize,{now=Date.now}={}){
-  const identity=leaderIdentity(s),bound=clockTicketCheck(ticket,identity,now());
-  if(!bound.ok)return {allowed:false,reason:bound.reason};
-  let quote;try{quote=await readQuote();}catch{return {allowed:false,reason:'CLOCK_EXECUTION_QUOTE_UNAVAILABLE'};}
-  const at=now(),safety=clockExecutionSafety(ticket,identity,quote,at);
+  const {quote,safety,at}=await readClockExecutionQuote(s,ticket,readQuote,{now});
   record.dispatch_quote=quote;record.execution_safety=safety;
   if(!safety.ok)return {allowed:false,reason:safety.reason};
   const checked=authorize();
   return {...checked,clock_execution_safety:{...safety,checked_at_ms:at,received_at_ms:quote.timing.received_at_ms,
     bid:quote.best_bid,ask:quote.best_ask,slot_ms:ticket.clockFinalAuthority.slot_ms,
-    expires_at_ms:ticket.clockFinalAuthority.expires_at_ms}};
+    expires_at_ms:ticket.clockFinalAuthority.expires_at_ms,telemetry:{...clockExecutionTrace(ticket)}}};
+}
+/** Quote refresh is not an order retry: no provider/capture/order call occurs here.
+ * Only an actually stale gateway response is refreshed, at most once per boundary. */
+export async function readClockExecutionQuote(s,ticket,readQuote,{now=Date.now}={}){
+ const t=clockExecutionTrace(ticket);
+ const identity=leaderIdentity(s);
+ let quote=null,safety,at=now();
+ for(let attempt=0;attempt<2;attempt++){
+  if(attempt&&t.quote_refresh_attempts>=2)break; // At most two refreshes across this execution attempt.
+  at=now();safety=clockTicketCheck(ticket,identity,at);if(!safety.ok)break;
+  t.fresh_quote_requested_at=at;t.quote_requests++;if(attempt)t.quote_refresh_attempts++;
+  try{quote=await readQuote(Math.max(1,Math.min(3000,ticket.expires-at)));}
+  catch{safety={ok:false,reason:'CLOCK_EXECUTION_QUOTE_UNAVAILABLE'};break;}
+  at=now();safety=clockExecutionSafety(ticket,identity,quote,at);
+  const received=quote?.timing?.received_at_ms;
+  t.fresh_quote_received_at=Number.isSafeInteger(received)?received:null;
+  t.quote_age_ms=Number.isSafeInteger(received)?at-received:null;
+  t.quote_after_gpt_ms=Number.isSafeInteger(received)?received-t.gpt_buy_completed_at:null;
+  if(safety.reason!=='CLOCK_EXECUTION_QUOTE_STALE')break;
+ }
+ if(now()>=ticket.expires)safety={ok:false,reason:'CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION'};
+ t.clock_safety_result=safety.ok?'PASS':safety.reason;
+ if(!safety.ok)t.execution_failure_reason??=safety.reason;
+ return {quote,safety,at};
+}
+/** Named clock path: fresh quote safety only, with the original immutable BUY. */
+export async function clockExecutionStep(s,ticket,readQuote,{now=Date.now,sequence=1}={}){
+ const {quote,safety,at}=await readClockExecutionQuote(s,ticket,readQuote,{now});
+ const record=clockExecutionRecord(ticket,quote,safety,at,sequence);
+ return {proceed:safety.ok,decision:safety.ok?'BUY_NOW':'WAIT',reason:safety.ok?'CLOCK_FINAL_BUY_TO_EXECUTION':safety.reason,record};
+}
+function clockExecutionRecord(ticket,rawQuote,safety,at,sequence){
+ return {version:CLOCK_FINAL,clock_final_authority:ticket.clockFinalAuthority,recheck_sequence:sequence,
+  initial_gpt_decision:'BUY',initial_gpt_at:ticket.initial.completedAt,initial_snapshot_at:ticket.initial.snapshotAt,
+  initial_snapshot_hash:ticket.snapshotHash,initial_context:ticket.initial,pre_dispatch_at:at,
+  pre_dispatch_snapshot:preDispatchSnapshot({at,rawQuote}),dispatch_quote:rawQuote,
+  dispatch_capture:ticket.initial.capture_context,dynamic_policy:DYNAMIC_VERSION,
+  recheck_triggered:false,recheck_reasons:[],deltas:{},final:null,final_gpt_decision:'BUY',
+  final_gpt_at:ticket.initial.completedAt,max_rechecks:0,execution_safety:safety,
+  clock_execution_telemetry:clockTraces.get(ticket)??null};
 }
 /**
  * @returns {proceed:boolean, reason:string, record:object}
@@ -86,13 +129,7 @@ export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,pur
   dataMode='LIVE',asOf=null,sequence=1,fetchFn=null}){
   if(ticket?.clockFinalAuthority){
     const at=asOf??now(),safety=clockExecutionSafety(ticket,leaderIdentity(s),rawQuote,at);
-    const record={version:CLOCK_FINAL,clock_final_authority:ticket.clockFinalAuthority,recheck_sequence:sequence,
-      initial_gpt_decision:'BUY',initial_gpt_at:ticket.initial.completedAt,initial_snapshot_at:ticket.initial.snapshotAt,
-      initial_snapshot_hash:ticket.snapshotHash,initial_context:ticket.initial,pre_dispatch_at:at,
-      pre_dispatch_snapshot:preDispatchSnapshot({at,rawQuote}),dispatch_quote:rawQuote,
-      dispatch_capture:ticket.initial.capture_context,dynamic_policy:DYNAMIC_VERSION,
-      recheck_triggered:false,recheck_reasons:[],deltas:{},final:null,final_gpt_decision:'BUY',
-      final_gpt_at:ticket.initial.completedAt,max_rechecks:0,execution_safety:safety};
+    const record=clockExecutionRecord(ticket,rawQuote,safety,at,sequence);
     return {proceed:safety.ok,decision:safety.ok?'BUY_NOW':'WAIT',
       reason:safety.ok?'CLOCK_FINAL_BUY_TO_EXECUTION':safety.reason,record};
   }

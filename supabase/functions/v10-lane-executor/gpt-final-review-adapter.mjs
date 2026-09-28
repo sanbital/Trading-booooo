@@ -73,17 +73,43 @@ export async function gptFilterExecutable(db,executable,{completedOnly=false}={}
     return {candidates:[],reason:'GPT_SHADOW_NO_NEW_ENTRY',reviews:[]};
   }
   const candidates=[],reviews=[];
-  for(const s of executable){
+  const reviewOne=async s=>{
     if(isLeader20(s)){
-      try{await requireEntryAuthority(db,s);}catch(error){reviews.push({signalId:s.id,allowed:false,reason:String(error.message)});continue;}
+      try{await requireEntryAuthority(db,s);}catch(error){return {signalId:s.id,allowed:false,reason:String(error.message)};}
     }
-    const r=await c.consider(s,{completedOnly});reviews.push({signalId:s.id,...r});if(r.allowed)candidates.push(s);
+    const r=await c.consider(s,{completedOnly});
+    const ticket=c.tickets?.get(String(s.id));
+    if(r.allowed&&ticket?.clockFinalAuthority){
+      if(!c.clockWakeAt.has(String(s.id)))c.clockWakeAt.set(String(s.id),c.now());
+      if(!c.injected)c.schedule((async()=>{
+        const out=await db.rpc('leader20_clock_execution_note',{p_signal_id:s.id,p_trace:{executor_wake_at:c.clockWakeAt.get(String(s.id))}});
+        if(out.error)console.error('CLOCK_EXECUTOR_WAKE_NOTE_FAILED',s.id);
+      })().catch(()=>console.error('CLOCK_EXECUTOR_WAKE_NOTE_FAILED',s.id)));
+    }
+    return {signalId:s.id,...r};
+  };
+  // Clock snapshot/authority reads are independent. Keep concurrency bounded;
+  // results retain queue order and all durable provider/entry claims are unchanged.
+  const width=executable.every(s=>s.features?.leader20?.entry_window)?4:1;
+  for(let i=0;i<executable.length;i+=width){
+    const group=executable.slice(i,i+width),rows=await Promise.all(group.map(reviewOne));
+    reviews.push(...rows);for(let j=0;j<group.length;j++)if(rows[j].allowed)candidates.push(group[j]);
   }
   const pending=reviews.some(r=>r.reason==='GPT_REVIEW_PENDING');
   c.yieldArmed=candidates.length===0&&pending;
   return {candidates,reason:pending?'GPT_REVIEW_PENDING':reviews.at(-1)?.reason??'GPT_NO_CANDIDATE',reviews};
 }
 export function gptReviewReadyToResume(db){return coordinatorFor(db).consumeReadyYield();}
+export function gptClockWakeAt(db,s){return coordinatorFor(db).clockWakeAt?.get(String(s.id))??null;}
+/** Clock BUY admission takes priority over unrelated WAIT/SKIP lifecycle writes.
+ * Writes remain attached to the Edge request and keep their original CAS guards. */
+export async function clockReviewDiagnostics(db,reviewed,write){
+  const task=write();
+  if(reviewed.candidates?.some(s=>s.features?.leader20?.entry_window)){
+    coordinatorFor(db).schedule(task.catch(()=>console.error('CLOCK_REVIEW_DIAGNOSTICS_FAILED')));return;
+  }
+  return await task;
+}
 /** Arm the one follow-up cycle (see runWithGptReview) for GPT BUY candidates a run entered
  * past; true only if one of them can still be rechecked inside its trigger window. */
 export function gptArmFollowUp(db,signals,switches=recoverySwitches()){
