@@ -2,7 +2,7 @@
 
 ## Current monthly cost profile
 
-The user's later USD 50/month limit supersedes the original Top20 AI cadence and daily budget below. See [MONTHLY_COST_PROFILE.md](MONTHLY_COST_PROFILE.md): numerical Top20 ranking remains, active observation is Top10 plus held/unsettled symbols and BTC, with AI capped at USD 45/month and USD 1.25/day. Private archive limits are 4 GiB hot and 8 GiB compressed cold. PR #215 implements that profile; PR #216 fixes deployment checkout history. Earlier observation-only gates below describe the initial release, not the current authorization.
+As of 2026-09-28 04:00 UTC the current contract is OpenAI USD100/month plus DeepSeek USD100/month. Both provider ledgers are enabled; USD50/100 daily ceilings are secondary limits. Top10 observation remains once a minute, fixed-slot DeepSeek review is every ten minutes, and fast reviews do not postpone that clock. See [the current campaign release and production evidence](CAMPAIGN_EXECUTION_20260928.md). The older USD45/50/95 profiles and observation-only gates below are historical, not current spending authorization. Archive limits remain 4 GiB hot and 8 GiB compressed cold.
 
 `leader20_status()` now reports active ownership and current storage/epoch controls separately from performance validation. Its readiness field does not certify per-symbol capture, an order, a fill, a 48-hour replay, or profitability. `observation-status.sql` distinguishes all 20 ranking members from the configured watched subset. Actual activation, source-parity and trade observations must be recorded in the private operating report.
 

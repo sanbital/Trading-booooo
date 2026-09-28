@@ -1,5 +1,11 @@
 # Monthly cost profile
 
+Historical profile below; superseded on 2026-09-28. Current caps are OpenAI
+USD100/month and DeepSeek USD100/month, both enforced independently. Daily
+USD50/100 values are secondary ceilings. Fixed Top10 periodic review is ten minutes.
+See [current production evidence](CAMPAIGN_EXECUTION_20260928.md). Do not restore
+these historical values through an old release script.
+
 User authorization, 2026-09-27: AI plus incremental storage must stay within USD 50/month. Existing server fees are separate; optimize Fly and storage as well. The earlier proposed USD 5,000/day increase was never applied and is superseded.
 
 - AI: USD 45 per UTC calendar month, USD 1.25 per UTC day, 100 review jobs/day maximum. A review job may call GPT FIRST, DeepSeek and GPT FINAL, so jobs are not individual provider requests. Claims are serialized across the monthly ledger; completed known costs settle in full, unknown costs keep the reservation. Provider request byte/output limits bound one three-provider job below its USD 0.25 reservation at the configured price cards.
