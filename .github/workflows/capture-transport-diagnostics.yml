@@ -8,17 +8,17 @@ permissions:
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 4
     steps:
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
-      - name: Read existing collector logs and machine status
+      - name: Read bounded contemporaneous CPU scheduling and collector logs
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           flyctl logs --no-tail --app sanbital-doa-capture-20260925
           flyctl machine status 185030da006d48 --app sanbital-doa-capture-20260925
-          flyctl ssh console --app sanbital-doa-capture-20260925 --command 'cat /proc/stat'
-          sleep 15
-          flyctl ssh console --app sanbital-doa-capture-20260925 --command 'cat /proc/stat'
+          flyctl ssh console --app sanbital-doa-capture-20260925 --command "sh -c 'echo c2V0IC1ldQpub2RlX3BpZHM9IiIKZm9yIGYgaW4gL3Byb2MvWzAtOV0qL2NvbW07IGRvCiAgcmVhZCAtciBjb21tIDwgIiRmIiB8fCBjb250aW51ZQogIGlmIFsgIiRjb21tIiA9IG5vZGUgXTsgdGhlbiBwPSIke2YjL3Byb2MvfSI7IHA9IiR7cCUvY29tbX0iOyBub2RlX3BpZHM9IiRub2RlX3BpZHMgJHAiOyBmaQpkb25lCnByaW50ZiAnTk9ERV9QSURTJXNcbicgIiRub2RlX3BpZHMiCmk9MAp3aGlsZSBbICIkaSIgLWx0IDEyMCBdOyBkbwogIHByaW50ZiAnU0FNUExFICc7IGRhdGUgLXUgKyVZLSVtLSVkVCVIOiVNOiVTWgogIHByaW50ZiAnVVBUSU1FICc7IGNhdCAvcHJvYy91cHRpbWUKICBoZWFkIC1uIDEgL3Byb2Mvc3RhdAogIGlmIFsgLXIgL3Byb2MvcHJlc3N1cmUvY3B1IF07IHRoZW4gY2F0IC9wcm9jL3ByZXNzdXJlL2NwdTsgZmkKICBpZiBbIC1yIC9zeXMvZnMvY2dyb3VwL2NwdS5zdGF0IF07IHRoZW4gY2F0IC9zeXMvZnMvY2dyb3VwL2NwdS5zdGF0OyBmaQogIGZvciBwIGluICRub2RlX3BpZHM7IGRvCiAgICBpZiBbIC1yICIvcHJvYy8kcC9zY2hlZHN0YXQiIF07IHRoZW4gcHJpbnRmICdOT0RFX1NDSEVEICVzICcgIiRwIjsgY2F0ICIvcHJvYy8kcC9zY2hlZHN0YXQiOyBmaQogIGRvbmUKICBpPSQoKGkrMSkpCiAgc2xlZXAgMQpkb25lCgo= | base64 -d | sh'"
+          flyctl logs --no-tail --app sanbital-doa-capture-20260925
 # Post-capacity verification: same collector, current CPU scheduling and image.
 # Read-only QNT recurrence audit: 2026-09-28T06:45Z.
+# 2026-09-28: two-minute read-only scheduling samples; no process signal, config, restart, or deployment.
