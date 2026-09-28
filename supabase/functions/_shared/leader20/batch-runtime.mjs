@@ -1,11 +1,20 @@
-import {slotFloor} from './clock.mjs';
+import {clockDecisionWindow,DECISION_RESERVE_MS,EXECUTION_MS} from './clock.mjs';
 import {buildBatch,callBatch} from './batch.mjs';
 import {paidTransport} from './paid-transport.mjs';
 import {hash} from '../gpt-final-decision/snapshot-hash.mjs';
 
-// Leave the final minute for DeepSeek, GPT and execution. The frozen slot's
-// absolute 120-second expiry is unchanged; delivery jitter must not lose it at 30s.
-export const CLOCK_BATCH_ADMISSION_MS=60000;
+export const CLOCK_BATCH_ADMISSION_MS=EXECUTION_MS-DECISION_RESERVE_MS;
+const sleepDefault=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+export function batchOutcome(result,window,extra={}){
+ const reason=result.reason??(result.created?'CREATED':'NOT_DUE');
+ return {...result,batch_created:result.created===true,batch_reason:result.created?'CREATED':
+  reason==='CLOCK_CAPTURE_NOT_READY'?'CAPTURE_NOT_READY':reason==='NO_ENTRY_CAPACITY'?'CAPACITY_ZERO':reason,
+  ...(window?{slot_at:new Date(window.slot_ms).toISOString(),capture_start:new Date(window.capture_start_ms).toISOString(),
+   capture_end:new Date(window.capture_end_ms).toISOString(),decision_deadline:new Date(window.decision_deadline_ms).toISOString(),
+   latest_batch_start:new Date(window.latest_batch_start_ms).toISOString(),decision_reserve_ms:window.decision_reserve_ms}:{}),
+  capture_ready_count:0,capture_blocked_count:0,available_slots:null,...extra};
+}
+const pendingCapture=c=>!c||/CAPTURE_READ|INCOMPLETE|MISSING|NOT_READY|INGEST_PENDING|STALE_BUCKET/.test(c.reason??'');
 
 // Closed one-minute candles supply current 1m/5m momentum. The source close
 // timestamp travels with the evidence; missing candles remain explicitly unknown.
@@ -39,29 +48,75 @@ export async function finishEntryBatch(db,batch,result,{sleep=ms=>new Promise(re
   await sleep(1000);
  }
 }
-export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,apiKey=globalThis.Deno?.env?.get('deepseek api')}={}){
- if(ctl.clock_capture_enabled){
-  const phase=now()-slotFloor(now());
-  if(phase<1000||phase>=CLOCK_BATCH_ADMISSION_MS)return {created:false,reason:'CLOCK_BATCH_NOT_DUE'};
+export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sleepDefault,apiKey=globalThis.Deno?.env?.get('deepseek api')}={}){
+ const requested=now();let window=ctl.clock_capture_enabled?clockDecisionWindow(requested):null;
+ let stats={capture_ready_count:0,capture_blocked_count:0,available_slots:null,retry_count:0};
+ const outcome=r=>batchOutcome(r,window,stats);
+ const note=async(data)=>{
+  if(!window)return;
+  const r=await db.rpc('leader20_clock_note',{p_slot_at:new Date(window.slot_ms).toISOString(),p_data:data});
+  if(r.error)throw Error('CLOCK_TELEMETRY:'+r.error.message);
+ };
+ if(window){
+  if(requested>=window.decision_deadline_ms)return outcome({created:false,reason:'DECISION_WINDOW_EXPIRED'});
   const current=await batchControl(db);
-  if(Date.parse(current.last_periodic_slot)>=slotFloor(now()))return {created:false,reason:'NOT_DUE'};
+  window=clockDecisionWindow(requested,current.decision_reserve_ms??DECISION_RESERVE_MS);
+  if(Date.parse(current.last_periodic_slot)>=window.slot_ms)return outcome({created:false,reason:'NOT_DUE'});
+  await note({batch_requested_at:new Date(requested).toISOString(),slot_status:'BATCH_WAITING',decision_reserve_ms:window.decision_reserve_ms});
+  if(now()>=window.latest_batch_start_ms){
+   await note({batch_reason:'DECISION_WINDOW_INSUFFICIENT',slot_status:'EXPIRED'});
+   return outcome({created:false,reason:'DECISION_WINDOW_INSUFFICIENT'});
+  }
  }
  const capacity=await db.rpc('leader20_batch_capacity');
  if(capacity.error)throw Error('BATCH_CAPACITY_UNAVAILABLE');
+ stats.available_slots=capacity.data.available;
  if(capacity.data.available<1){
   const marked=await db.rpc('leader20_batch_note_full');if(marked.error)throw Error('BATCH_CAPACITY_NOTE');
-  return {created:false,reason:capacity.data.reason};
+  await note({available_slots:capacity.data.available,batch_reason:capacity.data.reason==='NO_ENTRY_CAPACITY'?'CAPACITY_ZERO':capacity.data.reason,slot_status:'BATCH_WAITING'});
+  return outcome({created:false,reason:capacity.data.reason});
  }
  const members=await db.from('leader20_members').select('symbol,rank').eq('epoch_id',ctl.epoch_id).lte('rank',ctl.clock_capture_enabled?20:10).order('rank');
  if(members.error)throw Error('BATCH_MEMBERSHIP_READ');
- const at=now();
- const rows=await Promise.all(members.data.map(async m=>{
+ let rows,packet;
+ for(let attempt=0;attempt<160;attempt++){
+  if(window&&now()>=window.latest_batch_start_ms){
+   await note({...stats,batch_reason:'DECISION_WINDOW_INSUFFICIENT',slot_status:'EXPIRED'});
+   return outcome({created:false,reason:'DECISION_WINDOW_INSUFFICIENT'});
+  }
+  const at=now();
+  rows=await Promise.all(members.data.map(async m=>{
   try{
    const r=await db.rpc('doa_context_for_role_v1',{p_symbol:m.symbol,p_as_of:new Date(at).toISOString(),p_role:'TRADE_CANDIDATE',p_position_id:null});
-   if(r.error)throw Error('CAPTURE_READ');return {...m,capture:r.data,market_context:await batchMomentum(m.symbol,at,fetchFn)};
+   if(r.error)throw Error('CAPTURE_READ');return {...m,capture:r.data};
   }catch{return {...m,capture:{status:'UNAVAILABLE',reason:'CAPTURE_READ'}};}
- }));
- const packet=await buildBatch(rows,{asOf:at,epochId:ctl.epoch_id,generation:ctl.generation,held:capacity.data.held});
+  }));
+  packet=await buildBatch(rows,{asOf:now(),epochId:ctl.epoch_id,generation:ctl.generation,held:capacity.data.held});
+  stats.capture_ready_count=packet.symbols.filter(s=>s.state==='READY').length;
+  stats.capture_blocked_count=packet.symbols.length-stats.capture_ready_count;
+  if(!window||stats.capture_ready_count>0&&!rows.some(r=>!capacity.data.held?.includes(r.symbol)&&pendingCapture(r.capture)))break;
+  await note({...stats,batch_reason:'CAPTURE_NOT_READY',slot_status:'BATCH_WAITING'});
+  const delay=Math.min(1000,250*2**Math.min(attempt,2),window.latest_batch_start_ms-now());
+  if(delay<=0)continue;
+  const before=now();await sleep(delay);stats.retry_count++;
+  // A non-advancing injected/test clock cannot create an unbounded live loop.
+  if(now()<=before)return outcome({created:false,reason:'CLOCK_CAPTURE_NOT_READY'});
+  const current=await batchControl(db);
+  if(Date.parse(current.last_periodic_slot)>=window.slot_ms)return outcome({created:false,reason:'NOT_DUE'});
+ }
+ if(window&&(!stats.capture_ready_count||now()>=window.latest_batch_start_ms)){
+  await note({...stats,batch_reason:'DECISION_WINDOW_INSUFFICIENT',slot_status:'EXPIRED'});
+  return outcome({created:false,reason:'DECISION_WINDOW_INSUFFICIENT'});
+ }
+ const readyAt=now();
+ // Momentum is also bounded by T, not shifted to a later minute during retries.
+ rows=await Promise.all(rows.map(async r=>({...r,market_context:await batchMomentum(r.symbol,window?.slot_ms??now(),fetchFn)})));
+ packet=await buildBatch(rows,{asOf:now(),epochId:ctl.epoch_id,generation:ctl.generation,held:capacity.data.held});
+ if(window&&(now()>=window.latest_batch_start_ms||packet.symbols.some(s=>s.state==='READY'&&s.entry_window?.slot_ms!==window.slot_ms))){
+  await note({...stats,batch_reason:'DECISION_WINDOW_INSUFFICIENT',slot_status:'EXPIRED'});
+  return outcome({created:false,reason:'DECISION_WINDOW_INSUFFICIENT'});
+ }
+ await note({...stats,capture_ready_at:new Date(readyAt).toISOString(),slot_status:'CAPTURE_COMPLETE'});
  const evidence=rows.map(r=>{
   const p=r.capture.trajectory?.slice(-3)??[];
   return [r.symbol,p.at(-1)?.mid??null,p.reduce((n,x)=>n+x.aggressive_buy-x.aggressive_sell,0),p.at(-1)?.imbalance??null];
@@ -69,11 +124,12 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,apiKey=gl
  // DB compares the evidence; no inference pass-rate or confidence threshold is used.
  const claim=await db.rpc('leader20_batch_claim',{p_packet:{...packet,evidence},p_evidence_key:await hash(evidence),p_strong_change:true});
  if(claim.error)throw Error('BATCH_CLAIM:'+claim.error.message);
- if(!claim.data.created)return claim.data;
+ if(!claim.data.created){await note({...stats,batch_reason:claim.data.reason});return outcome(claim.data);}
  const batch=claim.data.row, transport=paidTransport(db,{parentKey:'batch:'+batch.id,purpose:'ENTRY',fetchFn,now});
  const started=await db.rpc('leader20_batch_start',{p_id:batch.id,p_owner:batch.owner});
- if(started.error||!started.data.allowed)return {created:true,reason:started.data?.reason??'BATCH_DISPATCH_REFUSED'};
- const result=await callBatch(packet,{apiKey,fetchFn:transport,now});
- const done=await finishEntryBatch(db,batch,result);
- return {...done,created:true,batch_id:batch.id};
+ if(started.error||!started.data.allowed)return outcome({created:true,batch_id:batch.id,reason:started.data?.reason??'BATCH_DISPATCH_REFUSED'});
+ const result=await callBatch(packet,{apiKey,fetchFn:transport,now,
+  ...(window?{timeoutMs:Math.max(1,Math.min(20000,window.decision_deadline_ms-now()-15000))}:{})});
+ const done=await finishEntryBatch(db,batch,result,{sleep});
+ return outcome({...done,created:true,batch_id:batch.id});
 }

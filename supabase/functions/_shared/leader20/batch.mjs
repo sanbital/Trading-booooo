@@ -83,6 +83,9 @@ export async function buildBatch(rows, {asOf, epochId, generation, held = []}) {
       return v !== null && TIME_COLUMNS.has(k) ? v - time_origin_ms : v;
     })) : [];
     symbols.push({id:row.symbol, rank:row.rank, data_version,review_ref:data_version.slice(0,16),
+      // Bind the same canonical validator representation used by GPT; the matrix
+      // still retains every original DB value and its original numeric precision.
+      ...(original?.entry_window?{trajectory_hash:c.status==='AVAILABLE'?await hash(c.trajectory):null,capture_hash:original.entry_window.capture_hash}:{}),
       state:blocked ? 'BLOCKED' : 'READY', blocked_reason:blocked,
       time_origin_ms, last_ms:original?.end_ms ?? null,
       ingested_at_ms:original?.ingested_at_ms ?? null,entry_window:original?.entry_window??null,market_context:row.market_context??null, matrix});

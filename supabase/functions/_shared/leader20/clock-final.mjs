@@ -13,6 +13,8 @@ export function validClockFinalPacket(p,at){
   l.expires_at_ms===w.expires_at_ms&&l.snapshot_end_ms===c.end_ms&&
   typeof c.trajectory_hash==='string'&&c.trajectory_hash===l.execution_snapshot_hash&&
   l.batch_advice?.id===p.symbol&&l.batch_advice.last_ms===c.end_ms&&
+  (!l.batch_advice.entry_window||(windowKeys.every(k=>l.batch_advice.entry_window[k]===w[k])&&
+   l.batch_advice.trajectory_hash===c.trajectory_hash))&&
   clockCaptureValid(c,at)&&entryCaptureSafety(c,at).ok;
 }
 /** Called only after the stored snapshot hash and original GPT wire are revalidated. */
