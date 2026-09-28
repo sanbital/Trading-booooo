@@ -1,0 +1,242 @@
+{
+  "observed_at": "2026-09-28T02:31:04.447114Z",
+  "source_commit": "e104c14896d1fc5a5e2d1e8498e1e7f39e4e2066",
+  "invalid_rows": [
+    {
+      "symbol": "BTWUSDT",
+      "at": "2026-09-28 02:29:05+00",
+      "received_at": "2026-09-28 02:29:05.746034+00",
+      "rn": 24,
+      "valid": false,
+      "receipt_future_ms": "-118701.080000",
+      "facts": {
+        "coverage_25": true,
+        "exchange_at": "2026-09-28T02:29:04.834Z",
+        "flow_causal": true,
+        "interval_ms": 4402,
+        "received_at": "2026-09-28T02:29:04.962Z",
+        "trade_count": 136,
+        "interval_end": "2026-09-28T02:29:05.040Z",
+        "book_complete": true,
+        "interval_start": "2026-09-28T02:29:00.638Z",
+        "trade_event_at": "2026-09-28T02:29:04.905Z",
+        "bucket_complete": false,
+        "trade_received_at": "2026-09-28T02:29:05.037Z",
+        "trade_sequence_complete": true
+      }
+    },
+    {
+      "symbol": "BULLAUSDT",
+      "at": "2026-09-28 02:29:05+00",
+      "received_at": "2026-09-28 02:29:05.746034+00",
+      "rn": 24,
+      "valid": false,
+      "receipt_future_ms": "-118701.080000",
+      "facts": {
+        "coverage_25": true,
+        "exchange_at": "2026-09-28T02:29:04.827Z",
+        "flow_causal": true,
+        "interval_ms": 4402,
+        "received_at": "2026-09-28T02:29:04.955Z",
+        "trade_count": 3,
+        "interval_end": "2026-09-28T02:29:05.040Z",
+        "book_complete": true,
+        "interval_start": "2026-09-28T02:29:00.638Z",
+        "trade_event_at": "2026-09-28T02:29:00.474Z",
+        "bucket_complete": false,
+        "trade_received_at": "2026-09-28T02:29:01.920Z",
+        "trade_sequence_complete": true
+      }
+    },
+    {
+      "symbol": "GRTUSDT",
+      "at": "2026-09-28 02:29:05+00",
+      "received_at": "2026-09-28 02:29:05.746034+00",
+      "rn": 24,
+      "valid": false,
+      "receipt_future_ms": "-118701.080000",
+      "facts": {
+        "coverage_25": true,
+        "exchange_at": "2026-09-28T02:29:04.804Z",
+        "flow_causal": true,
+        "interval_ms": 4402,
+        "received_at": "2026-09-28T02:29:04.935Z",
+        "trade_count": 10,
+        "interval_end": "2026-09-28T02:29:05.040Z",
+        "book_complete": true,
+        "interval_start": "2026-09-28T02:29:00.638Z",
+        "trade_event_at": "2026-09-28T02:29:02.857Z",
+        "bucket_complete": false,
+        "trade_received_at": "2026-09-28T02:29:03.038Z",
+        "trade_sequence_complete": true
+      }
+    },
+    {
+      "symbol": "INXUSDT",
+      "at": "2026-09-28 02:29:05+00",
+      "received_at": "2026-09-28 02:29:05.746034+00",
+      "rn": 24,
+      "valid": false,
+      "receipt_future_ms": "-118701.080000",
+      "facts": {
+        "coverage_25": true,
+        "exchange_at": "2026-09-28T02:29:04.802Z",
+        "flow_causal": true,
+        "interval_ms": 4402,
+        "received_at": "2026-09-28T02:29:04.933Z",
+        "trade_count": 8,
+        "interval_end": "2026-09-28T02:29:05.040Z",
+        "book_complete": true,
+        "interval_start": "2026-09-28T02:29:00.638Z",
+        "trade_event_at": "2026-09-28T02:29:04.396Z",
+        "bucket_complete": false,
+        "trade_received_at": "2026-09-28T02:29:04.523Z",
+        "trade_sequence_complete": true
+      }
+    },
+    {
+      "symbol": "NEARUSDT",
+      "at": "2026-09-28 02:29:05+00",
+      "received_at": "2026-09-28 02:29:05.746034+00",
+      "rn": 24,
+      "valid": false,
+      "receipt_future_ms": "-118701.080000",
+      "facts": {
+        "coverage_25": true,
+        "exchange_at": "2026-09-28T02:29:04.864Z",
+        "flow_causal": true,
+        "interval_ms": 4402,
+        "received_at": "2026-09-28T02:29:04.996Z",
+        "trade_count": 15,
+        "interval_end": "2026-09-28T02:29:05.040Z",
+        "book_complete": true,
+        "interval_start": "2026-09-28T02:29:00.638Z",
+        "trade_event_at": "2026-09-28T02:29:04.647Z",
+        "bucket_complete": false,
+        "trade_received_at": "2026-09-28T02:29:04.778Z",
+        "trade_sequence_complete": true
+      }
+    },
+    {
+      "symbol": "ONEUSDT",
+      "at": "2026-09-28 02:29:05+00",
+      "received_at": "2026-09-28 02:29:05.746034+00",
+      "rn": 24,
+      "valid": false,
+      "receipt_future_ms": "-118701.080000",
+      "facts": {
+        "coverage_25": true,
+        "exchange_at": "2026-09-28T02:29:04.840Z",
+        "flow_causal": true,
+        "interval_ms": 4402,
+        "received_at": "2026-09-28T02:29:04.967Z",
+        "trade_count": 68,
+        "interval_end": "2026-09-28T02:29:05.040Z",
+        "book_complete": true,
+        "interval_start": "2026-09-28T02:29:00.638Z",
+        "trade_event_at": "2026-09-28T02:29:04.689Z",
+        "bucket_complete": false,
+        "trade_received_at": "2026-09-28T02:29:04.821Z",
+        "trade_sequence_complete": true
+      }
+    },
+    {
+      "symbol": "PUMPUSDT",
+      "at": "2026-09-28 02:29:05+00",
+      "received_at": "2026-09-28 02:29:05.746034+00",
+      "rn": 24,
+      "valid": false,
+      "receipt_future_ms": "-118701.080000",
+      "facts": {
+        "coverage_25": true,
+        "exchange_at": "2026-09-28T02:29:04.822Z",
+        "flow_causal": true,
+        "interval_ms": 4402,
+        "received_at": "2026-09-28T02:29:04.946Z",
+        "trade_count": 29,
+        "interval_end": "2026-09-28T02:29:05.040Z",
+        "book_complete": true,
+        "interval_start": "2026-09-28T02:29:00.638Z",
+        "trade_event_at": "2026-09-28T02:29:04.847Z",
+        "bucket_complete": false,
+        "trade_received_at": "2026-09-28T02:29:04.979Z",
+        "trade_sequence_complete": true
+      }
+    },
+    {
+      "symbol": "QNTUSDT",
+      "at": "2026-09-28 02:29:05+00",
+      "received_at": "2026-09-28 02:29:05.746034+00",
+      "rn": 24,
+      "valid": false,
+      "receipt_future_ms": "-118701.080000",
+      "facts": {
+        "coverage_25": true,
+        "exchange_at": "2026-09-28T02:29:04.874Z",
+        "flow_causal": true,
+        "interval_ms": 4402,
+        "received_at": "2026-09-28T02:29:05.003Z",
+        "trade_count": 419,
+        "interval_end": "2026-09-28T02:29:05.040Z",
+        "book_complete": true,
+        "interval_start": "2026-09-28T02:29:00.638Z",
+        "trade_event_at": "2026-09-28T02:29:04.877Z",
+        "bucket_complete": false,
+        "trade_received_at": "2026-09-28T02:29:05.005Z",
+        "trade_sequence_complete": true
+      }
+    },
+    {
+      "symbol": "SOONUSDT",
+      "at": "2026-09-28 02:29:05+00",
+      "received_at": "2026-09-28 02:29:05.746034+00",
+      "rn": 24,
+      "valid": false,
+      "receipt_future_ms": "-118701.080000",
+      "facts": {
+        "coverage_25": true,
+        "exchange_at": "2026-09-28T02:29:04.853Z",
+        "flow_causal": true,
+        "interval_ms": 4402,
+        "received_at": "2026-09-28T02:29:04.981Z",
+        "trade_count": 16,
+        "interval_end": "2026-09-28T02:29:05.040Z",
+        "book_complete": true,
+        "interval_start": "2026-09-28T02:29:00.638Z",
+        "trade_event_at": "2026-09-28T02:29:03.983Z",
+        "bucket_complete": false,
+        "trade_received_at": "2026-09-28T02:29:04.111Z",
+        "trade_sequence_complete": true
+      }
+    },
+    {
+      "symbol": "WUSDT",
+      "at": "2026-09-28 02:29:05+00",
+      "received_at": "2026-09-28 02:29:05.746034+00",
+      "rn": 24,
+      "valid": false,
+      "receipt_future_ms": "-118701.080000",
+      "facts": {
+        "coverage_25": true,
+        "exchange_at": "2026-09-28T02:29:04.878Z",
+        "flow_causal": true,
+        "interval_ms": 4402,
+        "received_at": "2026-09-28T02:29:05.001Z",
+        "trade_count": 20,
+        "interval_end": "2026-09-28T02:29:05.040Z",
+        "book_complete": true,
+        "interval_start": "2026-09-28T02:29:00.638Z",
+        "trade_event_at": "2026-09-28T02:29:03.534Z",
+        "bucket_complete": false,
+        "trade_received_at": "2026-09-28T02:29:03.662Z",
+        "trade_sequence_complete": true
+      }
+    }
+  ],
+  "validation": {
+    "core_pass": 20,
+    "node_pass": 1424,
+    "worker_syntax": "pass"
+  },
+  "deployment": "pending"
+}
