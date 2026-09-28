@@ -1,4 +1,4 @@
-export const VERSION = 'DOA-CAPTURE-7-CLOCK-TOP20';
+export const VERSION = 'DOA-CAPTURE-8-CLOCK-BOOTSTRAP';
 export function transportFresh(e,receivedAt){const at=Number(e.E??e.T);return Number.isSafeInteger(at)&&Number.isSafeInteger(receivedAt)&&at<=receivedAt+1000&&receivedAt-at<=10000;}
 export const normalizeSymbol=value=>{const s=String(value??'').trim().toUpperCase();return /^[\p{L}\p{N}]{1,24}USDT$/u.test(s)?s:null;};
 export const iso = n => new Date(n).toISOString();
@@ -104,6 +104,7 @@ export function snapshotStillCurrent(s,generation,socket){
 // A late timer tick must not make the following bucket artificially short.
 // Wait without resetting flow until the existing minimum interval is present.
 // Emit overdue intervals as-is so completeCaptureInterval still rejects them.
+export function initialBucketBoundary(now){return Math.floor(now/5000)*5000;}
 export function captureBucketDue(lastBucket,now){
   return Number.isSafeInteger(lastBucket)&&Number.isSafeInteger(now)&&
     Math.floor(now/5000)>Math.floor(lastBucket/5000)&&now-lastBucket>=4500;
@@ -116,7 +117,7 @@ export function completeCaptureInterval(s,now,marketOpen){
 export function inWindow(t,windows,symbol){return windows.some(w=>w.symbol===symbol && t>=Date.parse(w.at)-60000 && t<=Date.parse(w.at)+120000);}
 export class WeightBudget {
   constructor(){this.used=[];}
-  claim(n,now){this.used=this.used.filter(x=>x[0]>now-60000);if(this.used.reduce((s,x)=>s+x[1],0)+n>100)return false;this.used.push([now,n]);return true;}
+  claim(n,now,limit=100){this.used=this.used.filter(x=>x[0]>now-60000);if(!Number.isSafeInteger(limit)||limit<0||!Number.isSafeInteger(n)||n<=0||this.used.reduce((s,x)=>s+x[1],0)+n>limit)return false;this.used.push([now,n]);return true;}
 }
 
 // The last actually received, closed BTC candle is the only injection source.

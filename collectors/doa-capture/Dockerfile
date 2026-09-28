@@ -2,6 +2,6 @@ FROM node:22.22.0-alpine
 WORKDIR /capture
 ARG SOURCE_COMMIT
 ENV SOURCE_COMMIT=$SOURCE_COMMIT
-COPY core.mjs worker.mjs context.mjs clock.mjs ./
+COPY core.mjs worker.mjs context.mjs clock.mjs bootstrap.mjs ./
 USER node
 CMD ["node", "--max-old-space-size=160", "worker.mjs"]
