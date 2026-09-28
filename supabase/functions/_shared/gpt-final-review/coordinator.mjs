@@ -4,7 +4,7 @@ import {promptFor} from './prompt.mjs';
 import {collectMarket,buildPacket,packetHash} from './market.mjs';
 import {callFinalReviewer,DEFAULT_PROFILE,profileOf} from './openai.mjs';
 import {initialContext} from '../gpt-final-decision/recheck.mjs';
-import {DYNAMIC_POLICY} from '../gpt-final-decision/dynamic-flow.mjs';
+import {DYNAMIC_POLICY,entryCaptureSafety} from '../gpt-final-decision/dynamic-flow.mjs';
 import {TIMEOUT_RECOVERY,canRecoverTimeout,isReviewRecoverable,reviewedCaptureEnd} from '../gpt-final-decision/timeout-recovery.mjs';
 export const MAX_RESERVED_USD=.10; // Conservative per-call reservation; settled to documented token cost after the call.
 /** (2026-09-25) An engine with agedRecheck lets a stored BUY that outlived its own answer
@@ -147,6 +147,15 @@ export class FinalReviewCoordinator {
           prompt_hash:await this.promptHash,schema_hash:await this.schemaHash,source_commit:RELEASE,packet:null,result:null,
           ...(this.engine?.timeoutRecovery?{review_attempt:attempt,after_capture_end_ms:afterEnd}:{}),
           ...(recovery?{timeout_recovery:recovery}:{})};
+        if(this.store.deferClaimUntilPrepared===true){
+          // Acquisition runs outside the trading lease and before a durable RUNNING
+          // claim. A killed worker during the 24-bucket wait leaves no orphan job.
+          if(!this.pending.has(key)){
+            const task=this.work(key,null,record,{deferredClaim:true}).catch(()=>false).finally(()=>this.pending.delete(key));
+            this.pending.set(key,task);this.schedule(task);
+          }
+          return deny('GPT_REVIEW_PENDING');
+        }
         let claimed;
         try{claimed=await this.store.claim(key,record,this.config);}
         catch(e){if(/API_BUDGET_EXHAUSTED/.test(String(e?.message??e))){
@@ -156,7 +165,6 @@ export class FinalReviewCoordinator {
         }throw e;}
         row=claimed.row;
         if(claimed.created){
-          // Only the independent promise waits for the API. No trading lease is passed.
           const task=this.work(key,row.owner,record).catch(()=>false).finally(()=>this.pending.delete(key));
           this.pending.set(key,task);this.schedule(task);
         }
@@ -174,10 +182,10 @@ export class FinalReviewCoordinator {
         ...(!checked.valid&&row.record?.result?.error?{error:String(row.record.result.error).slice(0,80)}:{})};
     }catch{return deny('GPT_REVIEW_STORAGE_OR_VALIDATION_ERROR');}
   }
-  async work(key,owner,record){
+  async work(key,owner,record,{deferredClaim=false}={}){
     let preparationStage='TRANSPORT';
     try{
-      const fetchFn=this.store.transport?await this.store.transport(key,record,this.fetchFn):this.fetchFn;
+      let fetchFn=this.fetchFn;
       const deadlineMs=record.expires_at_ms-LIMITS.executionReserveMs;
       ensure(this.now()<deadlineMs,'REVIEW_TRIGGER_EXPIRED');
       let captured;
@@ -191,6 +199,12 @@ export class FinalReviewCoordinator {
       const capture=record.packet?.facts?.capture_context,afterEnd=record.after_capture_end_ms??record.timeout_recovery?.after_end_ms;
       ensure(capture?.reason!=='INFERENCE_CAPTURE_NOT_READY','DYNAMIC_INFERENCE_CAPTURE_NOT_READY');
       if(afterEnd!=null)ensure(capture?.end_ms>afterEnd,'RETRY_CAPTURE_NOT_ADVANCED');
+      if(this.engine?.timeoutRecovery)ensure(entryCaptureSafety(capture,this.now()).ok,'DYNAMIC_TRAJECTORY_STALE_OR_FUTURE');
+      if(deferredClaim){
+        const claimed=await this.store.claim(key,record,this.config);
+        if(!claimed.created)return false;
+        owner=claimed.row.owner;
+      }
       // Snapshot persistence before the paid request; failures cannot lead to an unrecorded PASS.
       preparationStage='SNAPSHOT';
       if(this.store.snapshot)await this.store.snapshot(key,owner,record);
@@ -200,6 +214,10 @@ export class FinalReviewCoordinator {
         {now:this.now(),executionDeadline:deadlineMs,ordinaryDeadline:record.valid_until_ms}):record.valid_until_ms;
       ensure(Number.isFinite(analysisDeadline)&&analysisDeadline>this.now(),'REVIEW_RECHECK_ROOM_REQUIRED');
       record.analysis_deadline_ms=analysisDeadline;
+      // Preflight is outside the lease: recheck its immutable evidence immediately
+      // before the provider transport. No aged preflight packet may reach GPT.
+      if(this.engine?.timeoutRecovery)ensure(entryCaptureSafety(capture,this.now()).ok,'DYNAMIC_TRAJECTORY_STALE_OR_FUTURE');
+      fetchFn=this.store.transport?await this.store.transport(key,record,this.fetchFn):this.fetchFn;
       preparationStage='MODEL';
       record.result=this.engine?await this.engine.call(record.packet,{apiKey:this.apiKey(),fetchFn,now:this.now,deadlineMs:analysisDeadline,identity:record.identity}):
         await callFinalReviewer(record.packet,{apiKey:this.apiKey(),fetchFn,now:this.now,
@@ -210,10 +228,19 @@ export class FinalReviewCoordinator {
         record.valid_until_ms=Math.min(deadlineMs,record.snapshot_at_ms+LIMITS.reviewMaxAgeMs);
       }
     }catch(e){
-      const error=['RETRY_CAPTURE_NOT_ADVANCED','DYNAMIC_INFERENCE_CAPTURE_NOT_READY','REVIEW_TRIGGER_EXPIRED','REVIEW_RECHECK_ROOM_REQUIRED'].includes(e?.message)?e.message:'REVIEW_PREPARATION_FAILED';
+      const error=['RETRY_CAPTURE_NOT_ADVANCED','DYNAMIC_INFERENCE_CAPTURE_NOT_READY','DYNAMIC_TRAJECTORY_STALE_OR_FUTURE',
+        'REVIEW_TRIGGER_EXPIRED','REVIEW_RECHECK_ROOM_REQUIRED'].includes(e?.message)?e.message:'REVIEW_PREPARATION_FAILED';
       record.result={origin:'LOCAL_DATA_ERROR',valid:false,decision:'ABSTAIN',error,
         preparation_stage:preparationStage,preparation_error_code:/^[A-Z][A-Z0-9_]{1,100}$/.test(e?.message??'')?e.message:(e?.name??'Error'),
         attempted:false,api_cost_usd:0,completed_at_ms:this.now(),model_requested:MODEL,wire_profile:this.profile};
+    }
+    if(deferredClaim&&!owner){
+      // Persist a short-lived, no-provider diagnostic, unless another worker has
+      // already claimed this identity. There is no API transport in this branch.
+      if(this.now()>=record.expires_at_ms-LIMITS.executionReserveMs)return false;
+      const claimed=await this.store.claim(key,record,this.config).catch(()=>null);
+      if(!claimed?.created)return false;
+      owner=claimed.row.owner;
     }
     await this.store.complete(key,owner,record);
     if(this.engine?.timeoutRecovery===true&&canRecoverTimeout(record.result,{now:this.now(),
