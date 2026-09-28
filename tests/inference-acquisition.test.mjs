@@ -28,7 +28,7 @@ test('same bucket is not a refresh: waits for a newer causal full bucket',async(
  const c=await captureForInference('ABCUSDT',original,{now:()=>at,sleep:async ms=>{at+=ms;},
   read:async()=>{reads++;return at<T+6000?original:validCapture(T+6000);}});
  assert.equal(c.status,'AVAILABLE');assert.ok(reads>=2);assert.ok(c.end_ms>original.end_ms);
- assert.equal(c.pre_inference_refresh.advanced,true);assert.ok(at-c.end_ms<=1500);
+ assert.equal(c.pre_inference_refresh.advanced,true);assert.ok(at-c.end_ms<10000);
  assert.equal(original.end_ms,validCapture(T).end_ms);
 });
 test('stuck collector stops at acquisition deadline without relabelling data',async()=>{
@@ -44,6 +44,14 @@ test('production ingestion lag above preferred 1.5s still accepts a newer comple
   read:async()=>at<T+8000?original:validCapture(T+5000)});
  assert.equal(c.status,'AVAILABLE');assert.ok(c.end_ms>original.end_ms);
  assert.ok(at-c.end_ms>1500);assert.ok(at-c.end_ms<=5000);assert.equal(c.pre_inference_refresh.advanced,true);
+});
+test('a newly ingested complete bucket at 5–7s age is usable before the unchanged 10s safety limit',async()=>{
+ const original=validCapture(T);let at=T+5000;
+ const c=await captureForInference('ABCUSDT',original,{now:()=>at,sleep:async ms=>{at+=ms;},
+  read:async()=>at<T+10300?original:validCapture(T+5000)});
+ assert.equal(c.status,'AVAILABLE');assert.equal(c.end_ms,validCapture(T+5000).end_ms);
+ assert.ok(at-c.end_ms>5000&&at-c.end_ms<10000);
+ assert.equal(c.pre_inference_refresh.advanced,true);
 });
 test('an initially fresh capture performs no polling or sleeping',async()=>{
  const c=validCapture(T);
