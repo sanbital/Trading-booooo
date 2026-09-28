@@ -1,7 +1,7 @@
 // Order-free, internally authenticated measurement. No scheduler or trading writes.
 // A bounded release verification window; never connected to a scheduler or orders.
 const MEASUREMENT_OPEN_UNTIL=0; // Closed after the bounded, order-free release measurements.
-import {buildBatch,callBatch,unpackSymbol,TIME_COLUMNS} from '../_shared/leader20/batch.mjs';
+import {buildBatch,callBatch,unpackSymbol,TIME_COLUMNS,BATCH_VERSION,BATCH_PROMPT} from '../_shared/leader20/batch.mjs';
 import {hash} from '../_shared/gpt-final-decision/snapshot-hash.mjs';
 import {FD1_ENTRY_ENGINE} from '../_shared/gpt-final-decision/engine.mjs';
 import {callDecision,MODEL} from '../_shared/gpt-final-decision/api.mjs';
@@ -74,9 +74,10 @@ Deno.serve(async req=>{
   }else packet=await buildBatch(rows,{asOf,epochId:ctl.epoch_id,generation:ctl.generation});
   if(packet.symbols.every((s:any)=>s.state!=='READY'))return Response.json({error:'NO_VALID_DATA',symbols:packet.symbols,orders:0});
   const config=(await db('gpt_final_review_control?singleton=eq.true'))[0];
-  const job=await hash({audit:'TOP10_BATCH_ORDER_FREE_1',batch:packet.batch_hash});
+  const promptHash=await hash(BATCH_PROMPT);
+  const job=await hash({audit:'TOP10_BATCH_ORDER_FREE_2',batch:packet.batch_hash,version:BATCH_VERSION,prompt:promptHash});
   const record={kind:'TOP10_BATCH_AUDIT',purpose:'VERIFICATION',authority:[],api_approval_ref:config.approval_ref,
-   identity:{symbol:'TOP10'},packet,snapshot_at_ms:asOf,result:null};
+   identity:{symbol:'TOP10'},source_commit:BATCH_VERSION,prompt_hash:promptHash,packet,snapshot_at_ms:asOf,result:null};
   const claim=await db('rpc/gpt_final_review_claim',{p_job_key:job,p_record:record,
    p_cap_usd:config.daily_cap_usd,p_max_calls:config.max_calls_per_day,p_reserve_usd:.25});
   if(!claim.created)return Response.json({duplicate:true,job_key:job,orders:0});

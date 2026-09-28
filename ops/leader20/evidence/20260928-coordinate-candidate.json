@@ -1,0 +1,1251 @@
+{
+  "version": 1,
+  "main": "e104c14896d1fc5a5e2d1e8498e1e7f39e4e2066",
+  "parent_commit": "5f1b2140ff3f679e200a74c98a2cdff356be4164",
+  "source_version": "TOP10_DEEPSEEK_BATCH_3",
+  "production_executor_changed": false,
+  "production_generator_changed": false,
+  "runtime_entry_activation": false,
+  "audit_deployment": {
+    "id": "a60681bf-9079-4423-b523-b206178542d0",
+    "slug": "leader20-batch-audit",
+    "name": "leader20-batch-audit",
+    "status": "ACTIVE",
+    "version": 11,
+    "created_at": 1790554696324,
+    "updated_at": 1790562010108,
+    "verify_jwt": false,
+    "import_map": false,
+    "entrypoint_path": "file:///tmp/user_fn_etaajwpernzrcdrifdnw_a60681bf-9079-4423-b523-b206178542d0_11/source/supabase/functions/leader20-batch-audit/index.ts",
+    "ezbr_sha256": "fb2d7fe9c80efd776591953bb9403d4d93d7a301c83ec5e64c4e594c8879222f"
+  },
+  "downloaded_files": 31,
+  "bundle_differences": [],
+  "tests": {
+    "node_passed": 1454,
+    "node_failed": 0,
+    "audit_and_generator_typecheck": "passed"
+  },
+  "cost_basis": "Actual response usage with code peak pricing, not invoice",
+  "new_gpt_calls": 0,
+  "manual_order_calls": 0,
+  "history": {
+    "pairs": [
+      {
+        "valid": true,
+        "reason": "Late surge then heavy sell pressure with deep negative taker flow and widening spread.",
+        "symbol": "QNTUSDT",
+        "deepseek": "WAIT",
+        "source_job": "a2ca127c081bcc5f44381a1794a364eb6bb150387bd7e19fa9dc07a4ca7c3762",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790440876660,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": true,
+        "reason": "Thin book, sparse trade flow, and erratic mid moves give no clear directional edge.",
+        "symbol": "CHIPUSDT",
+        "deepseek": "WAIT",
+        "source_job": "6317a41661bd3f153118e09f94e92e582b23041c54eabe79567b2ba437a4b786",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790437639867,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": true,
+        "reason": "Repeated spread spikes and weak net taker flow suggest unstable, choppy conditions.",
+        "symbol": "MARSCOINUSDT",
+        "deepseek": "WAIT",
+        "source_job": "d79a1c7cb257cd059f827655956049c5ad4c5b731e06f5a5cd3df8401b1419ad",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790443275537,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": true,
+        "reason": "Volume spike with strong sells and wide spread, then fading buy pressure.",
+        "symbol": "RAYSOLUSDT",
+        "deepseek": "WAIT",
+        "source_job": "da20621ac413efd5835ec2b56c0d44b35b871e81680210ab2a05ff688a5a54b8",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790502971511,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": true,
+        "reason": "Deep book removals and heavy sell share near the end, spread widening.",
+        "symbol": "GRASSUSDT",
+        "deepseek": "WAIT",
+        "source_job": "a27ebfc56570e4d434d702d832ac3653f2813188424d35a407b1a30db8f26080",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790503751306,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": true,
+        "reason": "Sustained buy dominance with recovering depths and rising mid through the window.",
+        "symbol": "USUSDT",
+        "deepseek": "PASS",
+        "source_job": "bf1831948a7bbc18875abe1919125e721ec4b28f2ef4a76702ad432f02bbddd7",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790510481567,
+        "missed_in_this_snapshot": false
+      },
+      {
+        "valid": true,
+        "reason": "Mixed taker flow and thin book with mid oscillating without confirmed breakout.",
+        "symbol": "USUSDT",
+        "deepseek": "WAIT",
+        "source_job": "1e7666ec143b5afd6165819cd4a1560e240ea8fe0ef50e5b55b096cad01c6bd5",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790470453679,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": true,
+        "reason": "Sharp ask book removal and large sell burst stall the prior upward drift.",
+        "symbol": "WUSDT",
+        "deepseek": "WAIT",
+        "source_job": "40bcb34d6119c30d6481b0163e850cd5b3796feccf8479c9a5f6ed076ce85cc9",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790496251894,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": true,
+        "reason": "Modest buy flow but very wide spread and negative mid drift late.",
+        "symbol": "ARXUSDT",
+        "deepseek": "WAIT",
+        "source_job": "9d4d322fd47cf77250174f2b15d74d0ad04738514a0b68e1b140a41fb2d3dbc8",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790516606385,
+        "missed_in_this_snapshot": true
+      },
+      {
+        "valid": true,
+        "reason": "End-period sell surge with wide spread and eroded bid depth.",
+        "symbol": "SOONUSDT",
+        "deepseek": "WAIT",
+        "source_job": "6ab9cddfda4c3bd516aba492aaca3ac24084340a22d3454971533eb7867966c8",
+        "historical_gpt": "BUY",
+        "source_as_of_ms": 1790482633131,
+        "missed_in_this_snapshot": true
+      }
+    ],
+    "ready": 10,
+    "orders": 0,
+    "result": {
+      "model": "deepseek-flash",
+      "usage": {
+        "total_tokens": 49970,
+        "prompt_tokens": 48893,
+        "completion_tokens": 1077,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 48893
+      },
+      "errors": [],
+      "purpose": "ENTRY",
+      "results": [
+        {
+          "id": "QNTUSDT@a2ca127c",
+          "valid": true,
+          "reason": "Late surge then heavy sell pressure with deep negative taker flow and widening spread.",
+          "last_ms": 1790440870199,
+          "version": "fe18c94dedd5986fd365574eb41b30286db8fc0d5e0ed1a8cc4b1c517cd30ea9",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              14,
+              "aggressive_buy",
+              30956.805
+            ],
+            [
+              20,
+              "aggressive_buy",
+              15957.271
+            ],
+            [
+              22,
+              "d_mid_bps",
+              6.1797058
+            ],
+            [
+              23,
+              "spread_bps",
+              3.3093406
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "fe18c94dedd5986f",
+          "uncertainty": "No null checks on impact columns; taker flow sign contradictory early.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "CHIPUSDT@6317a416",
+          "valid": true,
+          "reason": "Thin book, sparse trade flow, and erratic mid moves give no clear directional edge.",
+          "last_ms": 1790437635022,
+          "version": "90472dc87c14c4a4da6742427a88d098f6a164c87179119d9fe59742efb36a85",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              0,
+              "aggressive_buy",
+              2307.9393
+            ],
+            [
+              17,
+              "aggressive_buy",
+              2136.5905
+            ],
+            [
+              22,
+              "d_mid_bps",
+              -4.8628671
+            ],
+            [
+              23,
+              "bid_depth_25_usdt",
+              12408.962
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "90472dc87c14c4a4",
+          "uncertainty": "Very low aggressive notional; depth columns near zero.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "MARSCOINUSDT@d79a1c7c",
+          "valid": true,
+          "reason": "Repeated spread spikes and weak net taker flow suggest unstable, choppy conditions.",
+          "last_ms": 1790443270181,
+          "version": "b4b69c80294358bdef99c12e5d45cff89fa37123876fb60fd3a51d72c5c82b90",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              10,
+              "spread_bps",
+              3.6193854
+            ],
+            [
+              14,
+              "aggressive_buy",
+              49957.716
+            ],
+            [
+              20,
+              "d_mid_bps",
+              20.213688
+            ],
+            [
+              23,
+              "bid_depth_25_usdt",
+              10476.838
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "b4b69c80294358bd",
+          "uncertainty": "Book depth fluctuates sharply; imbalance sign flips repeatedly.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "RAYSOLUSDT@da20621a",
+          "valid": true,
+          "reason": "Volume spike with strong sells and wide spread, then fading buy pressure.",
+          "last_ms": 1790502970192,
+          "version": "89f075e6856f4b3bdab86aa1b6398b42d2e1c147bf2dda153dd9cac3b9727ae3",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              12,
+              "aggressive_buy",
+              1147.7069
+            ],
+            [
+              13,
+              "aggressive_buy",
+              67203.306
+            ],
+            [
+              23,
+              "spread_bps",
+              1.7485574
+            ],
+            [
+              23,
+              "d_mid_bps",
+              -11.35272
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "89f075e6856f4b3b",
+          "uncertainty": "Impact columns unavailable; derived mid basis noted.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "GRASSUSDT@a27ebfc5",
+          "valid": true,
+          "reason": "Deep book removals and heavy sell share near the end, spread widening.",
+          "last_ms": 1790503750059,
+          "version": "eedf4243c2a15b190329b906eedc86aa1bf39a2b00c2c12b2b4e99aa56fdd2b9",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              20,
+              "aggressive_buy",
+              2640.0883
+            ],
+            [
+              22,
+              "aggressive_sell",
+              2971.158
+            ],
+            [
+              23,
+              "bid_depth_25_usdt",
+              18330.576
+            ],
+            [
+              23,
+              "spread_bps",
+              4.9879458
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "eedf4243c2a15b19",
+          "uncertainty": "Ask depth changes without trade confirmation; impact data absent.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "USUSDT@bf183194",
+          "valid": true,
+          "reason": "Sustained buy dominance with recovering depths and rising mid through the window.",
+          "last_ms": 1790510480092,
+          "version": "929b875ed75ca80f3aa614b0591647bacb6a50fa7108ed4f90695e2f576a5f4c",
+          "decision": "PASS",
+          "evidence": [
+            [
+              6,
+              "aggressive_buy",
+              14309.584
+            ],
+            [
+              12,
+              "d_mid_bps",
+              -37.808018
+            ],
+            [
+              15,
+              "aggressive_buy",
+              9970.8285
+            ],
+            [
+              23,
+              "mid",
+              0.033824
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "929b875ed75ca80f",
+          "uncertainty": "Late imbalance dip; spread modestly widened at close.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "USUSDT@1e7666ec",
+          "valid": true,
+          "reason": "Mixed taker flow and thin book with mid oscillating without confirmed breakout.",
+          "last_ms": 1790470450171,
+          "version": "2057a2f17d388ee797e71091ed557a5ed0eabddd41a9a738eb7706ddc1fb8155",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              1,
+              "aggressive_buy",
+              6129.0088
+            ],
+            [
+              8,
+              "aggressive_sell",
+              171.51923
+            ],
+            [
+              13,
+              "d_mid_bps",
+              -9.7822543
+            ],
+            [
+              23,
+              "spread_bps",
+              3.617945
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "2057a2f17d388ee7",
+          "uncertainty": "Depth columns small; sell pressure inconsistent across buckets.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "WUSDT@40bcb34d",
+          "valid": true,
+          "reason": "Sharp ask book removal and large sell burst stall the prior upward drift.",
+          "last_ms": 1790496250159,
+          "version": "2589d83a0389fec8819033772c2e0bcbc97d68c1c14630119fe56a22457bb337",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              11,
+              "aggressive_buy",
+              86884.847
+            ],
+            [
+              20,
+              "aggressive_sell",
+              4710.0487
+            ],
+            [
+              23,
+              "ask_depth_25_usdt",
+              9316.0136
+            ],
+            [
+              23,
+              "d_mid_bps",
+              -17.563832
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "2589d83a0389fec8",
+          "uncertainty": "Buy impact unavailable; book changes unconfirmed by trades.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "ARXUSDT@9d4d322f",
+          "valid": true,
+          "reason": "Modest buy flow but very wide spread and negative mid drift late.",
+          "last_ms": 1790516605112,
+          "version": "1417815b1fe46ab4dbebcc4b4a82317dece79755f152ac43a3e37085fa90b724",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              9,
+              "spread_bps",
+              3.6199095
+            ],
+            [
+              14,
+              "aggressive_buy",
+              5955.8167
+            ],
+            [
+              21,
+              "d_mid_bps",
+              0
+            ],
+            [
+              23,
+              "aggressive_buy",
+              2081.2037
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "1417815b1fe46ab4",
+          "uncertainty": "Tiny trade counts; impact columns missing.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "SOONUSDT@6ab9cddf",
+          "valid": true,
+          "reason": "End-period sell surge with wide spread and eroded bid depth.",
+          "last_ms": 1790482630107,
+          "version": "724612dd033eebb067e61f18c7182ad0ab105b00a41009e35aed966c823a1f2d",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              13,
+              "aggressive_buy",
+              9778.9166
+            ],
+            [
+              21,
+              "aggressive_sell",
+              7288.09
+            ],
+            [
+              23,
+              "d_mid_bps",
+              0
+            ],
+            [
+              23,
+              "bid_depth_25_usdt",
+              15662.526
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "724612dd033eebb0",
+          "uncertainty": "Impact fields null; aggressive flow conflicted mid-window.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        }
+      ],
+      "cost_usd": 0.0159603,
+      "provider": "deepseek",
+      "attempted": true,
+      "batch_hash": "26975b2844839c15f71ddf55c9ff243f6faaec317488d3fa624f6d62470b186e",
+      "cost_basis": "DEEPSEEK_PEAK_TOKEN_RATE_20260928_NOT_INVOICE",
+      "latency_ms": 5943,
+      "request_id": "a44d031a-2988-4bd7-b524-b3219073d91f",
+      "http_status": 200,
+      "raw_content": "{\"results\":[{\"id\":\"QNTUSDT@a2ca127c\",\"version\":\"fe18c94dedd5986f\",\"decision\":\"WAIT\",\"reason\":\"Late surge then heavy sell pressure with deep negative taker flow and widening spread.\",\"uncertainty\":\"No null checks on impact columns; taker flow sign contradictory early.\",\"last_ms\":1790440870199,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[[14,0],[20,0],[22,19],[23,38]]},{\"id\":\"CHIPUSDT@6317a416\",\"version\":\"90472dc87c14c4a4\",\"decision\":\"WAIT\",\"reason\":\"Thin book, sparse trade flow, and erratic mid moves give no clear directional edge.\",\"uncertainty\":\"Very low aggressive notional; depth columns near zero.\",\"last_ms\":1790437635022,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[[0,0],[17,0],[22,19],[23,9]]},{\"id\":\"MARSCOINUSDT@d79a1c7c\",\"version\":\"b4b69c80294358bd\",\"decision\":\"WAIT\",\"reason\":\"Repeated spread spikes and weak net taker flow suggest unstable, choppy conditions.\",\"uncertainty\":\"Book depth fluctuates sharply; imbalance sign flips repeatedly.\",\"last_ms\":1790443270181,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[[10,38],[14,0],[20,19],[23,9]]},{\"id\":\"RAYSOLUSDT@da20621a\",\"version\":\"89f075e6856f4b3b\",\"decision\":\"WAIT\",\"reason\":\"Volume spike with strong sells and wide spread, then fading buy pressure.\",\"uncertainty\":\"Impact columns unavailable; derived mid basis noted.\",\"last_ms\":1790502970192,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[[12,0],[13,0],[23,38],[23,19]]},{\"id\":\"GRASSUSDT@a27ebfc5\",\"version\":\"eedf4243c2a15b19\",\"decision\":\"WAIT\",\"reason\":\"Deep book removals and heavy sell share near the end, spread widening.\",\"uncertainty\":\"Ask depth changes without trade confirmation; impact data absent.\",\"last_ms\":1790503750059,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[[20,0],[22,2],[23,9],[23,38]]},{\"id\":\"USUSDT@bf183194\",\"version\":\"929b875ed75ca80f\",\"decision\":\"PASS\",\"reason\":\"Sustained buy dominance with recovering depths and rising mid through the window.\",\"uncertainty\":\"Late imbalance dip; spread modestly widened at close.\",\"last_ms\":1790510480092,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[[6,0],[12,19],[15,0],[23,32]]},{\"id\":\"USUSDT@1e7666ec\",\"version\":\"2057a2f17d388ee7\",\"decision\":\"WAIT\",\"reason\":\"Mixed taker flow and thin book with mid oscillating without confirmed breakout.\",\"uncertainty\":\"Depth columns small; sell pressure inconsistent across buckets.\",\"last_ms\":1790470450171,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[[1,0],[8,2],[13,19],[23,38]]},{\"id\":\"WUSDT@40bcb34d\",\"version\":\"2589d83a0389fec8\",\"decision\":\"WAIT\",\"reason\":\"Sharp ask book removal and large sell burst stall the prior upward drift.\",\"uncertainty\":\"Buy impact unavailable; book changes unconfirmed by trades.\",\"last_ms\":1790496250159,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[[11,0],[20,2],[23,6],[23,19]]},{\"id\":\"ARXUSDT@9d4d322f\",\"version\":\"1417815b1fe46ab4\",\"decision\":\"WAIT\",\"reason\":\"Modest buy flow but very wide spread and negative mid drift late.\",\"uncertainty\":\"Tiny trade counts; impact columns missing.\",\"last_ms\":1790516605112,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[[9,38],[14,0],[21,19],[23,0]]},{\"id\":\"SOONUSDT@6ab9cddf\",\"version\":\"724612dd033eebb0\",\"decision\":\"WAIT\",\"reason\":\"End-period sell surge with wide spread and eroded bid depth.\",\"uncertainty\":\"Impact fields null; aggressive flow conflicted mid-window.\",\"last_ms\":1790482630107,\"evidence_format\":\"ROW_COLUMN_ZERO_BASED_V1\",\"evidence\":[[13,0],[21,2],[23,19],[23,9]]}]}",
+      "api_cost_usd": 0.0159603,
+      "input_tokens": 48893,
+      "output_tokens": 1077,
+      "completed_at_ms": 1790561979114,
+      "uncached_peak_usd": 0.0159603,
+      "cached_input_tokens": 0
+    },
+    "job_key": "3574b264ab9bd1dbdaea22706cc11de8ed2a4c43b959039c2103a65f484be2aa",
+    "as_of_ms": 1790561971429,
+    "batch_size": 10
+  },
+  "latest": {
+    "pairs": [],
+    "ready": 10,
+    "orders": 0,
+    "result": {
+      "model": "deepseek-flash",
+      "usage": {
+        "total_tokens": 56465,
+        "prompt_tokens": 55183,
+        "completion_tokens": 1282,
+        "prompt_tokens_details": {
+          "cached_tokens": 256
+        },
+        "prompt_cache_hit_tokens": 256,
+        "prompt_cache_miss_tokens": 54927
+      },
+      "errors": [],
+      "purpose": "ENTRY",
+      "results": [
+        {
+          "id": "QNTUSDT",
+          "valid": true,
+          "reason": "Late recovery on heavy buy share and tightened spread after crash.",
+          "last_ms": 1790561985197,
+          "version": "3f5dc5ea079d50f555775c84d9b0af432c0bacf67dfae9098cab30cb5f9611d7",
+          "decision": "PASS",
+          "evidence": [
+            [
+              12,
+              "aggressive_buy",
+              23143.828999999994
+            ],
+            [
+              16,
+              "imbalance",
+              -0.07379882801991901
+            ],
+            [
+              19,
+              "spread_bps",
+              1.4990818123906777
+            ],
+            [
+              22,
+              "d_mid_bps",
+              19.582368336818
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "3f5dc5ea079d50f5",
+          "uncertainty": "Thin book depth and scattered taker flow.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "SOONUSDT",
+          "valid": true,
+          "reason": "Spread blew out and imbalance flipped negative late.",
+          "last_ms": 1790561985197,
+          "version": "1c94585f8d1bb1d1aca44f266a492ea26be570f2bdd668dcab089cf117d4d5fb",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              21,
+              "spread_bps",
+              6.50406504064969
+            ],
+            [
+              22,
+              "imbalance",
+              -0.09290583984776689
+            ],
+            [
+              22,
+              "d_mid_bps",
+              47.154471544715
+            ],
+            [
+              23,
+              "aggressive_buy",
+              7124.330199999999
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "1c94585f8d1bb1d1",
+          "uncertainty": "Volatile depth changes without sustained direction.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "INXUSDT",
+          "valid": true,
+          "reason": "Ultra-tight spread but persistent sell impact and weak imbalance.",
+          "last_ms": 1790561985197,
+          "version": "9e8d318a30bbe063fc82a9e563cd9af4448c51c44658663501ecf935502acd61",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              23,
+              "imbalance",
+              -0.08397458919854696
+            ],
+            [
+              23,
+              "spread_bps",
+              5.697194131889566
+            ],
+            [
+              23,
+              "aggressive_buy",
+              149.34359
+            ],
+            [
+              23,
+              "aggressive_sell",
+              0
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "9e8d318a30bbe063",
+          "uncertainty": "Book depth thin and taker flow inconsistent.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "WUSDT",
+          "valid": true,
+          "reason": "Widened spread and negative imbalance late; buy pressure faded.",
+          "last_ms": 1790561985197,
+          "version": "da9aefe82bb5e774aa6fa15d16a752bca277efb7b86100193546176496842e92",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              21,
+              "spread_bps",
+              1.3550135501356813
+            ],
+            [
+              23,
+              "imbalance",
+              0.07450007747181578
+            ],
+            [
+              23,
+              "d_mid_bps",
+              3.048160942897785
+            ],
+            [
+              22,
+              "bid_depth_25_usdt",
+              15003.216927200001
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "da9aefe82bb5e774",
+          "uncertainty": "Book additions inconsistent with taker flow.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "BULLAUSDT",
+          "valid": true,
+          "reason": "Price spiked then reversed with negative taker quote late.",
+          "last_ms": 1790561985197,
+          "version": "f2b6d2eb2a7b5e796bd5e122e5a12d4d178bf0849039b5681c4dc2b0556670bf",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              21,
+              "d_mid_bps",
+              42.7188665981734
+            ],
+            [
+              22,
+              "imbalance",
+              0.5312901394579979
+            ],
+            [
+              23,
+              "d_mid_bps",
+              6.467259498787
+            ],
+            [
+              23,
+              "aggressive_buy",
+              4303.675120000001
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "f2b6d2eb2a7b5e79",
+          "uncertainty": "Depth changes volatile, no sustained imbalance.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "GRTUSDT",
+          "valid": true,
+          "reason": "Spread tight but imbalance weak; taker flow mixed.",
+          "last_ms": 1790561985197,
+          "version": "bea311573801b1af0c2e01940611405ed52a2fab8b51c54f82e80202d9a391d0",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              20,
+              "imbalance",
+              0.09869435428934567
+            ],
+            [
+              23,
+              "imbalance",
+              0.060754879381979404
+            ],
+            [
+              23,
+              "spread_bps",
+              2.8956131460845698
+            ],
+            [
+              23,
+              "aggressive_buy",
+              3505.27791
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "bea311573801b1af",
+          "uncertainty": "No clear directional conviction in recent buckets.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "BTWUSDT",
+          "valid": true,
+          "reason": "Flat mid despite tight spread; imbalance near neutral.",
+          "last_ms": 1790561985197,
+          "version": "1f632c0bd9bade6556661941b75750efbebfa0f60a8ce2d8c948533cc1c637aa",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              23,
+              "imbalance",
+              -0.003559250873594456
+            ],
+            [
+              23,
+              "spread_bps",
+              0.7896711019859358
+            ],
+            [
+              23,
+              "d_mid_bps",
+              0
+            ],
+            [
+              23,
+              "aggressive_buy",
+              326.75849999999997
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "1f632c0bd9bade65",
+          "uncertainty": "Taker flow choppy with no momentum.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "PUMPUSDT",
+          "valid": true,
+          "reason": "Ultra-tight spread but late buy pressure offset by sells.",
+          "last_ms": 1790561985197,
+          "version": "348270c2aece730388d92e4cb17a1de2ebc4e76c26ca17ec69c36520670e37a7",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              23,
+              "spread_bps",
+              1.9389238972372904
+            ],
+            [
+              23,
+              "aggressive_buy",
+              9861.034475999999
+            ],
+            [
+              23,
+              "aggressive_sell",
+              2401.7699070000003
+            ],
+            [
+              23,
+              "imbalance",
+              0.17865365912984701
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "348270c2aece7303",
+          "uncertainty": "Order book deep, taker flow balanced.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "NEARUSDT",
+          "valid": true,
+          "reason": "Deep book and tight spread, but imbalance negative late.",
+          "last_ms": 1790561985197,
+          "version": "42c65d42eea2bf8ea3630755f5d32bfe33ece6019fc9dce0b89e1ec9fb08fd53",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              23,
+              "spread_bps",
+              1.8774054257023076
+            ],
+            [
+              23,
+              "imbalance",
+              -0.17577365609024684
+            ],
+            [
+              23,
+              "bid_depth_25_usdt",
+              210176.47599999997
+            ],
+            [
+              22,
+              "aggressive_buy",
+              5082.326
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "42c65d42eea2bf8e",
+          "uncertainty": "Mixed taker flow; no clear entry timing.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        },
+        {
+          "id": "ONEUSDT",
+          "valid": true,
+          "reason": "Wide spread and late sell pressure dominate; imbalance flipped.",
+          "last_ms": 1790561985197,
+          "version": "d3ba89fd0372a83b45fb53e196e62d588d1abdaea470697b2874c132e7ee9fac",
+          "decision": "WAIT",
+          "evidence": [
+            [
+              23,
+              "spread_bps",
+              1.1927718028743937
+            ],
+            [
+              23,
+              "aggressive_sell",
+              2957.133700900001
+            ],
+            [
+              23,
+              "imbalance",
+              0.2810043485287897
+            ],
+            [
+              23,
+              "d_mid_bps",
+              2.5850069596333265
+            ]
+          ],
+          "authority": [],
+          "grounding": "SYMBOL_CELLS_VERIFIED_V2",
+          "review_ref": "d3ba89fd0372a83b",
+          "uncertainty": "Volatile spread and depth changes.",
+          "evidence_format": "ROW_FIELD_VALUE_V1",
+          "requires_final_recheck": true,
+          "source_evidence_format": "ROW_COLUMN_ZERO_BASED_V1"
+        }
+      ],
+      "cost_usd": 0.018018036,
+      "provider": "deepseek",
+      "attempted": true,
+      "batch_hash": "68fccf80d67f0934ed5d8e2b429d418112ce29adc4033a694c18e24688212ee7",
+      "cost_basis": "DEEPSEEK_PEAK_TOKEN_RATE_20260928_NOT_INVOICE",
+      "latency_ms": 5842,
+      "request_id": "ff3bd593-d6ab-4a74-9bc3-84ceabbcdf87",
+      "http_status": 200,
+      "raw_content": "{\n  \"results\": [\n    {\n      \"id\": \"QNTUSDT\",\n      \"version\": \"3f5dc5ea079d50f5\",\n      \"decision\": \"PASS\",\n      \"reason\": \"Late recovery on heavy buy share and tightened spread after crash.\",\n      \"uncertainty\": \"Thin book depth and scattered taker flow.\",\n      \"last_ms\": 1790561985197,\n      \"evidence_format\": \"ROW_COLUMN_ZERO_BASED_V1\",\n      \"evidence\": [[12, 0], [16, 25], [19, 30], [22, 17]]\n    },\n    {\n      \"id\": \"SOONUSDT\",\n      \"version\": \"1c94585f8d1bb1d1\",\n      \"decision\": \"WAIT\",\n      \"reason\": \"Spread blew out and imbalance flipped negative late.\",\n      \"uncertainty\": \"Volatile depth changes without sustained direction.\",\n      \"last_ms\": 1790561985197,\n      \"evidence_format\": \"ROW_COLUMN_ZERO_BASED_V1\",\n      \"evidence\": [[21, 30], [22, 25], [22, 17], [23, 0]]\n    },\n    {\n      \"id\": \"INXUSDT\",\n      \"version\": \"9e8d318a30bbe063\",\n      \"decision\": \"WAIT\",\n      \"reason\": \"Ultra-tight spread but persistent sell impact and weak imbalance.\",\n      \"uncertainty\": \"Book depth thin and taker flow inconsistent.\",\n      \"last_ms\": 1790561985197,\n      \"evidence_format\": \"ROW_COLUMN_ZERO_BASED_V1\",\n      \"evidence\": [[23, 25], [23, 30], [23, 0], [23, 2]]\n    },\n    {\n      \"id\": \"WUSDT\",\n      \"version\": \"da9aefe82bb5e774\",\n      \"decision\": \"WAIT\",\n      \"reason\": \"Widened spread and negative imbalance late; buy pressure faded.\",\n      \"uncertainty\": \"Book additions inconsistent with taker flow.\",\n      \"last_ms\": 1790561985197,\n      \"evidence_format\": \"ROW_COLUMN_ZERO_BASED_V1\",\n      \"evidence\": [[21, 30], [23, 25], [23, 17], [22, 7]]\n    },\n    {\n      \"id\": \"BULLAUSDT\",\n      \"version\": \"f2b6d2eb2a7b5e79\",\n      \"decision\": \"WAIT\",\n      \"reason\": \"Price spiked then reversed with negative taker quote late.\",\n      \"uncertainty\": \"Depth changes volatile, no sustained imbalance.\",\n      \"last_ms\": 1790561985197,\n      \"evidence_format\": \"ROW_COLUMN_ZERO_BASED_V1\",\n      \"evidence\": [[21, 17], [22, 25], [23, 17], [23, 0]]\n    },\n    {\n      \"id\": \"GRTUSDT\",\n      \"version\": \"bea311573801b1af\",\n      \"decision\": \"WAIT\",\n      \"reason\": \"Spread tight but imbalance weak; taker flow mixed.\",\n      \"uncertainty\": \"No clear directional conviction in recent buckets.\",\n      \"last_ms\": 1790561985197,\n      \"evidence_format\": \"ROW_COLUMN_ZERO_BASED_V1\",\n      \"evidence\": [[20, 25], [23, 25], [23, 30], [23, 0]]\n    },\n    {\n      \"id\": \"BTWUSDT\",\n      \"version\": \"1f632c0bd9bade65\",\n      \"decision\": \"WAIT\",\n      \"reason\": \"Flat mid despite tight spread; imbalance near neutral.\",\n      \"uncertainty\": \"Taker flow choppy with no momentum.\",\n      \"last_ms\": 1790561985197,\n      \"evidence_format\": \"ROW_COLUMN_ZERO_BASED_V1\",\n      \"evidence\": [[23, 25], [23, 30], [23, 17], [23, 0]]\n    },\n    {\n      \"id\": \"PUMPUSDT\",\n      \"version\": \"348270c2aece7303\",\n      \"decision\": \"WAIT\",\n      \"reason\": \"Ultra-tight spread but late buy pressure offset by sells.\",\n      \"uncertainty\": \"Order book deep, taker flow balanced.\",\n      \"last_ms\": 1790561985197,\n      \"evidence_format\": \"ROW_COLUMN_ZERO_BASED_V1\",\n      \"evidence\": [[23, 30], [23, 0], [23, 2], [23, 25]]\n    },\n    {\n      \"id\": \"NEARUSDT\",\n      \"version\": \"42c65d42eea2bf8e\",\n      \"decision\": \"WAIT\",\n      \"reason\": \"Deep book and tight spread, but imbalance negative late.\",\n      \"uncertainty\": \"Mixed taker flow; no clear entry timing.\",\n      \"last_ms\": 1790561985197,\n      \"evidence_format\": \"ROW_COLUMN_ZERO_BASED_V1\",\n      \"evidence\": [[23, 30], [23, 25], [23, 7], [22, 0]]\n    },\n    {\n      \"id\": \"ONEUSDT\",\n      \"version\": \"d3ba89fd0372a83b\",\n      \"decision\": \"WAIT\",\n      \"reason\": \"Wide spread and late sell pressure dominate; imbalance flipped.\",\n      \"uncertainty\": \"Volatile spread and depth changes.\",\n      \"last_ms\": 1790561985197,\n      \"evidence_format\": \"ROW_COLUMN_ZERO_BASED_V1\",\n      \"evidence\": [[23, 30], [23, 2], [23, 25], [23, 17]]\n    }\n  ]\n}",
+      "api_cost_usd": 0.018018036,
+      "input_tokens": 55183,
+      "output_tokens": 1282,
+      "completed_at_ms": 1790561997544,
+      "uncached_peak_usd": 0.0180933,
+      "cached_input_tokens": 256
+    },
+    "job_key": "2213409cf5118bd3a5fa7ec9cc494b42b373230540e6117b66846039c63daba0",
+    "as_of_ms": 1790561990030,
+    "batch_size": 10
+  },
+  "total_deepseek_cost_usd": 0.033978336,
+  "latest_31d_10min_usd": 80.432512704,
+  "latest_31d_10min_uncached_usd": 80.7684912,
+  "same_historical_sources": true,
+  "historical_not_forwarded": 9,
+  "late_facts": [
+    {
+      "id": "QNTUSDT",
+      "end_ms": 1790561985197,
+      "late_imbalance": [
+        0.6060812177331277,
+        0.48608605880809214,
+        0.4849533982153228,
+        0.15264157985665835
+      ],
+      "late_spread_bps": [
+        3.005710850615573,
+        1.882920032386653,
+        0.3758480070656007,
+        0.752530383413546
+      ],
+      "late_net_taker": [
+        -81519.46299999997,
+        -74579.00100000002,
+        5026.851000000024,
+        -44162.38099999998
+      ],
+      "capture_return": -0.006262969956439934
+    },
+    {
+      "id": "SOONUSDT",
+      "end_ms": 1790561985197,
+      "late_imbalance": [
+        0.17772487019067065,
+        0.24434589283533842,
+        -0.09290583984776689,
+        0.32135143881974304
+      ],
+      "late_spread_bps": [
+        3.2525613920959175,
+        6.50406504064969,
+        3.2367697038352152,
+        6.491398896461473
+      ],
+      "late_net_taker": [
+        30606.874500000005,
+        3616.5644000000016,
+        10705.5819,
+        -1428.1992
+      ],
+      "capture_return": 0.006040816326530418
+    },
+    {
+      "id": "INXUSDT",
+      "end_ms": 1790561985197,
+      "late_imbalance": [
+        0.19457122805318022,
+        0.1894716144682665,
+        0.21857899308833267,
+        -0.08397458919854696
+      ],
+      "late_spread_bps": [
+        2.8502208921195176,
+        2.8502208921195176,
+        2.8502208921195176,
+        5.697194131889566
+      ],
+      "late_net_taker": [
+        -3.8002639999999985,
+        1.3973090000000008,
+        -224.564312,
+        149.34359
+      ],
+      "capture_return": -0.00007120985544406544
+    },
+    {
+      "id": "WUSDT",
+      "end_ms": 1790561985197,
+      "late_imbalance": [
+        0.06062944297634789,
+        0.02937243865867589,
+        0.09013076625282156,
+        0.07450007747181578
+      ],
+      "late_spread_bps": [
+        3.3881077418260523,
+        1.3550135501356813,
+        2.7094763936872797,
+        2.0314880650073004
+      ],
+      "late_net_taker": [
+        921.7842578,
+        50.394660000000016,
+        917.0995164999999,
+        519.8201306999998
+      ],
+      "capture_return": -0.005622517002222049
+    },
+    {
+      "id": "BULLAUSDT",
+      "end_ms": 1790561985197,
+      "late_imbalance": [
+        0.12817710392173745,
+        0.5130637412536766,
+        0.5312901394579979,
+        0.17816617249286107
+      ],
+      "late_spread_bps": [
+        1.0814902936241955,
+        4.307559767391597,
+        7.545136081918686,
+        7.540259600366308
+      ],
+      "late_net_taker": [
+        -1036.3288900000005,
+        5201.022585000003,
+        -174.2418300000001,
+        1804.3002650000012
+      ],
+      "capture_return": 0.026538397744236164
+    },
+    {
+      "id": "GRTUSDT",
+      "end_ms": 1790561985197,
+      "late_imbalance": [
+        0.09869435428934567,
+        0.07537703651071777,
+        0.029976658836425883,
+        0.060754879381979404
+      ],
+      "late_spread_bps": [
+        2.9014942695497066,
+        2.9031789809850665,
+        2.898130705693703,
+        2.8956131460845698
+      ],
+      "late_net_taker": [
+        12240.84407,
+        -416.4007499999999,
+        3402.88186,
+        3168.69467
+      ],
+      "capture_return": -0.0014457134595925458
+    },
+    {
+      "id": "BTWUSDT",
+      "end_ms": 1790561985197,
+      "late_imbalance": [
+        0.07018521655381164,
+        -0.2525989508101131,
+        -0.0067690445072798285,
+        -0.003559250873594456
+      ],
+      "late_spread_bps": [
+        0.7898582204493424,
+        0.7893594348185579,
+        0.7896711019859358,
+        0.7896711019859358
+      ],
+      "late_net_taker": [
+        -332.89850000000007,
+        1715.2713999999992,
+        -543.2873,
+        -863.5437
+      ],
+      "capture_return": 0.0030892312566837
+    },
+    {
+      "id": "PUMPUSDT",
+      "end_ms": 1790561985197,
+      "late_imbalance": [
+        0.1813226533442296,
+        0.19693742846847884,
+        0.17227640434509497,
+        0.17865365912984701
+      ],
+      "late_spread_bps": [
+        1.9396760740958834,
+        1.9404288347727423,
+        1.9400523814145558,
+        1.9389238972372904
+      ],
+      "late_net_taker": [
+        -2149.62056,
+        -3526.1026209999995,
+        381.2271989999995,
+        7459.264568999999
+      ],
+      "capture_return": -0.004919930542157003
+    },
+    {
+      "id": "NEARUSDT",
+      "end_ms": 1790561985197,
+      "late_imbalance": [
+        -0.10164497214423213,
+        -0.08304423053976857,
+        -0.13123157145040612,
+        -0.17577365609024684
+      ],
+      "late_spread_bps": [
+        1.8795226012582384,
+        1.8802293879859622,
+        1.878816345702835,
+        1.8774054257023076
+      ],
+      "late_net_taker": [
+        -8713.572000000002,
+        -7791.507,
+        4220.486,
+        2921.5380000000005
+      ],
+      "capture_return": -0.0026214773897577093
+    },
+    {
+      "id": "ONEUSDT",
+      "end_ms": 1790561985197,
+      "late_imbalance": [
+        0.01851590534800865,
+        0.25497250256706366,
+        0.24607351331378943,
+        0.2810043485287897
+      ],
+      "late_spread_bps": [
+        1.9892184360767295,
+        0.39736941447553115,
+        3.1815470272420736,
+        1.1927718028743937
+      ],
+      "late_net_taker": [
+        3316.3073657999976,
+        4280.4411820999985,
+        -2740.9084995,
+        -938.4294464000009
+      ],
+      "capture_return": 0.015545192094159388
+    }
+  ],
+  "post_check": {
+    "checked_at": "2026-09-28 02:21:31.92614+00",
+    "closed_audit": {
+      "body": {
+        "state": "AUDIT_CLOSED",
+        "orders": 0,
+        "reason": "VERIFICATION_WINDOW_ENDED"
+      },
+      "status": 410
+    },
+    "budget": {
+      "as_of": "2026-09-28T02:21:31.92614+00:00",
+      "providers": [
+        {
+          "provider": "deepseek",
+          "limit_usd": 100,
+          "days_to_cap": 125.09898638709046,
+          "last24h_usd": 0.78562338,
+          "entry_enabled": false,
+          "remaining_usd": 98.28068852,
+          "month_used_usd": 1.71931148,
+          "run_rate_31d_usd": 24.35432478,
+          "unresolved_reserve_usd": 0
+        },
+        {
+          "provider": "openai",
+          "limit_usd": 95,
+          "days_to_cap": 5.09820567725145,
+          "last24h_usd": 11.00091665,
+          "entry_enabled": false,
+          "remaining_usd": 56.08493572,
+          "month_used_usd": 38.91506428,
+          "run_rate_31d_usd": 341.02841615,
+          "unresolved_reserve_usd": 6.35
+        }
+      ],
+      "rate_basis": "REVIEW_LEDGER_LAST24H_INCLUDING_UNRESOLVED_NOT_INVOICE"
+    },
+    "batch_enabled": false,
+    "new_ledger_rows": 0,
+    "settlements": [
+      {
+        "state": "DONE",
+        "job_key": "2213409cf5118bd3a5fa7ec9cc494b42b373230540e6117b66846039c63daba0",
+        "settled_usd": 0.018018036,
+        "api_cost_usd": 0.018018036
+      },
+      {
+        "state": "DONE",
+        "job_key": "3574b264ab9bd1dbdaea22706cc11de8ed2a4c43b959039c2103a65f484be2aa",
+        "settled_usd": 0.0159603,
+        "api_cost_usd": 0.0159603
+      }
+    ]
+  },
+  "quality_gate": false,
+  "quality_findings": [
+    "Citation format: 20/20 valid source-bound results across two samples, versus 0/9 on the earlier live packet. Different live snapshot; not a controlled live-semantic comparison.",
+    "Historical hard-positive cohort: same 10 sources, new PASS 1 / WAIT 9; earlier PASS 3 / nonforwarded 7. Selected retrospective sample, not population recall. Do not tune PASS rate to this cohort.",
+    "WUSDT live reason says negative imbalance late; last four values are all positive. Correct coordinates do not prove correct interpretation."
+  ]
+}

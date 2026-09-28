@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {rawCapture} from '../test-support/dynamic-fixtures.mjs';
-import {buildBatch,unpackSymbol,validateBatchResponse,callBatch,deepseekCost} from '../supabase/functions/_shared/leader20/batch.mjs';
+import {buildBatch,unpackSymbol,validateBatchResponse,callBatch,deepseekCost,EVIDENCE_FORMAT,batchPayload} from '../supabase/functions/_shared/leader20/batch.mjs';
 const T=1800000000200;
 const rows=()=>Array.from({length:10},(_,i)=>({symbol:`C${i}USDT`,rank:i+1,capture:rawCapture(T)}));
 const build=r=>buildBatch(r,{asOf:T,epochId:'e',generation:1});
 const response=b=>({results:b.symbols.map(s=>({id:s.id,version:s.review_ref,decision:'PASS',reason:'Flow reversal warrants review',uncertainty:'OI unknown',last_ms:s.last_ms,
- evidence:[[0,'mid',s.matrix[0]?.[b.columns.indexOf('mid')]],[23,'aggressive_buy',s.matrix[23]?.[b.columns.indexOf('aggressive_buy')]]]}))});
+ evidence_format:EVIDENCE_FORMAT,
+ evidence:[[0,b.columns.indexOf('mid'),s.matrix[0]?.[b.columns.indexOf('mid')]],[23,b.columns.indexOf('aggressive_buy'),s.matrix[23]?.[b.columns.indexOf('aggressive_buy')]]]}))});
 test('one request contains all ten IDs and 240 lossless ordered buckets',async()=>{
  const r=rows(),b=await build(r);let calls=0;
  for(let i=0;i<10;i++)assert.deepEqual(unpackSymbol(b,b.symbols[i]),r[i].capture.trajectory);
@@ -60,4 +61,22 @@ test('cross-symbol numeric evidence and unbound quantitative prose block only th
  assert.equal(validateBatchResponse(missing,b).results[0].reason,'EVIDENCE_REQUIRED');
  const repeated=response(b);repeated.results[0].evidence[0]=repeated.results[0].evidence[1];
  assert.equal(validateBatchResponse(repeated,b).results[0].reason,'EVIDENCE_DUPLICATE');
+});
+
+test('coordinate version and explicit column dictionary avoid silently repairing historical responses',async()=>{
+ const b=await build(rows()),input=JSON.parse(batchPayload(b).messages[1].content),w=response(b);
+ assert.equal(input.evidence_format,EVIDENCE_FORMAT);
+ for(const {column_index,field} of input.evidence_columns)assert.equal(b.columns[column_index],field);
+ assert.equal(input.evidence_columns.some(x=>x.field==='d_buy_share'),false,'do not widen grounding to recover rejected candidates');
+ delete w.results[0].evidence_format;
+ w.results[1].evidence[0][1]='mid';
+ w.results[2].evidence[0][1]=b.columns.indexOf('d_buy_share');
+ w.results[3].evidence[0][1]=b.columns.length;
+ const v=validateBatchResponse(w,b);
+ assert.equal(v.results[0].reason,'EVIDENCE_FORMAT_MISMATCH');
+ for(const i of [1,2,3])assert.equal(v.results[i].reason,'EVIDENCE_REQUIRED');
+ assert.equal(v.results.filter(x=>x.valid).length,6);
+ assert.equal(v.results[4].evidence_format,'ROW_FIELD_VALUE_V1');
+ assert.deepEqual(v.results[4].evidence[0],[0,'mid',b.symbols[4].matrix[0][b.columns.indexOf('mid')]]);
+ assert.equal(v.results[4].source_evidence_format,EVIDENCE_FORMAT);
 });

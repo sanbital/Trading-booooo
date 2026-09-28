@@ -1,11 +1,13 @@
 # 첫 실거래 체결 추적 및 FINAL RECHECK 오류 수정
 
+후속 검증: [명시적 좌표 후보의 형식 개선 및 품질 미통과](COORDINATE_CANDIDATE_20260928.md). 정규 executor/generator 배포는 그대로이며 audit는 v11로 닫혔다.
+
 **2026-09-28 10:59 KST: 체결 대기. 기술 오류 1개를 production executor v138에 수정 배포했다. 최신 자연 QNT 리뷰는 유효한 SKIP이다.** 이 결과를 BUY나 실제 체결로 표시하지 않는다. 첫 체결을 확인하고 거래소·DB·보호 주문을 대사할 때까지 이 대화의 10분 추적 heartbeat를 유지한다.
 
 ## 현재 운영 기준과 변경
 
 - [10분 Top 10 배포 보고](RELEASE_20260928_10M.md)의 품질 보류를 계승한다. 새 묶음과 제공자별 enforcement는 false이고 기존 30분 제한 경로가 실행 중이다. 10분 추적 heartbeat와 10분 유료 Top 10 운영은 별개다.
-- 최신 main `e104c14896d1fc5a5e2d1e8498e1e7f39e4e2066`를 재확인했다. QNT collector·ingest·gateway, 슬롯 2개, 증거금·레버리지·손절, AI 월/일 예산과 요청 크기 상한은 변경하지 않았다.
+- 최신 main `e104c14896d1fc5a5e2d1e8498e1e7f39e4e2066`를 재확인했다. QNT collector·ingest·gateway, 설정상 최대 슬롯 10개(당시 자금 기준 가용 2개), 증거금·레버리지·손절, AI 월/일 예산과 요청 크기 상한은 변경하지 않았다.
 - ONEUSDT는 00:54:06 UTC ENTRY BUY 이후 두 번 캡처 준비 실패를 겪었다. 유효한 캡처를 확보한 00:55:12 FINAL RECHECK도 요청 **177,265 bytes**로 기존 GPT 상한 **130,000 bytes**를 넘어 `FD_REQUEST_COST_BOUND`였다. DeepSeek 역시 90,000 bytes 상한 때문에 호출되지 않았다.
 - 현재·최초·주문 전 캡처의 24개 버킷 전체와 각 값은 유지하면서 중복된 pre_dispatch와 critical row를 참조로 바꿨다. 정수 시각 열은 시작 시각에 대한 정확한 차이로 전송한다. 원본 journal은 그대로 유지하며 모델 입력에서 복구 진단 중복만 제거했다. 평균으로 대체하거나 수치 정밀도를 낮추지 않았다.
 - 주문 없는 stored replay가 최종 clock과 그에 대응하는 실제 final_packet을 함께 읽도록 수정했다. 이전에는 refresh 전 packet과 refresh 후 시각이 짝지어질 수 있었다.
