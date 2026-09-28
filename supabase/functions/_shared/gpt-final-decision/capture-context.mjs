@@ -74,7 +74,11 @@ export async function captureForInference(symbol,capture,{now=Date.now,sleep=ms=
   if(now()<=before)break; // A frozen replay/test clock must not start a live wait loop.
   const at=now();current=await read(symbol,at,{...options,timeoutMs:Math.min(350,until-at)});
   attempts.push({requested_at_ms:at,received_at_ms:now(),status:current?.status,end_ms:current?.end_ms??null});
-  if(now()<=until&&current?.end_ms>initialEnd&&ready(current))return {...current,pre_inference_refresh:{
+  // 1.5s is the preferred acquisition target, not a data-integrity limit.
+  // A genuinely advanced complete bucket can arrive later than that target;
+  // accept it inside the existing 5s normal age, never the 10s stale boundary.
+  const refreshed=entryCaptureSafety(current,now()).ok&&current.end_ms>afterEndMs&&now()-current.end_ms<=Math.min(DYNAMIC_POLICY.normalAgeMs,5000);
+  if(now()<=until&&current?.end_ms>initialEnd&&(ready(current)||refreshed))return {...current,pre_inference_refresh:{
     requested_at_ms:started,received_at_ms:now(),previous_end_ms:initialEnd,previous_age_ms:started-initialEnd,
     advanced:true,wait_ms:now()-started,attempts}};
  }

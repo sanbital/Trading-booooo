@@ -37,6 +37,14 @@ test('stuck collector stops at acquisition deadline without relabelling data',as
  assert.equal(c.status,'UNAVAILABLE');assert.equal(c.reason,'INFERENCE_CAPTURE_NOT_READY');
  assert.equal(c.pre_inference_refresh.advanced,false);assert.ok(at<=T+4500);
 });
+
+test('production ingestion lag above preferred 1.5s still accepts a newer complete bucket within normal 5s age',async()=>{
+ const original=validCapture(T);let at=T+3000;
+ const c=await captureForInference('ABCUSDT',original,{now:()=>at,sleep:async ms=>{at+=ms;},
+  read:async()=>at<T+8000?original:validCapture(T+5000)});
+ assert.equal(c.status,'AVAILABLE');assert.ok(c.end_ms>original.end_ms);
+ assert.ok(at-c.end_ms>1500);assert.ok(at-c.end_ms<=5000);assert.equal(c.pre_inference_refresh.advanced,true);
+});
 test('an initially fresh capture performs no polling or sleeping',async()=>{
  const c=validCapture(T);
  assert.equal(await captureForInference('ABCUSDT',c,{now:()=>T,read:async()=>assert.fail(),sleep:async()=>assert.fail()}),c);
