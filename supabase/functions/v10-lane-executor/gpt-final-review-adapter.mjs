@@ -57,7 +57,7 @@ export function coordinatorFor(db){
   return contexts.get(db);
 }
 /** One journal lookup per existing-approved candidate. No API await or signal claim. */
-export async function gptFilterExecutable(db,executable){
+export async function gptFilterExecutable(db,executable,{completedOnly=false}={}){
   const c=coordinatorFor(db);
   // No candidate: no control read, no journal I/O. Existing path unchanged.
   if(!executable.length)return {candidates:executable,reason:c.config.mode};
@@ -66,6 +66,7 @@ export async function gptFilterExecutable(db,executable){
   // OFF (control row or env kill) and SHADOW never fall back to the model stack.
   if(c.config.mode==='OFF')return {candidates:[],reason:'GPT_OFF_NO_NEW_ENTRY'};
   if(c.config.mode==='SHADOW'){
+    if(completedOnly)return {candidates:[],reason:'GPT_SHADOW_NO_NEW_ENTRY',reviews:[]};
     // Observation only; journal I/O stays off the entry/quote timing path.
     for(const s of executable){const task=c.consider(s).catch(()=>null);c.schedule(task);}
     return {candidates:[],reason:'GPT_SHADOW_NO_NEW_ENTRY',reviews:[]};
@@ -75,7 +76,7 @@ export async function gptFilterExecutable(db,executable){
     if(isLeader20(s)){
       try{await requireEntryAuthority(db,s);}catch(error){reviews.push({signalId:s.id,allowed:false,reason:String(error.message)});continue;}
     }
-    const r=await c.consider(s);reviews.push({signalId:s.id,...r});if(r.allowed)candidates.push(s);
+    const r=await c.consider(s,{completedOnly});reviews.push({signalId:s.id,...r});if(r.allowed)candidates.push(s);
   }
   const pending=reviews.some(r=>r.reason==='GPT_REVIEW_PENDING');
   c.yieldArmed=candidates.length===0&&pending;

@@ -48,6 +48,28 @@ test('FD1 entry: an expired review cannot be used for an order',async()=>{
 });
 
 const BUY=i=>entryWire({t:'ENTRY',c:i.candidate_id,d:'BUY',support:['return_5m','taker_buy_ratio_5m'],n:'상승 지속'});
+
+for(const deferClaimUntilPrepared of [false,true])test('completed-only lookup cannot create a review or spend (deferred='+deferClaimUntilPrepared+')',async()=>{
+ const c=coord(BUY),s=sig();c.store.deferClaimUntilPrepared=deferClaimUntilPrepared;let claims=0,work=0;
+ c.store.claim=async()=>{claims++;throw Error('UNEXPECTED_CLAIM');};c.work=async()=>{work++;throw Error('UNEXPECTED_WORK');};
+ const r=await c.consider(s,{completedOnly:true});assert.equal(r.allowed,false);assert.equal(r.reason,'GPT_REVIEW_PENDING');assert.equal(claims,0);assert.equal(work,0);assert.equal(c.pending.size,0);
+});
+test('completed-only lookup follows existing fresh retry BUY without another provider call',async()=>{
+ const c=coord(BUY),s=sig();await c.consider(s);await Promise.all([...c.pending.values()]);const [parent,row]=[...c.store.rows][0],binding=await c.binding,identity=row.record.identity;
+ const {hash}=await import('../../../supabase/functions/_shared/gpt-final-review/contract.mjs');
+ const child=await hash({binding,identity,timeout_after:parent}),answer=structuredClone(row);
+ c.store.rows.set(child,{...answer,key:child});row.record.result={valid:false,error:'API_TIMEOUT',completed_at_ms:trig+1500};c.store.rows.set(parent,row);
+ const before=c.store.calls;c.fetchFn=()=>{throw Error('UNEXPECTED_API');};const r=await c.consider(s,{completedOnly:true});assert.equal(r.allowed,true);assert.equal(r.jobKey,child);assert.equal(c.store.calls,before);
+});
+test('completed-only timeout with no child cannot schedule retry or reserve spend',async()=>{
+ const c=coord(BUY),s=sig();await c.consider(s);await Promise.all([...c.pending.values()]);const [key,row]=[...c.store.rows][0];row.record.result={valid:false,error:'API_TIMEOUT',completed_at_ms:trig+1500};c.store.rows.set(key,row);
+ const before=c.store.calls;c.fetchFn=()=>{throw Error('UNEXPECTED_API');};c.work=()=>{throw Error('UNEXPECTED_WORK');};const r=await c.consider(s,{completedOnly:true});assert.equal(r.allowed,false);assert.equal(r.reason,'GPT_REVIEW_PENDING');assert.equal(c.store.calls,before);
+});
+test('completed-only lookup keeps original identity and aged recheck boundary',async()=>{
+ let clock=trig+1500;const c=coord(BUY,()=>clock),s=sig();await c.consider(s);await Promise.all([...c.pending.values()]);assert.equal((await c.consider(s,{completedOnly:true})).allowed,true);
+ const expiry=c.tickets.get(s.id).expires;clock=expiry-3000-8000;assert.equal((await c.consider(s,{completedOnly:true})).reason,'GPT_STALE_OR_FUTURE_REVIEW');
+ const changed=sig();changed.features.rank=8;assert.equal((await c.consider(changed,{completedOnly:true})).allowed,false);assert.equal(c.tickets.has(s.id),false);
+});
 test('AGED GPT BUY: admitted to the order path only to be rechecked; never dispatched on the aged answer',async()=>{
   let clock=trig+1500;const c=coord(BUY,()=>clock),s=sig();
   await c.consider(s);await Promise.all([...c.pending.values()]);assert.equal((await c.consider(s)).allowed,true);

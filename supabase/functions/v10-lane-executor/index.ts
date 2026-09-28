@@ -3,6 +3,7 @@ import {storedDynamicReplay} from "../_shared/gpt-final-decision/stored-replay.m
 import {EXIT_AUTHORITY_VERSION,EXIT_CLASS,PROTECTION_ACTIONS,PROTECTION_ARBITRATION_VERSION,exitClass,hardSafetyState,softCandidate,approvedProtection,exitContext,legacySoftOrders,assertExitAuthority,positionGeneration} from "../_shared/exit-authority.mjs";
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
 import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume,gptArmFollowUp} from "./gpt-final-review-adapter.mjs";
+import {entryQueueWithLateReviews} from "./entry-late-review.mjs";
 import {isLeader20,validEvent,eventExpiry} from "../_shared/leader20/campaign.mjs";
 import {leaderControl,requireEntryAuthority} from "../_shared/leader20/runtime.mjs";
 import {dryRunCoordinator,dryRunReviewPhase,liveProbe} from "./gpt-final-review-dryrun.mjs";
@@ -2594,6 +2595,8 @@ for(const review of gptReviewed.reviews??[]){
   await noteEntryLifecycle(db,row,lifecycleNote({at:Date.now(),stage:"GPT_REVIEW",reason:review.reason,gptDecision:review.storedDecision??null}));
 }
 const queued=gptReviewed.candidates;
+const pendingReviewIds=new Set((gptReviewed.reviews??[]).filter(r=>r.reason==="GPT_REVIEW_PENDING").map(r=>String(r.signalId)));
+const pendingReviewRows=executable.filter(s=>isLeader20(s)&&pendingReviewIds.has(String(s.id))),lateReviewIds=new Set();
 // Candidates this run did not reach keep their claim-free NEW status; the note names why.
 const noteRest=async(from,reason)=>{for(const r of queued.slice(from))
   await noteEntryLifecycle(db,r,lifecycleNote({at:Date.now(),stage:"QUEUE",reason,gptDecision:"BUY"}));};
@@ -2611,7 +2614,17 @@ const ledger=[],entries=[],refusals=[];
 let reviewRetryPending=false;
 let view=capacityInputs(pair,null),cap=admissionCapacity(view,ledger),stop=null,unreached=0,lastEntered=null;
 const initialCapacity=cap;
-for(const [index,s] of queued.entries()){
+for await(const [index,s] of entryQueueWithLateReviews(queued,{
+  mayDiscover:()=>pendingReviewRows.length>0&&cap.capacity>0&&Date.now()<runDeadline&&budgetCovers(cycleBudgets.get(db),ENTRY_ATTEMPT_RESERVE),
+  discover:async()=>{
+    // Same lease and remaining cycle budget. No new candidate, capture or AI request.
+    // Authority, binding, identity, answer/candidate age are reread before admission;
+    // the ordinary loop below still rechecks budget/capacity and requires fresh FINAL.
+    const completed=await gptFilterExecutable(db,pendingReviewRows,{completedOnly:true});
+    for(const s of completed.candidates)lateReviewIds.add(String(s.id));
+    return completed.candidates;
+  }
+})){
   // An unreadable account before the first entry is left to openBull, which fails the cycle on it
   // as before; after a fill it ends the run here (fail closed).
   if(cap.capacity<1&&(entries.length>0||cap.reason!==UNUSED_SLOT_REASON.ACCOUNT_SAFETY_BLOCK)){
@@ -2636,7 +2649,7 @@ for(const [index,s] of queued.entries()){
     entry=await openBull(db,cl.data,openNow,manual,attempt,typeof pair==="undefined"?[]:pair.managementFailures??[]);
     await audit(db,null,"BULL","BULL",entry?.entered?"ENTRY_ALLOW":"ENTRY_DEFER",
       entry?.entered?"V17_ENTRY_FILLED":entry?.reason??"V17_NO_ENTRY",{
-        signalId:s.id,symbol:s.symbol,stage:"ENTRY_ATTEMPT_OUTCOME",
+        signalId:s.id,symbol:s.symbol,stage:"ENTRY_ATTEMPT_OUTCOME",lateCompletedReview:lateReviewIds.has(String(s.id)),
         finalAdmission:entry?.entered===true,orderDispatched:attempt.dispatched===true,
         entered:entry?.entered===true,entryPriceCheck:attempt.entryPriceCheck??null,
         booAdmission:attempt.booAdmission??null,booPredispatch:attempt.booPredispatch??null})

@@ -320,7 +320,7 @@ function harness({outcomes, rows: extraRows = null, now = LEGACY_NOW, setups = {
   vm.runInContext(helpers, ctx);
   const loop = source.slice(source.indexOf('const since=new Date(Date.now()-SIGNAL_MAX).toISOString(),signalPageSize='),
     source.indexOf('\n}\n\nasync function requireLeaderEntryControls',source.indexOf('async function runEntryQueue')));
-  if (!loop.includes('for(const [index,s] of queued.entries())')) throw new Error('the entry loop was reshaped');
+  if (!loop.includes('for await(const [index,s] of entryQueueWithLateReviews(queued,')) throw new Error('the entry loop was reshaped');
   vm.runInContext(`this.go=async function(){let entry={entered:false,reason:"V17_NO_ENTRY"};const out=await (async()=>{${loop}\n})();return {entry:out,seen}}`, ctx);
   return ctx;
 }
