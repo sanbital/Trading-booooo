@@ -86,7 +86,7 @@ export class FinalReviewCoordinator {
     // An engine (FD1 final decision) replaces the question and answer contract; the durable
     // claim/ledger/TTL/ticket machinery below is identical for every engine.
     this.profile=engine?engine.id:profile;this.purpose=purpose;const wire=engine?null:profileOf(profile).wire,promptText=engine?engine.promptText:promptFor(profileOf(profile).prompt??wire);
-    this.tickets=new Map();this.tracked=new Map();this.pending=new Map();this.readyHints=new Map();this.yieldArmed=false;this.followUpUntil=0;
+    this.tickets=new Map();this.tracked=new Map();this.pending=new Map();this.readyHints=new Map();this.clockWakeAt=new Map();this.yieldArmed=false;this.followUpUntil=0;
     this.promptHash=hash(promptText);this.schemaHash=hash(engine?engine.schema:wireSchema(wire));
     // purpose is bound so PRODUCTION, DRYRUN and VERIFICATION reviews of one candidate never share a row.
     this.binding=engine?hash({version:VERSION,engine:engine.id,model:engine.model,prompt:promptText,schema:engine.schema,limits:LIMITS,purpose}):
@@ -268,7 +268,8 @@ export class FinalReviewCoordinator {
     // This hint can shorten observation waiting, but a new lease cycle still
     // rereads and validates the journal before it creates an entry ticket.
     const checked=await this.validateStored({record},record.identity_json,record.expires_at_ms,record.binding).catch(()=>null);
-    if(checked?.allowed&&!checked.aged)this.readyHints.set(key,{signalId:record.identity.signal_id,validUntil:checked.ticket.validUntil});
+    if(checked?.allowed&&!checked.aged)this.readyHints.set(key,{signalId:record.identity.signal_id,validUntil:checked.ticket.validUntil,
+      clock:!!checked.ticket.clockFinalAuthority});
     return record.result?.valid===true;
   }
   async validateStored(row,identityJson,expires,binding){
@@ -353,7 +354,10 @@ export class FinalReviewCoordinator {
     const now=this.now();
     for(const [key,hint] of this.readyHints){
       if(now>=hint.validUntil){this.readyHints.delete(key);continue;}
-      if(this.tracked.has(key)){this.yieldArmed=false;return true;}
+      if(this.tracked.has(key)){
+        if(hint.clock&&!this.clockWakeAt.has(String(hint.signalId)))this.clockWakeAt.set(String(hint.signalId),now);
+        this.yieldArmed=false;return true;
+      }
     }
     return false;
   }
@@ -366,7 +370,10 @@ export class FinalReviewCoordinator {
     // Read once even at the deadline, so a completed failure cannot remain PENDING.
     while(firstRead||this.now()<deadline){
       firstRead=false;let unresolved=false,ready=false;
-      for(const [key,t] of [...this.tracked]){
+      // A completed clock BUY is only a wake hint; still reread and validate its
+      // durable row before returning. Unrelated diagnostics must not delay it.
+      const ordered=[...this.tracked].sort(([a],[b])=>Number(this.readyHints.get(b)?.clock===true)-Number(this.readyHints.get(a)?.clock===true));
+      for(const [key,t] of ordered){
         const row=await this.store.get(key).catch(()=>null);
         if(!this.tracked.has(key)){unresolved=true;continue;}
         this.tickets.delete(String(t.s.id));
@@ -391,7 +398,12 @@ export class FinalReviewCoordinator {
           storedDecision:row.record?.result?.decision??null,detail:checked.detail??null,error:row.record?.result?.error??null};
         if(!reported.has(key)){
           reported.add(key);this.waitOutcomes.push(review);
-          await this.onResolved(t.s,review).catch(()=>console.error('GPT_ASYNC_LIFECYCLE_WRITE_FAILED',t.s.id));
+          const note=this.onResolved(t.s,review).catch(()=>console.error('GPT_ASYNC_LIFECYCLE_WRITE_FAILED',t.s.id));
+          if(checked.allowed&&checked.ticket?.clockFinalAuthority)this.schedule(note);else await note;
+        }
+        if(checked.allowed&&checked.ticket?.clockFinalAuthority){
+          const id=String(t.s.id);if(!this.clockWakeAt.has(id))this.clockWakeAt.set(id,this.now());
+          return true;
         }
       }
       if(ready)return true;

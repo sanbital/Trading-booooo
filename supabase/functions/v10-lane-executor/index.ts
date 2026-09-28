@@ -2,7 +2,7 @@
 import {storedDynamicReplay} from "../_shared/gpt-final-decision/stored-replay.mjs";
 import {EXIT_AUTHORITY_VERSION,EXIT_CLASS,PROTECTION_ACTIONS,PROTECTION_ARBITRATION_VERSION,exitClass,hardSafetyState,softCandidate,approvedProtection,exitContext,legacySoftOrders,assertExitAuthority,positionGeneration} from "../_shared/exit-authority.mjs";
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
-import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume,gptArmFollowUp} from "./gpt-final-review-adapter.mjs";
+import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume,gptArmFollowUp,clockReviewDiagnostics,gptClockWakeAt} from "./gpt-final-review-adapter.mjs";
 import {entryQueueWithLateReviews} from "./entry-late-review.mjs";
 import {isLeader20,validEvent,eventExpiry} from "../_shared/leader20/campaign.mjs";
 import {leaderControl,requireEntryAuthority} from "../_shared/leader20/runtime.mjs";
@@ -12,7 +12,7 @@ import {fd1HoldTick,fd1Probe,fd1ExitProbe,HOLD_RELEASE,holdShadowEnabled,FD1_HOL
 import {readCaptureWithRecovery} from "../_shared/gpt-final-decision/capture-context.mjs";
 import {DYNAMIC_VERSION,dispatchDynamicSafety} from "../_shared/gpt-final-decision/dynamic-flow.mjs";
 import {FD1_ENTRY_ENGINE} from "../_shared/gpt-final-decision/engine.mjs";
-import {finalRecheckStep,finalRecheckProbe,postRecheckSafety,markRecheckOutcome,withOrderTiming,executionCapture,executionDynamicSafety} from "./gpt-final-recheck-adapter.mjs";
+import {finalRecheckStep,finalRecheckProbe,postRecheckSafety,markRecheckOutcome,withOrderTiming,executionCapture,executionDynamicSafety,authorizeClockExecution,clockExecutionStep,readClockExecutionQuote,clockExecutionTrace} from "./gpt-final-recheck-adapter.mjs";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 import {POLICY, STRATEGY, ENTRY_EXECUTION_POLICY_VERSION, entryFresh, postFillEntryGuard, nextExit, portfolioMatches as leaderPortfolioMatches} from "../_shared/leader-momentum-v17.mjs";
 import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5, exitAttemptId, classifyExitResponse} from "../_shared/leader-exit-review.mjs";
@@ -275,6 +275,8 @@ function retryE1Evidence(tape,q,quantity,at){
 async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,step,payload,authorize}){
   await requireEntryAuthority(db,s);
   if(!Number.isInteger(attemptNo)||attemptNo<1||attemptNo>IOC_RETRY_POLICY.maxAttempts)throw Error("IOC_RETRY_EXHAUSTED");
+  const clockTrace=payload?.entry_clock_execution;
+  if(clockTrace)clockTrace.order_intent_at??=Date.now();
   const id=cid(attemptNo===1?"v11e":`v11r${attemptNo}`,s.id),
     rp={action:"create_order",leverage:LEV,order:{market:s.symbol,side:"BUY",type:"LIMIT",price:limitPrice,
       time_in_force:"IOC",quantity,identifier:id,position_side:"LONG",position_effect:"OPEN"},wait_for_final_ms:4000},
@@ -290,7 +292,7 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
     // approval or quote budget and then send a stale order. No venue call on refusal.
     let generationError=null;
     try{await requireEntryAuthority(db,s);}catch(error){generationError=String(error.message);}
-    const authority=generationError?{allowed:false,reason:generationError}:authorize?.();
+    const authority=generationError?{allowed:false,reason:generationError}:await authorize?.();
     if(authority?.allowed!==true){
       const reason=authority?.reason??"IOC_DISPATCH_AUTHORITY_MISSING";
       const wr=await db.from("v11_long_regime_orders").update({state:"REJECTED",reject_reason:reason,
@@ -298,7 +300,8 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
       if(wr.error)throw Error("IOC_NO_DISPATCH_WRITE");
       return {blocked:true,reason,oi:oi.data};
     }
-    const sentAt=Date.now(),initialRaw=await gw(rp),respondedAt=Date.now(),initial=fill(initialRaw);let finalRaw=initialRaw,receipt=null,finalitySource="CREATE_RESPONSE";
+    const sentAt=Date.now();if(clockTrace)clockTrace.order_sent_at??=sentAt;
+    const initialRaw=await gw(rp),respondedAt=Date.now(),initial=fill(initialRaw);let finalRaw=initialRaw,receipt=null,finalitySource="CREATE_RESPONSE";
     try{receipt=entryReceipt(initialRaw,oi.data);}catch{}
     if(!receipt){
       await verifyExecutionLease(db);
@@ -309,9 +312,11 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
       finalRaw=await gw({action:"get_order",market:s.symbol,identifier:id,exchange_order_id:initial.exchangeOrderId},5000);
       receipt=entryReceipt(finalRaw,oi.data);finalitySource="SAME_ORDER_QUERY";
     }
+    if(clockTrace&&receipt?.quantity>0&&Number.isSafeInteger(receipt.lastAt))clockTrace.fill_at??=receipt.lastAt;
     const evidence={source:finalitySource,initialStatus:initial.status,confirmedAt:new Date().toISOString(),attemptNo,
       sentAt,respondedAt,latencyMs:respondedAt-sentAt,finalStatus:receipt?.status??null,executedQty:receipt?.quantity??null,
-      avgPrice:receipt?.price??null,requestedQty:quantity,limitPrice};
+      avgPrice:receipt?.price??null,requestedQty:quantity,limitPrice,
+      ...(authority.clock_execution_safety?{clockExecutionSafety:authority.clock_execution_safety,clockExecutionTelemetry:{...clockTrace}}:{})};
     return {oi:oi.data,rp,id,receipt,initial,evidence,settledRaw:{...finalRaw,v22EntryFinality:evidence}};
   }catch(error){
     if(classifyFailure(error).fatal)throw error;
@@ -1090,6 +1095,7 @@ function booVerdict(s,phase,inputs,{quote,info,snapshot,pair,orders}){
 }
 async function booGate(db,s,phase,ctx){return booVerdict(s,phase,await booGateInputs(db,s),ctx)}
 async function openBull(db,s,openPositions,manual=null,attempt={},managementFailures=[]){
+const executionStartedAt=Date.now();
 await requireEntryAuthority(db,s);
 const gateway=opsGateway(db);
 const selection=rec(rec(s.features).b06133),cec=rec(rec(s.features).cec0040),selectedSetup=signalSetup(s);
@@ -1114,6 +1120,11 @@ if(!isLeader20(s)&&(cec.version!==CEC0040_VERSION||cec.targetVersion!==CEC0040_T
 const gptEntryCheck=gptFinalCheck(db,s,null,null,{allowAged:true});
 if(!gptEntryCheck.allowed)return{entered:false,reason:gptEntryCheck.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL};
 attempt.gptFinalReview=gptEntryCheck.review??null;
+if(attempt.gptFinalReview?.clockFinalAuthority){
+  const t=attempt.gptFinalReview;
+  attempt.clockExecutionTelemetry=clockExecutionTrace(t);
+  Object.assign(attempt.clockExecutionTelemetry,{executor_wake_at:gptClockWakeAt(db,s)??executionStartedAt,execution_started_at:executionStartedAt});
+}
 await requireLeaderEntryControls(db);
 const exitPolicy=rec(s.features?.exitPolicy);
 if(!Object.values(exitPolicy).every(v=>Number.isFinite(Number(v)))||!(Number(exitPolicy.stopPct)>0&&Number(exitPolicy.stopPct)<1&&Number(exitPolicy.trailArmPct)>0&&Number(exitPolicy.trailGapPct)>0&&Number(exitPolicy.trailGapPct)<1&&Number(exitPolicy.maxHoldMs)===POLICY.maxHoldMs&&Number(exitPolicy.staleMs)>0))throw new Error("V17_EXIT_POLICY_INVALID");
@@ -1261,7 +1272,9 @@ if(E1_ENABLED&&!isLeader20(s)){
 // its frozen slot, without reading another capture or invoking either AI. Legacy
 // non-clock entries retain the original change detector and FINAL RECHECK contract.
 {
-  const recheck=await finalRecheckStep(db,s,{ticket:attempt.gptFinalReview,e1:E1_ENABLED?e1Decision:null,rawQuote:q});
+  const recheck=attempt.gptFinalReview?.clockFinalAuthority?
+    await clockExecutionStep(s,attempt.gptFinalReview,ms=>gateway({action:"quote",market:s.symbol},ms)):
+    await finalRecheckStep(db,s,{ticket:attempt.gptFinalReview,e1:E1_ENABLED?e1Decision:null,rawQuote:q});
   attempt.finalRecheck=recheck.record;
   if(recheck.record.clock_final_authority)
     await audit(db,null,"BULL","BULL",recheck.proceed?"ENTRY_ALLOW":"ENTRY_DEFER",recheck.reason,
@@ -1298,15 +1311,17 @@ if(E1_ENABLED&&!isLeader20(s)){
 // hand. Re-introducing an await between the quote read and the dispatch check is
 // exactly the defect this fixes; see booGateInputs for the production evidence.
 await requireLeaderEntryControls(db);
-const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuote,dispatchCapture]=await Promise.all([
+const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuoteRead,dispatchCapture]=await Promise.all([
   readOpsPair(db,undefined,s.symbol),
   gateway({action:"v18_open_orders"},5000),
   E1_ENABLED?snap(db):Promise.resolve(sn),
   booGateInputs(db,s),
-  E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q),
+  attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q),
   executionCapture(attempt.gptFinalReview,s.symbol,Date.now())]),finalCheck=rawFinalCheck;
+const clockQuote=attempt.gptFinalReview?.clockFinalAuthority?await readClockExecutionQuote(s,attempt.gptFinalReview,ms=>gateway({action:"quote",market:s.symbol},ms)):null;
+const dispatchQuote=clockQuote?clockQuote.quote:dispatchQuoteRead;
 attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:dispatchCapture,dispatch_quote:dispatchQuote};
-const dispatchDynamic=executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
+const dispatchDynamic=clockQuote&&!clockQuote.safety.ok?clockQuote.safety:executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
 attempt.finalRecheck.dispatch_dynamic=dispatchDynamic;
 if(!dispatchDynamic.ok){
   markRecheckOutcome(db,s,attempt.finalRecheck,"NO_ORDER_WAIT:"+dispatchDynamic.reason);
@@ -1406,6 +1421,7 @@ const baseIntentPayload={price_tick:filters.priceTick,min_notional_usdt:filters.
     activation:SETUP_LIVE_CUTOVER,setup:serializeSetup(signalSetup(s),8)}:null,entry_selection:rec(s.features).b06133,
   entry_front:rec(s.features).v30Front??null,entry_branch:entryBranchOf(rec(s.features)),entry_controller:rec(s.features).cec0040,
   entry_gpt_decision:attempt.gptFinalReview??null,entry_final_recheck:withOrderTiming(attempt.finalRecheck),
+  entry_clock_execution:attempt.clockExecutionTelemetry??null,
   // Cohort evidence: the refusal this candidate carried into this attempt (e.g. ENTRY_PER_RUN_LIMIT
   // = entered by the follow-up cycle); an aged BUY shows INITIAL_ANSWER_AGED in entry_final_recheck.
   entry_lifecycle_prior:rec(s.features).entryLifecycle??null,
@@ -1440,7 +1456,9 @@ const firstEvidence=iocAttemptEvidence({attemptNo:1,quote:q,quantity:sized.amoun
 attempt.dispatched=true;
 const first=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:1,quantity:sized.amount,limitPrice,step,
   payload:{...baseIntentPayload,ioc_attempt_evidence:firstEvidence},
-  authorize:()=>gptFinalCheck(db,s,attempt.finalRecheck)});
+  authorize:()=>attempt.gptFinalReview?.clockFinalAuthority?
+    authorizeClockExecution(s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),
+      ()=>gptFinalCheck(db,s,attempt.finalRecheck)):gptFinalCheck(db,s,attempt.finalRecheck)});
 if(first.blocked)return await finishPartialOrAbort(first.reason,{executionAttempts:0});
 const retryArmed=gptConfirmFirstFinality(db,retryAuthority,first);
 lastEvidence=first.evidence;lastReceipt=first.receipt;
@@ -1479,22 +1497,27 @@ if(!budgetCovers(cycleBudgets.get(db),IOC_RETRY_RESERVE))
 // Clock retry stays inside the original final authority and reads a fresh execution
 // quote only. Legacy retries retain their tape/change detector and bounded recheck.
 let retryAt=Date.now(),[retryQuote0,retryTape]=await Promise.all([
-  gateway({action:"quote",market:s.symbol},3000),attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):fetchE1AggTrades(s.symbol,retryAt-10000,retryAt)]);
+  attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):gateway({action:"quote",market:s.symbol},3000),attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):fetchE1AggTrades(s.symbol,retryAt-10000,retryAt)]);
 if(!attempt.gptFinalReview?.clockFinalAuthority&&(retryTape?.available!==true||retryTape.startAt!==retryAt-10000||retryTape.endAt!==retryAt||
   !(Number.isFinite(retryTape.last10sReturn)&&Number.isFinite(retryTape.takerBuyQuoteShare)&&retryTape.tradeCount>0)))
   return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:FRESH_TAPE_UNAVAILABLE",{executionAttempts:1});
 let retryE1=attempt.gptFinalReview?.clockFinalAuthority?null:retryE1Evidence(retryTape,retryQuote0,currentPosition?N(currentPosition.original_quantity):sized.amount,retryAt);
-const retryRecheck=await finalRecheckStep(db,s,{ticket:attempt.gptFinalReview,e1:retryE1,rawQuote:retryQuote0,sequence:2});
+const retryRecheck=attempt.gptFinalReview?.clockFinalAuthority?
+  await clockExecutionStep(s,attempt.gptFinalReview,ms=>gateway({action:"quote",market:s.symbol},ms),{sequence:2}):
+  await finalRecheckStep(db,s,{ticket:attempt.gptFinalReview,e1:retryE1,rawQuote:retryQuote0,sequence:2});
 attempt.finalRecheck=retryRecheck.record;
 if(!retryRecheck.proceed)return await finishPartialOrAbort(retryRecheck.reason,{executionAttempts:1,finalRecheck:retryRecheck.record});
 
 // FINAL BUY can take seconds. Re-read every execution-safety input after the answer.
 await requireLeaderEntryControls(db);
-const[retryPair,retryOrders,retrySnap,retryQuote,retryInfo,retryCapture]=await Promise.all([
-  readOpsPair(db,undefined,s.symbol),gateway({action:"v18_open_orders"},5000),snap(db),gateway({action:"quote",market:s.symbol},3000),
+const[retryPair,retryOrders,retrySnap,retryQuoteRead,retryInfo,retryCapture]=await Promise.all([
+  readOpsPair(db,undefined,s.symbol),gateway({action:"v18_open_orders"},5000),snap(db),
+  attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):gateway({action:"quote",market:s.symbol},3000),
   gateway({action:"symbol_info",market:s.symbol},3000),executionCapture(attempt.gptFinalReview,s.symbol,Date.now())]);
+const retryClockQuote=attempt.gptFinalReview?.clockFinalAuthority?await readClockExecutionQuote(s,attempt.gptFinalReview,ms=>gateway({action:"quote",market:s.symbol},ms)):null;
+const retryQuote=retryClockQuote?retryClockQuote.quote:retryQuoteRead;
 attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:retryCapture,dispatch_quote:retryQuote};
-const retryDynamic=executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
+const retryDynamic=retryClockQuote&&!retryClockQuote.safety.ok?retryClockQuote.safety:executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
 attempt.finalRecheck.dispatch_dynamic=retryDynamic;
 if(!retryDynamic.ok)return await finishPartialOrAbort(retryDynamic.reason,{executionAttempts:1,decision:"WAIT",dynamic:retryDynamic});
 await recordMismatch(db,retryPair.match);
@@ -1550,6 +1573,11 @@ if(!retryDispatchCheck.allowed)
   return await finishPartialOrAbort(retryDispatchCheck.reason??"IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID",{executionAttempts:1});
 const second=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:2,quantity:retryPlan.remainingQuantity,
   limitPrice:retryPlan.limitPrice,step,payload:retryPayload,authorize:()=>{
+    if(attempt.gptFinalReview?.clockFinalAuthority)
+      return authorizeClockExecution(s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),()=>{
+        const check=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority);
+        return check.allowed&&gptConsumeRetry(db,retryAuthority)?check:{allowed:false,reason:check.reason??"IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID"};
+      });
     const check=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority),age=Date.now()-Number(retryQuote?.timing?.received_at_ms);
     if(!check.allowed)return check;
     if(!Number.isFinite(age)||age<0||age>E1_POLICY.maxQuoteAgeMs)return {allowed:false,reason:"EXECUTION_SAFETY_REJECT:STALE_QUOTE"};
@@ -2574,7 +2602,7 @@ if(executable.length&&!gptReviewed.candidates.length)entry={entered:false,reason
 // Every reviewed candidate that GPT did not pass leaves a trace: a SKIP/ABSTAIN (or failed
 // answer) is final for its trigger and is recorded terminally now; anything transient
 // (pending, aged past recheck, not configured) is noted for the window-close label.
-for(const review of gptReviewed.reviews??[]){
+await clockReviewDiagnostics(db,gptReviewed,async()=>{for(const review of gptReviewed.reviews??[]){
   if(review.allowed===true)continue;
   let row=executable.find(x=>String(x.id)===String(review.signalId));if(!row)continue;
   if(/^(GPT_NO_VALID_API_RESPONSE|GPT_REVIEW_STORAGE|GPT_CONTROL_UNREADABLE|GPT_API_BUDGET|GPT_BINDING_MISMATCH|GPT_SNAPSHOT_)/.test(String(review.reason??"")))
@@ -2592,6 +2620,7 @@ for(const review of gptReviewed.reviews??[]){
   }
   await noteEntryLifecycle(db,row,lifecycleNote({at:Date.now(),stage:"GPT_REVIEW",reason:review.reason,gptDecision:review.storedDecision??null}));
 }
+});
 const queued=gptReviewed.candidates;
 const pendingReviewIds=new Set((gptReviewed.reviews??[]).filter(r=>r.reason==="GPT_REVIEW_PENDING").map(r=>String(r.signalId)));
 const pendingReviewRows=executable.filter(s=>isLeader20(s)&&pendingReviewIds.has(String(s.id))),lateReviewIds=new Set();
@@ -2648,6 +2677,7 @@ for await(const [index,s] of entryQueueWithLateReviews(queued,{
     await audit(db,null,"BULL","BULL",entry?.entered?"ENTRY_ALLOW":"ENTRY_DEFER",
       entry?.entered?"V17_ENTRY_FILLED":entry?.reason??"V17_NO_ENTRY",{
         signalId:s.id,symbol:s.symbol,stage:"ENTRY_ATTEMPT_OUTCOME",lateCompletedReview:lateReviewIds.has(String(s.id)),
+        clockExecutionTelemetry:attempt.clockExecutionTelemetry??null,
         finalAdmission:entry?.entered===true,orderDispatched:attempt.dispatched===true,
         entered:entry?.entered===true,entryPriceCheck:attempt.entryPriceCheck??null,
         booAdmission:attempt.booAdmission??null,booPredispatch:attempt.booPredispatch??null})
@@ -2693,6 +2723,7 @@ for await(const [index,s] of entryQueueWithLateReviews(queued,{
     if(attempt.dispatched)throw e;
     await audit(db,null,"BULL","BULL","ENTRY_REJECT",msg.slice(0,500),{
       signalId:s.id,symbol:s.symbol,stage:"PRE_ORDER_REJECTION",finalAdmission:false,
+      clockExecutionTelemetry:attempt.clockExecutionTelemetry??null,
       orderDispatched:false,entryPriceCheck:attempt.entryPriceCheck??null,
       booAdmission:attempt.booAdmission??null,booPredispatch:attempt.booPredispatch??null})
       .catch(()=>console.error("V17_ENTRY_REJECTION_AUDIT_FAILED",s.id));

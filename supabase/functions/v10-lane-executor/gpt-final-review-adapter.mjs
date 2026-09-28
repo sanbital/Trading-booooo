@@ -9,7 +9,6 @@ import {lifecycleNote,mergeLifecycleNote} from './entry-lifecycle.mjs';
 import {isLeader20,validEvent,eventExpiry} from '../_shared/leader20/campaign.mjs';
 import {requireEntryAuthority} from '../_shared/leader20/runtime.mjs';
 import {triggerExpiry} from '../_shared/gpt-final-review/contract.mjs';
-import {clockExecutionSafety} from '../_shared/leader20/clock-final.mjs';
 import {sameClockCapture} from '../_shared/leader20/clock.mjs';
 const contexts=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
@@ -74,17 +73,43 @@ export async function gptFilterExecutable(db,executable,{completedOnly=false}={}
     return {candidates:[],reason:'GPT_SHADOW_NO_NEW_ENTRY',reviews:[]};
   }
   const candidates=[],reviews=[];
-  for(const s of executable){
+  const reviewOne=async s=>{
     if(isLeader20(s)){
-      try{await requireEntryAuthority(db,s);}catch(error){reviews.push({signalId:s.id,allowed:false,reason:String(error.message)});continue;}
+      try{await requireEntryAuthority(db,s);}catch(error){return {signalId:s.id,allowed:false,reason:String(error.message)};}
     }
-    const r=await c.consider(s,{completedOnly});reviews.push({signalId:s.id,...r});if(r.allowed)candidates.push(s);
+    const r=await c.consider(s,{completedOnly});
+    const ticket=c.tickets?.get(String(s.id));
+    if(r.allowed&&ticket?.clockFinalAuthority){
+      if(!c.clockWakeAt.has(String(s.id)))c.clockWakeAt.set(String(s.id),c.now());
+      if(!c.injected)c.schedule((async()=>{
+        const out=await db.rpc('leader20_clock_execution_note',{p_signal_id:s.id,p_trace:{executor_wake_at:c.clockWakeAt.get(String(s.id))}});
+        if(out.error)console.error('CLOCK_EXECUTOR_WAKE_NOTE_FAILED',s.id);
+      })().catch(()=>console.error('CLOCK_EXECUTOR_WAKE_NOTE_FAILED',s.id)));
+    }
+    return {signalId:s.id,...r};
+  };
+  // Clock snapshot/authority reads are independent. Keep concurrency bounded;
+  // results retain queue order and all durable provider/entry claims are unchanged.
+  const width=executable.every(s=>s.features?.leader20?.entry_window)?4:1;
+  for(let i=0;i<executable.length;i+=width){
+    const group=executable.slice(i,i+width),rows=await Promise.all(group.map(reviewOne));
+    reviews.push(...rows);for(let j=0;j<group.length;j++)if(rows[j].allowed)candidates.push(group[j]);
   }
   const pending=reviews.some(r=>r.reason==='GPT_REVIEW_PENDING');
   c.yieldArmed=candidates.length===0&&pending;
   return {candidates,reason:pending?'GPT_REVIEW_PENDING':reviews.at(-1)?.reason??'GPT_NO_CANDIDATE',reviews};
 }
 export function gptReviewReadyToResume(db){return coordinatorFor(db).consumeReadyYield();}
+export function gptClockWakeAt(db,s){return coordinatorFor(db).clockWakeAt?.get(String(s.id))??null;}
+/** Clock BUY admission takes priority over unrelated WAIT/SKIP lifecycle writes.
+ * Writes remain attached to the Edge request and keep their original CAS guards. */
+export async function clockReviewDiagnostics(db,reviewed,write){
+  const task=write();
+  if(reviewed.candidates?.some(s=>s.features?.leader20?.entry_window)){
+    coordinatorFor(db).schedule(task.catch(()=>console.error('CLOCK_REVIEW_DIAGNOSTICS_FAILED')));return;
+  }
+  return await task;
+}
 /** Arm the one follow-up cycle (see runWithGptReview) for GPT BUY candidates a run entered
  * past; true only if one of them can still be rechecked inside its trigger window. */
 export function gptArmFollowUp(db,signals,switches=recoverySwitches()){
@@ -111,8 +136,8 @@ export function gptFinalCheck(db,s,finalRecheck=null,retryAuthority=null,{allowA
   if(c.config.mode!=='ENFORCE')return {allowed:false,reason:'GPT_NOT_ENFORCING_NO_NEW_ENTRY'};
   const clockTicket=c.tickets.get(String(s?.id));
   if(clockTicket?.clockFinalAuthority&&finalRecheck){
-    const safety=clockExecutionSafety(clockTicket,c.identity(s),finalRecheck.dispatch_quote,c.now());
-    if(!safety.ok)return {allowed:false,reason:safety.reason};
+    // This is an authority check, including during intent/lease I/O. Quote safety
+    // runs on a freshly acquired quote at the execution boundary before the send.
     if(finalRecheck.recheck_triggered||!sameClockCapture(clockTicket.initial.capture_context,finalRecheck.dispatch_capture,c.now()))
       return {allowed:false,reason:'CLOCK_FINAL_SNAPSHOT_MISMATCH'};
   }

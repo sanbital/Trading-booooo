@@ -7,8 +7,8 @@ import {FinalReviewCoordinator,MemoryReviewStore} from '../supabase/functions/_s
 import {validEvent,eventExpiry} from '../supabase/functions/_shared/leader20/campaign.mjs';
 import {setTestCoordinator} from '../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 export const nmrOriginal=JSON.parse(readFileSync(new URL('../tests/fixtures/nmr-clock-final-buy-20260928.json',import.meta.url)));
-export async function nmrClockFinal({store=new MemoryReviewStore(),afterPrepare=null}={}){
- const original=structuredClone(nmrOriginal),packet=original.packet,id=original.identity;
+export async function nmrClockFinal({store=new MemoryReviewStore(),afterPrepare=null,fixture=nmrOriginal}={}){
+ const original=structuredClone(fixture),packet=original.packet,id=original.identity;
  let at=original.snapshot_at_ms,calls=0,payload=null;
  const s={id:id.signal_id,symbol:id.symbol,status:'NEW',features:{leader20:id.leader20,
   referenceClose:id.reference_close,rank:id.rank,exitPolicy:id.exit_policy}},db={};

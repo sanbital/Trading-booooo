@@ -486,10 +486,12 @@ test('14. a fresh, complete book passes the same checks', () => {
 // The fix itself: nothing may sit between the pricing quote and the dispatch check.
 // ---------------------------------------------------------------------------
 
-test('the dispatch quote is read alongside BOO, not before it', () => {
+test('legacy dispatch quote is alongside BOO; clock dispatch quote follows the completed reads', () => {
   const tail = OPEN_BULL.slice(OPEN_BULL.indexOf('// Final gateway check uses a new account observation'));
-  assert.match(tail, /booGateInputs\(db,s\),\s*\n\s*E1_ENABLED\?gateway\(\{action:"quote",market:s\.symbol\},3000\)/,
-    "BOO's reads and the pricing quote must be issued in the SAME round trip");
+  assert.match(tail, /booGateInputs\(db,s\),\s*\n\s*attempt\.gptFinalReview\?\.clockFinalAuthority\?Promise\.resolve\(null\):E1_ENABLED\?gateway\(\{action:"quote",market:s\.symbol\},3000\)/,
+    'legacy quote stays in the same round trip; clock defers its quote');
+  assert.match(tail, /finalCheck=rawFinalCheck;\s*const clockQuote=attempt\.gptFinalReview\?\.clockFinalAuthority\?await readClockExecutionQuote\(/,
+    'clock quote must be obtained after the account, ownership and BOO reads');
   assert.match(SRC, /async function booGateInputs\(db,s\)\{/);
   assert.match(SRC, /function booVerdict\(s,phase,inputs,\{quote,info,snapshot,pair,orders\}\)\{/,
     'the verdict itself must be pure so it costs the quote nothing');
@@ -502,7 +504,7 @@ test('NOTHING awaits between the dispatch quote and the quote-age check', () => 
   // in that span is a millisecond charged against E1_POLICY.maxQuoteAgeMs. On the
   // happy path the two calls left below write nothing (recordMismatch returns on an
   // empty issue list; persistDecisionRisk returns as soon as the decision is allowed).
-  const from = OPEN_BULL.indexOf('const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuote,dispatchCapture]');
+  const from = OPEN_BULL.indexOf('const dispatchQuote=clockQuote?clockQuote.quote:dispatchQuoteRead;');
   const to = OPEN_BULL.indexOf('E1_DISPATCH_QUOTE_AGED');
   assert.ok(from > 0 && to > from, 'the dispatch block must be recognisable');
   const span = OPEN_BULL.slice(OPEN_BULL.indexOf('\n', from), to);
