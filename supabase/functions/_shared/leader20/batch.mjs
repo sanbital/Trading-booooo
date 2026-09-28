@@ -151,6 +151,14 @@ export async function callBatch(batch,{apiKey,fetchFn=fetch,now=Date.now,timeout
   /** @type {Record<string, any>} */
   const out={provider:'deepseek',model:BATCH_MODEL,purpose:'ENTRY',
     attempted:false,usage:null,api_cost_usd:null,batch_hash:batch.batch_hash};
+  // Keep the scheduled batch and explicit per-symbol data blocks, but there is
+  // no model evidence to review when every input is already blocked locally.
+  if(batch.symbols.length===10&&batch.symbols.every(s=>s.state==='BLOCKED')){
+    out.error='BATCH_NO_READY_SYMBOLS';out.api_cost_usd=0;
+    out.results=batch.symbols.map(s=>blocked(s,s.blocked_reason));
+    out.completed_at_ms=now();out.latency_ms=out.completed_at_ms-started;
+    return out;
+  }
   try {
     if(!apiKey)throw Error('BATCH_API_KEY_MISSING');
     out.attempted=true;
