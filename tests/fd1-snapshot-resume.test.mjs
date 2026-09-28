@@ -11,6 +11,7 @@ import {finalFields} from '../test-support/arbitration-fixtures.mjs';
 import {gptFilterExecutable,gptFinalCheck,runWithGptReview,setTestCoordinator,recordAsyncReviewOutcome} from '../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {buildRecheckPacket,recheckPayload} from '../supabase/functions/_shared/gpt-final-decision/recheck.mjs';
 import {lifecycleNote,expiredTriggerReason} from '../supabase/functions/v10-lane-executor/entry-lifecycle.mjs';
+import {validCapture} from '../test-support/dynamic-fixtures.mjs';
 const cfg={mode:'ENFORCE',modeValid:true,approvalRef:'fixture',apiBudgetUsd:3,maxCalls:300,enforceApproved:true};
 function sensor(){
  const points=Array.from({length:24},(_,i)=>{const end=T-5000-(23-i)*5000;return {
@@ -26,14 +27,19 @@ function sensor(){
 const signal=()=>({id:'snapshot-resume',symbol:'QUSDT',status:'NEW',features:{strategy:'LEADER_MOMENTUM_V17',referenceClose:1,dayReturn:.1,rank:1,
  v17Setup:{state:'TRIGGERED',triggerAt:T},exitPolicy:{stopPct:.01}}});
 async function packet(s=signal(),available=true,task='ENTRY'){
- const facts=computeFacts(src(T),{asOf:T+500});facts.market_sensor=available?sensor():validateMarketSensor(null,T);
+ // Snapshot-resume cases need valid entry data before they exercise journal identity.
+ // The AVAILABLE switch below concerns only the independent BTC market sensor.
+ const facts=computeFacts({...src(T),captureContext:validCapture(T+500)},{asOf:T+500});facts.market_sensor=available?sensor():validateMarketSensor(null,T);
  const p=await buildDecisionPacket({task,subjectId:s.id,symbol:s.symbol,dataMode:'LIVE',facts,judgments:FD1.identity(s).judgments,
   position:task==='HOLD'?{event:'REVIEW',positionId:'position',generation:'generation'}:null});
  p.as_of_offset_ms=500;p.execution_ref={bid:1.199,ask:1.2,mid:1.1995,at:T+500};p.snapshot_hash=await FD1.packetHash(p);return p;
 }
-function setup({decision='BUY',available=true,onResolved,store=new MemoryReviewStore()}={}){
+function setup({decision='BUY',available=true,capture=true,onResolved,store=new MemoryReviewStore()}={}){
  let clock=T+500,calls=0;
- const engine={...FD1,async prepare(identity){return {packet:await packet({...signal(),id:identity.signal_id},available),captured:T+500};}};
+ const engine={...FD1,async prepare(identity){
+  const p=await packet({...signal(),id:identity.signal_id},available);
+  if(!capture){delete p.facts.capture_context;p.snapshot_hash=await FD1.packetHash(p);}
+  return {packet:p,captured:T+500};}};
  const fetchFn=async(url,opts)=>{
   assert.equal(new URL(url).hostname,'api.openai.com','no exchange or live DB requests');calls++;
   const input=JSON.parse(JSON.parse(opts.body).input[1].content),d=decision;
@@ -47,6 +53,11 @@ function setup({decision='BUY',available=true,onResolved,store=new MemoryReviewS
  const c=make();return {c,make,store,s:signal(),setNow:t=>clock=t,calls:()=>calls};
 }
 async function complete(x){assert.equal((await x.c.consider(x.s)).reason,'GPT_REVIEW_PENDING');await Promise.all([...x.c.pending.values()]);}
+test('missing entry trajectory never calls a provider or restores a BUY',async()=>{
+ const x=setup({capture:false});await complete(x);
+ assert.equal(x.calls(),0);assert.equal(x.c.check(x.s).allowed,false);
+ assert.equal([...x.store.rows.values()][0].record.result.error,'DYNAMIC_TRAJECTORY_STALE_OR_FUTURE');
+});
 for(const task of ['ENTRY','HOLD'])test(task+' canonical sensor is hashed before freeze; input unchanged',async()=>{
  const p=await packet(signal(),true,task),original=structuredClone(p),f=await frozenReview(p,{snapshotAtMs:T+500});
  assert.equal(p.facts.market_sensor.status,'AVAILABLE');assert.equal(f.packet.facts.market_sensor.age_ms,p.facts.market_sensor.age_ms+500);
@@ -133,3 +144,4 @@ test('async lifecycle never updates an altered candidate identity',async()=>{
  const q={select(){return q;},eq(){return q;},maybeSingle:async()=>({data:row}),update(){throw Error('MUST_NOT_WRITE');}};
  await recordAsyncReviewOutcome({from:()=>q},s,{reason:'GPT_SNAPSHOT_MISMATCH',storedDecision:'BUY'});
 });
+
