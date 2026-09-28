@@ -63,6 +63,9 @@ export async function captureForInference(symbol,capture,{now=Date.now,sleep=ms=
  // the same bounded refresh opportunity as a delayed, otherwise valid bucket.
  const started=now(),initialEnd=Number.isSafeInteger(capture?.end_ms)?capture.end_ms:afterEndMs,
   until=Math.min(deadlineMs,started+maxWaitMs);
+ // The internal -Infinity sentinel must never enter a hashed/journaled packet.
+ // Missing prior evidence is unknown; keep the acquisition comparisons unchanged.
+ const previousEnd=Number.isFinite(initialEnd)?initialEnd:null,previousAge=previousEnd===null?null:started-previousEnd;
  const ready=c=>entryCaptureSafety(c,now()).ok&&c.end_ms>afterEndMs&&now()-c.end_ms<=targetAgeMs;
  if(ready(capture))return capture;
  const attempts=[];let current=capture;
@@ -79,11 +82,11 @@ export async function captureForInference(symbol,capture,{now=Date.now,sleep=ms=
   // accept it inside the existing 5s normal age, never the 10s stale boundary.
   const refreshed=entryCaptureSafety(current,now()).ok&&current.end_ms>afterEndMs&&now()-current.end_ms<=Math.min(DYNAMIC_POLICY.normalAgeMs,5000);
   if(now()<=until&&current?.end_ms>initialEnd&&(ready(current)||refreshed))return {...current,pre_inference_refresh:{
-    requested_at_ms:started,received_at_ms:now(),previous_end_ms:initialEnd,previous_age_ms:started-initialEnd,
+    requested_at_ms:started,received_at_ms:now(),previous_end_ms:previousEnd,previous_age_ms:previousAge,
     advanced:true,wait_ms:now()-started,attempts}};
  }
  return {...unavailable('INFERENCE_CAPTURE_NOT_READY'),pre_inference_refresh:{requested_at_ms:started,received_at_ms:now(),
-  previous_end_ms:initialEnd,previous_age_ms:started-initialEnd,advanced:false,wait_ms:now()-started,
+  previous_end_ms:previousEnd,previous_age_ms:previousAge,advanced:false,wait_ms:now()-started,
   latest_end_ms:current?.end_ms??null,attempts}};
 }
 
