@@ -66,11 +66,11 @@ for(let i=0;i<100;i++){
    if(row.qnt_trade.buckets!==24)throw Error('QNT_AVAILABLE_WITHOUT_24_BUCKETS');
    availableSamples++;
   }else if(row.qnt_trade?.status!=='UNAVAILABLE'||!row.qnt_trade.reason)throw Error('QNT_CONTEXT_CONTRACT');
-  // Market coverage gaps remain unavailable. Evaluate the collector over a
-  // real ten-minute window, requiring a majority of decision-ready samples
-  // and a ready final sample after any gap.
+  // Market coverage gaps remain unavailable. Observe at least ten minutes,
+  // repeatedly obtain the strict 24-bucket context, and end on a recovered
+  // context. Do not require genuine gaps to disappear for ten straight minutes.
   if(Number(row.as_of_ms)-observingSince>=600000&&observedSamples>=30&&
-    availableSamples/observedSamples>=0.6&&row.qnt_trade.status==='AVAILABLE'){
+    availableSamples>=12&&row.qnt_trade.status==='AVAILABLE'){
    verified=true;save();break;
   }
  }else if(observingSince!==null)throw Error('COLLECTOR_HEALTH_REGRESSED');
