@@ -21,3 +21,4 @@ jobs:
           sleep 15
           flyctl ssh console --app sanbital-doa-capture-20260925 --command 'cat /proc/stat'
 # Post-capacity verification: same collector, current CPU scheduling and image.
+# Read-only QNT recurrence audit: 2026-09-28T06:45Z.
