@@ -40,4 +40,8 @@ HBAR entry completed-candle values: RSI 53.60 / 45.71; Stoch 1m K63.53/D61.33, 5
 
 Regression coverage includes actual HBAR/SOON oversized packets, lossless reconstruction, three failure cases, same-invocation application, real executor CLOSE transport, stale/forged proof rejection, causal/missing/flat indicators and SQL admission at exhausted entry budget. Existing clock, dynamic, NMR, SOON, gateway and native protection suites remain required.
 
-Production replay/deployment and subsequent natural-trade evidence are appended after deployment. No artificial live trade is authorized or submitted by this audit.
+Initial release merged in PR #262 (main b64dc338) and deployed executor v156, artifact 6a75d639da8a8f4f283d4f6661db7bf5cef564dcf4e0729a1be5ee01035b0590. All 88 deployed files matched the checked-in source. Budget migration succeeded and readback confirmed unchanged $100/$100 monthly and $50/$100 daily limits.
+
+All 1,819 Node tests and 1,055 Deno tests passed; all three entrypoint type checks passed. Actual order-free production-provider replay returned valid ENTRY BUY (79,146 bytes; 7,592 ms) and valid HOLD / HOLD_WITH_TIGHTER_RISK (101,393 bytes; 4,340 ms), with all requested technical evidence. See production-replay.json. This replay uses current dual arbitration on the stored clock snapshot, not a forced live entry or a historical-profit simulation. Actual HOLD retained a recovery thesis; its tighter-risk action is honored, not replaced with a predetermined EXIT.
+
+Provider replay exposed two final consumer requirements: interpret validated HOLD_WITH_TIGHTER_RISK as approval of the offered protection candidate; consume all dynamic position reviews in the same invocation, including non-urgent event names. Fresh urgent failures also bypass pre-release five-minute retry delays. Follow-up regression tests cover these paths. No artificial live trade is authorized or submitted by this audit.
