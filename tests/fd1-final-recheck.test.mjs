@@ -87,6 +87,35 @@ const calmQuote=at=>({best_bid:1.199,best_ask:1.2,bids:BOOK.bids,asks:BOOK.asks,
 const e1Obs=(ret,share,n=150)=>({confirmationState:'BASELINE_ELIGIBLE',reasonCodes:['E1_NOT_FAST_WEAK'],expectedCostBps:12,
   observations:[{startAt:T,endAt:T+10000,return:ret,buyShare:share,tradeCount:n}]});
 const CALM=e1Obs(0.001,0.6),WEAK=e1Obs(-0.003,0.35);
+for(const leader of [false,true])for(const final of ['BUY','WAIT','TIMEOUT'])
+test(`initial BUY ages after validation before entry: leader=${leader} FINAL=${final}`,async()=>{
+  const x=await initialDecision({leader,final});
+  assert.equal(x.ticket.aged,undefined);
+  const validity=x.ticket.validUntil,expiry=x.ticket.expires,at=validity+207;x.setNow(at);
+  // No journal re-read: this is the same ticket that was fresh when read.
+  const entry=gptFinalCheck(x.db,x.s,null,null,{allowAged:true});
+  assert.equal(entry.allowed,true);assert.equal(entry.aged,true);
+  assert.equal(entry.review.validUntil,validity);assert.equal(entry.review.expires,expiry);
+  assert.equal(x.ticket.aged,undefined,'do not rewrite the stored/ticket answer');
+  assert.equal(gptFinalCheck(x.db,x.s).allowed,false);
+  assert.equal(gptBeginExecution(x.db,x.s),null,'aged BUY cannot authorize an order');
+  const r=await finalRecheckStep(x.db,x.s,{ticket:entry.review,e1:CALM,rawQuote:calmQuote(at-100),now:()=>at});
+  assert.equal(r.record.recheck_triggered,true);
+  assert.ok(r.record.recheck_reasons.includes('INITIAL_ANSWER_AGED'));
+  assert.equal(r.proceed,final==='BUY');
+  assert.equal(gptFinalCheck(x.db,x.s,{...r.record,dispatch_capture:validCapture(x.c.now())}).allowed,final==='BUY');
+});
+test('ticket aging boundary retains original reserve, engine authorization and identity guards',async()=>{
+  const x=await initialDecision({leader:true}),valid=x.ticket.validUntil;
+  x.setNow(valid);assert.equal(gptFinalCheck(x.db,x.s,null,null,{allowAged:true}).allowed,true);
+  x.c.engine={...x.c.engine,agedRecheck:false};
+  assert.equal(gptFinalCheck(x.db,x.s,null,null,{allowAged:true}).allowed,false);
+  x.c.engine={...x.c.engine,agedRecheck:true};
+  x.setNow(x.ticket.expires-3000-8000);
+  assert.equal(gptFinalCheck(x.db,x.s,null,null,{allowAged:true}).allowed,false);
+  x.setNow(valid);x.s.symbol='ALTEREDUSDT';
+  assert.equal(gptFinalCheck(x.db,x.s,null,null,{allowAged:true}).allowed,false);
+});
 test('WUSDT reaches real ENTRY and FINAL RECHECK; SKIP still forbids dispatch',async()=>{
   const x=await initialDecision({symbol:'WUSDT',final:'SKIP'});
   assert.equal(x.check.allowed,true);assert.equal(x.s.symbol,'WUSDT');
