@@ -23,7 +23,9 @@ Validation:
   was replayed with an injected missing first read. All24 trajectory rows, dynamics
   and original end time were identical after recovery and hashing succeeded.
   This is not an exact replay of the lost ONE preparation input. Provider calls0,orders0.
-- Original capture-context source matches downloaded executor v141.
+- Original source matched executor v141; PR234/v142 was merged and its capture source matched the updated baseline before continuing.
+- The new preflight guard exposed17 snapshot-resume tests whose legacy fixture lacked any entry trajectory. The fixture now supplies a valid synthetic24-bucket capture; a separate missing-trajectory case still proves zero provider calls and no restored BUY.
+- Combined PR234 validation:1480/1480 Node,1055 Deno plus13 steps, Edge type checks. No production validator was relaxed.
 - Actual rollout version/hash and post-rollout observations are retained in the
   first-fill monitor artifact; this pre-deploy document does not assert rollout success.
 
