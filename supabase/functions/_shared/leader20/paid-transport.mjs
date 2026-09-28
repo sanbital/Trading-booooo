@@ -22,8 +22,14 @@ export function paidTransport(db,{parentKey,purpose,fetchFn=fetch,now=Date.now}=
   }
   const owner=claim.data.row.owner;
   const transition=async(state,extra={})=>{
-   const r=await db.rpc('ai_call_transition',{p_key:key,p_owner:owner,p_state:state,...extra});
-   if(r.error)throw Error('API_LEDGER_WRITE_FAILED');return r.data;
+   for(let attempt=0;attempt<3;attempt++){
+    const r=await db.rpc('ai_call_transition',{p_key:key,p_owner:owner,p_state:state,...extra});
+    if(!r.error)return r.data;
+    // These PostgreSQL errors guarantee rollback. Retry only the same ledger
+    // transition, never the provider request or an ambiguous dispatch.
+    if(!['55P03','57014','40001','40P01'].includes(r.error.code)||attempt===2)throw Error('API_LEDGER_WRITE_FAILED');
+    await new Promise(resolve=>setTimeout(resolve,100*(attempt+1)));
+   }
   };
   if(init.signal?.aborted){await transition('CANCELLED');throw Error('API_CANCELLED_BEFORE_DISPATCH');}
   await transition('DISPATCHED');
