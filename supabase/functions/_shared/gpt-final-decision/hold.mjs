@@ -37,7 +37,8 @@ export function nextEvent(st,{now,price,peak,timeCandidate,softTrigger,dynamics}
  if(P.costProfile){
   const urgent=URGENT_COST_EVENTS.has(dynamics?.event);
   const gap=urgent?P.urgentGapMs:P.ordinaryGapMs;
-  if(elapsed<gap||!urgent&&s.reviews>=P.maxReviews||s.retryAfter&&now<s.retryAfter)return {state:s,event:null};
+  if(elapsed<gap||!urgent&&(s.reviews>=P.maxReviews||s.retryAfter&&now<s.retryAfter))return {state:s,event:null};
+  if(urgent)s.retryAfter=null;
  }
  if(dynamics?.event&&
     (elapsed>=DYNAMIC_POLICY.missingRetryMs||dynamics.event==='TRAJECTORY_RECOVERED')&&dynamics.evidenceKey!==s.lastDynamicsKey){
@@ -81,7 +82,7 @@ export async function holdStep(st0,{now,price,peak,timeCandidate,softTrigger,dyn
    const unapplied=a?.valid===true&&a?.decision&&(!fresh||a.refresh_error);
    const ignored=unapplied?(!fresh?'LATE_RESULT_NOT_APPLIED':'SNAPSHOT_REFRESH_FAILED'):decision==='ABSTAIN'?'INVALID_OR_UNAVAILABLE':null;
    st.technicalFailure=ignored?{at:now,error:a?.error??ignored,jobKey:pending.key,event:pending.event}:null;
-   st.last={failure_detected_at:pending.failure_detected_at??pending.at,failure_to_decision_ms:completed==null?null:completed-(pending.failure_detected_at??pending.at),failure_to_action_ms:ignored?null:now-(pending.failure_detected_at??pending.at),key:pending.key,event:pending.event,decision:unapplied?a.decision:decision,authority,at:now,
+   st.last={dynamic_action:a?.dynamic_action??null,failure_detected_at:pending.failure_detected_at??pending.at,failure_to_decision_ms:completed==null?null:completed-(pending.failure_detected_at??pending.at),failure_to_action_ms:ignored?null:now-(pending.failure_detected_at??pending.at),key:pending.key,event:pending.event,decision:unapplied?a.decision:decision,authority,at:now,
      requested_at:pending.at,api_started_at:a?.started_at_ms??null,api_completed_at:completed??null,
      consumer_deadline:pending.at+P.timeAnswerWaitMs,consumer_received:now,applied_at:ignored?null:now,
      expired:!fresh,ignored_reason:ignored,applied_decision:ignored?null:decision};st.pending=null;

@@ -128,11 +128,11 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
   const answerOf=async key=>{const row=completedRow??await (pendingRead??store.get(key));if(!row)return null;const r=row.record?.result??{},
       identityOk=row.record?.identity?.position_id===String(p.id)&&row.record?.identity?.generation===generation&&row.record?.purpose==='PRODUCTION'&&
         row.record?.packet?.position?.generation===generation;
-    let valid=false;try{valid=r.valid===true&&identityOk&&revalidateArbitration(r,row.record.packet).decision===r.decision;}catch{}
+    let valid=false,validated=null;try{if(r.valid===true&&identityOk){validated=revalidateArbitration(r,row.record.packet);valid=validated.decision===r.decision;}}catch{}
     const reviewedCapture=row.record?.packet?.facts?.capture_context;
     if(valid&&row.record?.packet?.dynamic_policy&&reviewedCapture?.status==='AVAILABLE'&&
       !entryCaptureSafety(reviewedCapture,testHooks?now:Date.now()).ok)valid=false;
-    if(valid)return {state:row.state,decision:r.decision,valid:true,authority:'GPT_FINAL_ONLY',
+    if(valid)return {state:row.state,decision:r.decision==='HOLD'&&validated?.dynamic_action==='HOLD_WITH_TIGHTER_RISK'?'PROTECT':r.decision,dynamic_action:validated?.dynamic_action??null,valid:true,authority:'GPT_FINAL_ONLY',
       dynamic_state:row.record?.packet?.dynamic_data_state?.status??null,
       started_at_ms:r.started_at_ms,completed_at_ms:r.completed_at_ms,snapshot_at_ms:r.final_snapshot_at_ms,snapshot_hash:r.arbitration?.final_snapshot_hash??null,
       refresh_error:r.arbitration?.refresh_error??null};
@@ -227,7 +227,7 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
         await store.complete(step.start.key,owner,finished);
         completedRow={state:'DONE',record:finished};
       })().catch(e=>{console.error('FD1_HOLD_REVIEW_FAILED',p.id,String(e?.message??e).slice(0,200));});
-      if(urgentHoldEvent(step.start.event)&&!testHooks?.schedule){
+      if((prior.dynamicTracker||urgentHoldEvent(step.start.event))&&!testHooks?.schedule){
         await task;now=(testHooks?.now??Date.now)();
         if(!completedRow)return fail('REVIEW_COMPLETION_FAILED');
         const consumed=await holdStep(step.state,{now,price:bid,peak:state.peakPrice,timeCandidate,softTrigger,dynamics,positionId:p.id,generation,answerOf,clock:testHooks?.now??Date.now},MONTHLY_HOLD_POLICY);

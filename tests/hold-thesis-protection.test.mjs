@@ -30,18 +30,21 @@ test('emergency proof dispatches the existing reduce-only close and rejects stal
  const calls=h.state.calls.filter(x=>x.action==='create_order');assert.equal(calls.length,1);assert.equal(calls[0].order.position_effect,'CLOSE');assert.equal(calls[0].order.side,'SELL');
  assert.throws(()=>assertExitAuthority('EMERGENCY_EXIT_THESIS_FAILURE',p,approval,at+5001),/EMERGENCY/);
 });
-for(const failed of [false,true])test('urgent review '+(failed?'failure protects':'GPT exits')+' in the same invocation',async()=>{
+for(const mode of ['EXIT','TIGHTER','FAIL'])test('urgent review '+mode+' in the same invocation',async()=>{
+ const failed=mode==='FAIL';
  const p={id:packet.position.position_id,entry_at:'2026-09-28T15:01:38.742+00:00',entry_price:.1187672245651028,remaining_quantity:3794,symbol:'HBARUSDT',state:'OPEN'};
  const generation=positionGeneration(p),at=packet.dynamic_as_of_ms,q=structuredClone(packet);q.position.generation=generation;
  let completed=false;const capture=q.facts.capture_context,exit=q.position.exit_context;
  const result=failed?{valid:false,decision:'ABSTAIN',error:'FD_REQUEST_COST_BOUND',completed_at_ms:at}:
  await dualEntryDecision(q,{apiKey:'test',deepseekKey:'',now:()=>at,snapshotAtMs:at,deadlineMs:at+8000,reviewTier:'FAST',policy:baselinePolicy(),
- counterCall:async()=>({valid:false,attempted:false,error:'DEEPSEEK_KEY_MISSING'}),gptCall:async(z,o)=>{const wire=exitWire(z),answer=o.validate(wire,z);return {valid:true,decision:answer.decision,answer,wire,attempted:true,api_cost_usd:.01,started_at_ms:at,completed_at_ms:at};}});
+ counterCall:async()=>({valid:false,attempted:false,error:'DEEPSEEK_KEY_MISSING'}),gptCall:async(z,o)=>{const wire={...exitWire(z),...(mode==='TIGHTER'?{d:'HOLD',action:'HOLD',support:['return_5m'],dynamic_action:'HOLD_WITH_TIGHTER_RISK'}:{})},answer=o.validate(wire,z);return {valid:true,decision:answer.decision,answer,wire,attempted:true,api_cost_usd:.01,started_at_ms:at,completed_at_ms:at};}});
+ if(!failed)assert.equal(result.valid,true,result.error);
  setFd1HoldTestHooks({apiKey:'test',config:{mode:'ENFORCE',modeValid:true,approvalRef:'test',apiBudgetUsd:3,maxCalls:300,enforceApproved:true},leader20Control:{},
   capture:async()=>capture,now:()=>at,review:async()=>({packet:q,result}),store:{get:async()=>null,claim:async()=>({created:true,row:{owner:'test'}}),complete:async()=>{completed=true;}}});
  try{const r=await fd1HoldTick(null,p,{now:at,bid:exit.current_price,state:{peakPrice:exit.peak},exitContext:exit,meta:{}});
  assert.equal(completed,true);assert.equal(r.state.pending,null);assert.equal(r.state.last.failure_to_action_ms,0);
  if(failed){assert.equal(r.fallback,true);assert.ok(r.state.protectLevel>exit.hard_floor);}
+ else if(mode==='TIGHTER'){assert.equal(r.close,false);assert.equal(r.reason,'FD1_GPT_PROTECT');assert.ok(r.state.protectLevel>exit.hard_floor);assert.equal(r.state.last.dynamic_action,'HOLD_WITH_TIGHTER_RISK');}
  else{assert.equal(r.close,true);assert.equal(r.reason,'FD1_GPT_EXIT');}
  }finally{setFd1HoldTestHooks(null);}
 });
@@ -114,7 +117,7 @@ test('emergency cannot act on stale, future, incomplete, recovered or unfailed s
  const p={id:'p',entry_at:'2026-09-28T15:00:00Z',state:'OPEN',remaining_quantity:1};assert.throws(()=>assertExitAuthority('EMERGENCY_EXIT_THESIS_FAILURE',p,null,a.now),/EMERGENCY_PROOF_REQUIRED/);
 });
 test('urgent failure bypasses a preceding ordinary review delay and spent review count',async()=>{
- const at=packet.dynamic_as_of_ms,st={...initialHoldState(1),lastReviewAt:at-5000,reviews:100};
+ const at=packet.dynamic_as_of_ms,st={...initialHoldState(1),lastReviewAt:at-5000,reviews:100,retryAfter:at+300000};
  const r=await holdStep(st,{now:at,price:.99,peak:1,positionId:'p',generation:'g',dynamics:{event:'ENTRY_FAILURE_MULTI_AXIS',evidenceKey:'fresh'},answerOf:async()=>null},MONTHLY_HOLD_POLICY);
  assert.equal(r.start.event,'ENTRY_FAILURE_MULTI_AXIS');
 });

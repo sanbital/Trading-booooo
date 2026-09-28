@@ -1,0 +1,379 @@
+{
+  "initial_deployment": {
+    "version": 156,
+    "ezbr_sha256": "6a75d639da8a8f4f283d4f6661db7bf5cef564dcf4e0729a1be5ee01035b0590",
+    "source_bundle_sha256": "406702357132ee7c3e905eb6f2e18ab9328e98b45aea210f1ef61447835bbeac",
+    "files": 88,
+    "mismatches": [],
+    "main": "b64dc3381b080dccbf8e81ecd35736d6f5997480"
+  },
+  "order_calls": 0,
+  "replays": [
+    {
+      "job_key": "5044492351882bcfa8f1959dbbfe3f0db181be22a6a39ffda1f492b552fbd59e",
+      "created_at": "2026-09-28 15:53:50.170477+00",
+      "source": {
+        "symbol": "HBARUSDT",
+        "source_job_key": "a500e00b113989be5798d13b1bed8faf5d70078db160e8567bd3943b1d1d7764"
+      },
+      "decision": "BUY",
+      "valid": true,
+      "error": null,
+      "bytes": 79146,
+      "latency_ms": 7592,
+      "answer": {
+        "task": "ENTRY",
+        "action": "ENTER",
+        "reasons": [],
+        "summary": "짧은 탄력이 살아 있어 진입 가능하다",
+        "support": [
+          {
+            "key": "return_1m",
+            "unit": "fraction",
+            "value": 0.005843495934959364
+          },
+          {
+            "key": "return_5m",
+            "unit": "fraction",
+            "value": 0.009176650522559227
+          },
+          {
+            "key": "accel_5m_vs_15m",
+            "unit": "fraction",
+            "value": 0.008501715906850116
+          }
+        ],
+        "version": "GPT_FINAL_DECISION_FD1",
+        "decision": "BUY",
+        "risk_hard": [],
+        "risk_soft": [
+          "EXHAUSTION"
+        ],
+        "confidence": 0.73,
+        "arbitration": {
+          "reason": "말미 재가속을 우선 반영하고 약한 OI와 상위 추세는 보조로 둔다",
+          "adopted": [
+            "initial.capture_context.dynamics.horizons.s120.buy_share",
+            "initial.capture_context.dynamics.horizons.s120.net_taker_flow",
+            "initial.capture_context.dynamics.horizons.s120.return"
+          ],
+          "opposing": [
+            "initial.facts.derivatives.oi_change_5m",
+            "initial.facts.trend.distance_high_4h"
+          ],
+          "rejected": [
+            "initial.facts.derivatives.oi_change_5m",
+            "initial.facts.trend.distance_high_4h"
+          ],
+          "considered": [
+            "initial.capture_context.dynamics.horizons.s120.buy_share",
+            "initial.capture_context.dynamics.horizons.s120.net_taker_flow",
+            "initial.capture_context.dynamics.horizons.s120.return",
+            "initial.facts.derivatives.oi_change_5m",
+            "initial.facts.trend.distance_high_4h"
+          ],
+          "supporting": [
+            "initial.capture_context.dynamics.horizons.s120.buy_share",
+            "initial.capture_context.dynamics.horizons.s120.net_taker_flow",
+            "initial.capture_context.dynamics.horizons.s120.return"
+          ]
+        },
+        "noted_risks": [
+          {
+            "level": "JUDGMENT",
+            "category": "GPT_JUDGMENT",
+            "evidence": [
+              {
+                "key": "return_5m",
+                "unit": "fraction",
+                "value": 0.009176650522559227
+              },
+              {
+                "key": "return_30m",
+                "unit": "fraction",
+                "value": -0.004108670132483727
+              },
+              {
+                "key": "book_imbalance_25bps",
+                "unit": "ratio",
+                "value": -0.40680719231531604
+              }
+            ]
+          }
+        ],
+        "why_buy_now": {
+          "flow": [
+            "dynamics.horizons.s5.net_taker_flow",
+            "dynamics.horizons.s5.buy_share",
+            "dynamics.horizons.s15.net_taker_flow"
+          ],
+          "summary": "단기 매수 유입이 재개돼 지금이 대기보다 낫다",
+          "horizons": {
+            "s5": {
+              "summary": "마지막 5초에 강한 매수 우위가 나타났다",
+              "evidence": [
+                "dynamics.horizons.s5.return"
+              ]
+            },
+            "s15": {
+              "summary": "최근 15초는 반등과 매수 우위가 이어졌다",
+              "evidence": [
+                "dynamics.horizons.s15.return"
+              ]
+            },
+            "s30": {
+              "summary": "최근 30초도 순유입과 상승 흐름이 유지됐다",
+              "evidence": [
+                "dynamics.horizons.s30.return"
+              ]
+            },
+            "s60": {
+              "summary": "최근 60초는 전체적으로 회복 우세였다",
+              "evidence": [
+                "dynamics.horizons.s60.return"
+              ]
+            },
+            "s120": {
+              "summary": "최근 120초는 약했지만 말미에 회복이 붙었다",
+              "evidence": [
+                "dynamics.horizons.s120.return"
+              ]
+            }
+          },
+          "orderbook": [
+            "dynamics.horizons.s5.imbalance",
+            "dynamics.horizons.s5.spread",
+            "dynamics.horizons.s60.ask_liquidity_change"
+          ]
+        },
+        "why_not_wait": "지금은 반등 초입이라 지연 이점이 작다",
+        "dynamic_risks": [
+          "dynamics.horizons.s120.imbalance",
+          "dynamics.horizons.s60.net_taker_flow"
+        ],
+        "abstain_reason": "NONE",
+        "pressure_state": "RISING",
+        "decision_reason": "단기 수요와 가속이 우세해 소폭 기대값이 플러스다",
+        "bearish_evidence": [
+          {
+            "key": "return_30m",
+            "unit": "fraction",
+            "value": -0.004108670132483727
+          },
+          {
+            "key": "return_60m",
+            "unit": "fraction",
+            "value": -0.0099199733244415
+          },
+          {
+            "key": "relative_strength_60m",
+            "unit": "fraction_difference",
+            "value": -0.004119517625691516
+          }
+        ],
+        "bullish_evidence": [
+          "return_1m",
+          "return_5m",
+          "accel_5m_vs_15m"
+        ],
+        "counter_evidence": [
+          "dynamics.horizons.s120.imbalance",
+          "dynamics.horizons.s60.bid_liquidity_change",
+          "dynamics.horizons.s60.spread"
+        ],
+        "dynamic_evidence": [
+          "dynamics.horizons.s5.return",
+          "dynamics.horizons.s5.net_taker_flow",
+          "dynamics.horizons.s5.buy_share"
+        ],
+        "rejected_bearish": [],
+        "rejected_support": [],
+        "consistency_flags": [],
+        "decision_contract": "LEADER20_DECISION_1",
+        "current_propulsion": "5초와 1분 흐름이 재가속 중이다",
+        "expected_upside_pct": 1.2,
+        "expected_value_bias": "POSITIVE",
+        "structural_strength": "상위 추세는 약하지만 단기 회복이 붙었다",
+        "thesis_invalidation": "매수 우위가 꺾이고 스프레드가 악화되면 무효다",
+        "propulsion_direction": "ACCELERATING",
+        "expected_downside_pct": 0.8,
+        "next_review_conditions": "60초 흐름과 호가 우위가 둔화되면 재평가한다",
+        "invalidation_conditions": [
+          {
+            "op": "ABOVE",
+            "fact": "distance_high_60m",
+            "value": -0.01
+          },
+          {
+            "op": "ABOVE",
+            "fact": "book_imbalance_25bps",
+            "value": 0
+          }
+        ],
+        "dual_confidence_degraded": false
+      },
+      "technical": {
+        "errors": {},
+        "source": "HISTORICAL_COMPLETED_CANDLES",
+        "values": {
+          "bb_mid": 0.11809900000000002,
+          "bb_lower": 0.11684265768995869,
+          "bb_upper": 0.11935534231004136,
+          "bb_width": 0.021276087181793805,
+          "rsi_1m_14": 53.59527407965584,
+          "rsi_5m_14": 45.7050207930004,
+          "stoch_d_1m": 61.32592167333416,
+          "stoch_d_5m": 26.006511413097726,
+          "stoch_k_1m": 63.533819951338295,
+          "stoch_k_5m": 26.40666222602097,
+          "bb_position": 0.7670450539781237,
+          "candle_range": 0.011940045727834657,
+          "body_to_range": 0.48226950354610115,
+          "ema9_distance": 0.005839510152263472,
+          "ema9_vs_ema20": -0.0009540534969257886,
+          "ema20_distance": 0.004879885450256527,
+          "stoch_cross_1m": 1,
+          "stoch_cross_5m": 1,
+          "last_lower_wick": 0.002794478787365543,
+          "atr_1m_14_normalized": 0.007952904066811102,
+          "close_location_value": 0.7163120567375892
+        },
+        "missing": {},
+        "cutoff_ms": 1790607678315
+      }
+    },
+    {
+      "job_key": "731a9d842a7539746d74a52f76236e78a4413a5a29bcab690aa22dd685200d4a",
+      "created_at": "2026-09-28 15:53:50.238335+00",
+      "source": {
+        "symbol": "HBARUSDT",
+        "source_job_key": "5abbe4a919c862918b0a4a49b1bfde52641e205062ea0857b121651a0da72eb7"
+      },
+      "decision": "HOLD",
+      "valid": true,
+      "error": null,
+      "bytes": 101393,
+      "latency_ms": 4340,
+      "answer": {
+        "task": "HOLD",
+        "action": "HOLD",
+        "reasons": [],
+        "summary": "상승 추세는 살아있지만 단기 추진력은 둔화됐습니다.",
+        "support": [
+          {
+            "key": "return_5m",
+            "unit": "fraction",
+            "value": 0.01269057150157571
+          },
+          {
+            "key": "return_15m",
+            "unit": "fraction",
+            "value": 0.006433045539190774
+          },
+          {
+            "key": "taker_buy_ratio_5m",
+            "unit": "ratio",
+            "value": 0.5233742762106943
+          }
+        ],
+        "version": "GPT_FINAL_DECISION_FD1",
+        "decision": "HOLD",
+        "risk_hard": [],
+        "risk_soft": [],
+        "confidence": 0.73,
+        "arbitration": {
+          "reason": "DeepSeek unavailable; no valid advisory citations to arbitrate.",
+          "adopted": [],
+          "opposing": [],
+          "rejected": [],
+          "considered": [],
+          "supporting": []
+        },
+        "noted_risks": [
+          {
+            "level": "JUDGMENT",
+            "category": "GPT_JUDGMENT",
+            "evidence": [
+              {
+                "key": "return_5m",
+                "unit": "fraction",
+                "value": 0.01269057150157571
+              },
+              {
+                "key": "return_15m",
+                "unit": "fraction",
+                "value": 0.006433045539190774
+              },
+              {
+                "key": "return_60m",
+                "unit": "fraction",
+                "value": -0.009826782145236468
+              },
+              {
+                "key": "taker_buy_ratio_5m",
+                "unit": "ratio",
+                "value": 0.5233742762106943
+              }
+            ]
+          }
+        ],
+        "uncertainty": "재가속은 가능하지만 지금은 추격 우위가 약합니다.",
+        "dynamic_risks": [
+          "dynamics.horizons.s5.return",
+          "dynamics.horizons.s5.net_taker_flow",
+          "dynamics.horizons.s60.imbalance"
+        ],
+        "dynamic_action": "HOLD_WITH_TIGHTER_RISK",
+        "pressure_state": "MIXED",
+        "decision_reason": "구조는 유지되나 최근 60초 추진이 약해져 보유가 적절합니다.",
+        "counter_evidence": [
+          "dynamics.horizons.s60.return",
+          "dynamics.horizons.s60.net_taker_flow",
+          "dynamics.horizons.s60.imbalance"
+        ],
+        "dynamic_evidence": [
+          "dynamics.horizons.s30.return",
+          "dynamics.horizons.s30.net_taker_flow",
+          "dynamics.horizons.s5.buy_share"
+        ],
+        "rejected_support": [],
+        "decision_contract": "LEADER20_DECISION_1",
+        "current_propulsion": "초단기 매수우위가 약해졌고 1분 흐름은 약합니다.",
+        "structural_strength": "중기 구조는 유지됩니다.",
+        "thesis_invalidation": "30초 이상 회복과 매수우위가 재차 무너질 때.",
+        "propulsion_direction": "DECELERATING",
+        "next_review_conditions": "새 고점 재시도와 taker buy 회복을 확인합니다.",
+        "dual_confidence_degraded": true
+      },
+      "technical": {
+        "errors": {},
+        "source": "HISTORICAL_COMPLETED_CANDLES",
+        "values": {
+          "bb_mid": 0.11809299999999998,
+          "bb_lower": 0.11688087624394204,
+          "bb_upper": 0.11930512375605791,
+          "bb_width": 0.020528291364567488,
+          "rsi_1m_14": 54.60505115536266,
+          "rsi_5m_14": 45.7050207930004,
+          "stoch_d_1m": 83.26583334384885,
+          "stoch_d_5m": 26.006511413097726,
+          "stoch_k_1m": 84.91081250982246,
+          "stoch_k_5m": 26.40666222602097,
+          "bb_position": 0.8328868013545718,
+          "candle_range": 0.006054999579513905,
+          "body_to_range": 0.013888888888883535,
+          "ema9_distance": 0.0036363918404938023,
+          "ema9_vs_ema20": 0.0008413876603055037,
+          "ema20_distance": 0.0044808391160220395,
+          "stoch_cross_1m": 0,
+          "stoch_cross_5m": 1,
+          "last_lower_wick": 0.001345555462114266,
+          "atr_1m_14_normalized": 0.007468009624759876,
+          "close_location_value": 0.22222222222223292
+        },
+        "missing": {},
+        "cutoff_ms": 1790607866513
+      }
+    }
+  ]
+}
