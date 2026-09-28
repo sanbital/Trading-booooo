@@ -1,0 +1,544 @@
+{
+  "migration": "20260928032432_missed_opportunity_lookup_indexes",
+  "plan": [
+    {
+      "QUERY PLAN": [
+        {
+          "Plan": {
+            "Node Type": "Nested Loop",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Join Type": "Left",
+            "Startup Cost": 870.51,
+            "Total Cost": 32523.62,
+            "Plan Rows": 3000,
+            "Plan Width": 2524,
+            "Inner Unique": false,
+            "Plans": [
+              {
+                "Node Type": "Nested Loop",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Join Type": "Left",
+                "Startup Cost": 868.01,
+                "Total Cost": 24712.37,
+                "Plan Rows": 3000,
+                "Plan Width": 2410,
+                "Inner Unique": false,
+                "Plans": [
+                  {
+                    "Node Type": "Nested Loop",
+                    "Parent Relationship": "Outer",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Join Type": "Left",
+                    "Startup Cost": 865.16,
+                    "Total Cost": 16094.87,
+                    "Plan Rows": 3000,
+                    "Plan Width": 2337,
+                    "Inner Unique": false,
+                    "Plans": [
+                      {
+                        "Node Type": "Nested Loop",
+                        "Parent Relationship": "Outer",
+                        "Parallel Aware": false,
+                        "Async Capable": false,
+                        "Join Type": "Left",
+                        "Startup Cost": 862.65,
+                        "Total Cost": 8459.87,
+                        "Plan Rows": 3000,
+                        "Plan Width": 1188,
+                        "Inner Unique": false,
+                        "Plans": [
+                          {
+                            "Node Type": "Limit",
+                            "Parent Relationship": "Outer",
+                            "Parallel Aware": false,
+                            "Async Capable": false,
+                            "Startup Cost": 862.37,
+                            "Total Cost": 869.87,
+                            "Plan Rows": 3000,
+                            "Plan Width": 1146,
+                            "Plans": [
+                              {
+                                "Node Type": "Sort",
+                                "Parent Relationship": "Outer",
+                                "Parallel Aware": false,
+                                "Async Capable": false,
+                                "Startup Cost": 862.37,
+                                "Total Cost": 870.8,
+                                "Plan Rows": 3369,
+                                "Plan Width": 1146,
+                                "Sort Key": [
+                                  "s.updated_at DESC"
+                                ],
+                                "Plans": [
+                                  {
+                                    "Node Type": "Seq Scan",
+                                    "Parent Relationship": "Outer",
+                                    "Parallel Aware": false,
+                                    "Async Capable": false,
+                                    "Relation Name": "v11_long_regime_signals",
+                                    "Alias": "s",
+                                    "Startup Cost": 0,
+                                    "Total Cost": 650.96,
+                                    "Plan Rows": 3369,
+                                    "Plan Width": 1146,
+                                    "Filter": "(created_at >= (now() - '30 days'::interval))"
+                                  }
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "Node Type": "Limit",
+                            "Parent Relationship": "Inner",
+                            "Parallel Aware": false,
+                            "Async Capable": false,
+                            "Startup Cost": 0.28,
+                            "Total Cost": 2.51,
+                            "Plan Rows": 1,
+                            "Plan Width": 50,
+                            "Plans": [
+                              {
+                                "Node Type": "Index Scan",
+                                "Parent Relationship": "Outer",
+                                "Parallel Aware": false,
+                                "Async Capable": false,
+                                "Scan Direction": "Forward",
+                                "Index Name": "gpt_final_entry_reviews_production_signal_created_idx",
+                                "Relation Name": "gpt_final_entry_reviews",
+                                "Alias": "r",
+                                "Startup Cost": 0.28,
+                                "Total Cost": 2.51,
+                                "Plan Rows": 1,
+                                "Plan Width": 50,
+                                "Index Cond": "(signal_id = (s.id)::text)",
+                                "Filter": "((COALESCE((record ->> 'kind'::text), ''::text) <> 'FD1_FINAL_RECHECK'::text) AND (COALESCE(((record -> 'packet'::text) ->> 'task'::text), 'ENTRY'::text) = 'ENTRY'::text))"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "Node Type": "Limit",
+                        "Parent Relationship": "Inner",
+                        "Parallel Aware": false,
+                        "Async Capable": false,
+                        "Startup Cost": 2.5,
+                        "Total Cost": 2.52,
+                        "Plan Rows": 1,
+                        "Plan Width": 1161,
+                        "Plans": [
+                          {
+                            "Node Type": "Incremental Sort",
+                            "Parent Relationship": "Outer",
+                            "Parallel Aware": false,
+                            "Async Capable": false,
+                            "Startup Cost": 2.5,
+                            "Total Cost": 2.55,
+                            "Plan Rows": 2,
+                            "Plan Width": 1161,
+                            "Sort Key": [
+                              "x.recheck_sequence DESC",
+                              "x.created_at DESC"
+                            ],
+                            "Presorted Key": [
+                              "x.recheck_sequence"
+                            ],
+                            "Plans": [
+                              {
+                                "Node Type": "Index Scan",
+                                "Parent Relationship": "Outer",
+                                "Parallel Aware": false,
+                                "Async Capable": false,
+                                "Scan Direction": "Backward",
+                                "Index Name": "fd1_final_recheck_log_signal_sequence_idx",
+                                "Relation Name": "fd1_final_recheck_log",
+                                "Alias": "x",
+                                "Startup Cost": 0.28,
+                                "Total Cost": 2.49,
+                                "Plan Rows": 1,
+                                "Plan Width": 1161,
+                                "Index Cond": "(signal_id = (s.id)::text)"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "Node Type": "Aggregate",
+                    "Strategy": "Plain",
+                    "Partial Mode": "Simple",
+                    "Parent Relationship": "Inner",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Startup Cost": 2.85,
+                    "Total Cost": 2.86,
+                    "Plan Rows": 1,
+                    "Plan Width": 73,
+                    "Plans": [
+                      {
+                        "Node Type": "Index Scan",
+                        "Parent Relationship": "Outer",
+                        "Parallel Aware": false,
+                        "Async Capable": false,
+                        "Scan Direction": "Forward",
+                        "Index Name": "v11_long_regime_orders_open_signal_created_idx",
+                        "Relation Name": "v11_long_regime_orders",
+                        "Alias": "q",
+                        "Startup Cost": 0.28,
+                        "Total Cost": 2.49,
+                        "Plan Rows": 1,
+                        "Plan Width": 608,
+                        "Index Cond": "(signal_id = s.id)"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Node Type": "Limit",
+                "Parent Relationship": "Inner",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Startup Cost": 2.5,
+                "Total Cost": 2.5,
+                "Plan Rows": 1,
+                "Plan Width": 57,
+                "Plans": [
+                  {
+                    "Node Type": "Sort",
+                    "Parent Relationship": "Outer",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Startup Cost": 2.5,
+                    "Total Cost": 2.5,
+                    "Plan Rows": 1,
+                    "Plan Width": 57,
+                    "Sort Key": [
+                      "z.entry_at DESC"
+                    ],
+                    "Plans": [
+                      {
+                        "Node Type": "Index Scan",
+                        "Parent Relationship": "Outer",
+                        "Parallel Aware": false,
+                        "Async Capable": false,
+                        "Scan Direction": "Forward",
+                        "Index Name": "v11_long_regime_positions_signal_id_key",
+                        "Relation Name": "v11_long_regime_positions",
+                        "Alias": "z",
+                        "Startup Cost": 0.27,
+                        "Total Cost": 2.49,
+                        "Plan Rows": 1,
+                        "Plan Width": 57,
+                        "Index Cond": "(signal_id = s.id)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "indexes": [
+    {
+      "index_name": "gpt_final_entry_reviews_production_signal_created_idx",
+      "indisvalid": true,
+      "indisready": true,
+      "bytes": 65536
+    },
+    {
+      "index_name": "v11_long_regime_orders_open_signal_created_idx",
+      "indisvalid": true,
+      "indisready": true,
+      "bytes": 49152
+    }
+  ],
+  "sample_before": [
+    {
+      "id": "50d2807e-7a3e-4759-aec9-757ead00d94f",
+      "initial_decision": "SKIP",
+      "initial_completed": "2026-09-28 02:56:17.660711+00",
+      "final_gpt_decision": null,
+      "final_gpt_at": null,
+      "attempt_count": 0,
+      "pid": null,
+      "status": "REJECTED",
+      "final_reason": "GPT_SKIP"
+    },
+    {
+      "id": "39cd461c-5e4e-4dcd-a745-7220f8693e4a",
+      "initial_decision": "WAIT",
+      "initial_completed": "2026-09-28 02:26:20.496839+00",
+      "final_gpt_decision": null,
+      "final_gpt_at": null,
+      "attempt_count": 0,
+      "pid": null,
+      "status": "REJECTED",
+      "final_reason": "SIGNAL_STALE_OR_FUTURE"
+    },
+    {
+      "id": "49e86e39-eedf-48dc-bd7d-eee65f36837e",
+      "initial_decision": "SKIP",
+      "initial_completed": "2026-09-28 01:58:17.51462+00",
+      "final_gpt_decision": null,
+      "final_gpt_at": null,
+      "attempt_count": 0,
+      "pid": null,
+      "status": "REJECTED",
+      "final_reason": "GPT_SKIP"
+    },
+    {
+      "id": "bab5339c-198e-40ba-878c-23a10a02b832",
+      "initial_decision": "ABSTAIN",
+      "initial_completed": "2026-09-28 01:24:13.835858+00",
+      "final_gpt_decision": null,
+      "final_gpt_at": null,
+      "attempt_count": 0,
+      "pid": null,
+      "status": "REJECTED",
+      "final_reason": "GPT_ABSTAIN"
+    },
+    {
+      "id": "fdf13f82-9433-47b0-860f-021c981a3a33",
+      "initial_decision": "BUY",
+      "initial_completed": "2026-09-28 00:54:20.655806+00",
+      "final_gpt_decision": "ABSTAIN",
+      "final_gpt_at": "2026-09-28 00:55:16.723+00",
+      "attempt_count": 0,
+      "pid": null,
+      "status": "REJECTED",
+      "final_reason": "GPT_FINAL_RECHECK_ABSTAIN"
+    }
+  ],
+  "sample_after": [
+    {
+      "id": "50d2807e-7a3e-4759-aec9-757ead00d94f",
+      "initial_decision": "SKIP",
+      "initial_completed": "2026-09-28 02:56:17.660711+00",
+      "final_gpt_decision": null,
+      "final_gpt_at": null,
+      "attempt_count": 0,
+      "pid": null,
+      "status": "REJECTED",
+      "final_reason": "GPT_SKIP"
+    },
+    {
+      "id": "39cd461c-5e4e-4dcd-a745-7220f8693e4a",
+      "initial_decision": "WAIT",
+      "initial_completed": "2026-09-28 02:26:20.496839+00",
+      "final_gpt_decision": null,
+      "final_gpt_at": null,
+      "attempt_count": 0,
+      "pid": null,
+      "status": "REJECTED",
+      "final_reason": "SIGNAL_STALE_OR_FUTURE"
+    },
+    {
+      "id": "49e86e39-eedf-48dc-bd7d-eee65f36837e",
+      "initial_decision": "SKIP",
+      "initial_completed": "2026-09-28 01:58:17.51462+00",
+      "final_gpt_decision": null,
+      "final_gpt_at": null,
+      "attempt_count": 0,
+      "pid": null,
+      "status": "REJECTED",
+      "final_reason": "GPT_SKIP"
+    },
+    {
+      "id": "bab5339c-198e-40ba-878c-23a10a02b832",
+      "initial_decision": "ABSTAIN",
+      "initial_completed": "2026-09-28 01:24:13.835858+00",
+      "final_gpt_decision": null,
+      "final_gpt_at": null,
+      "attempt_count": 0,
+      "pid": null,
+      "status": "REJECTED",
+      "final_reason": "GPT_ABSTAIN"
+    },
+    {
+      "id": "fdf13f82-9433-47b0-860f-021c981a3a33",
+      "initial_decision": "BUY",
+      "initial_completed": "2026-09-28 00:54:20.655806+00",
+      "final_gpt_decision": "ABSTAIN",
+      "final_gpt_at": "2026-09-28 00:55:16.723+00",
+      "attempt_count": 0,
+      "pid": null,
+      "status": "REJECTED",
+      "final_reason": "GPT_FINAL_RECHECK_ABSTAIN"
+    }
+  ],
+  "functions_before": [
+    {
+      "nspname": "public",
+      "proname": "doa_gpt_capture_context_v3",
+      "definition_md5": "ebb7a234dc3ecf74d872974a8243ce56"
+    },
+    {
+      "nspname": "public",
+      "proname": "missed_opportunity_sync",
+      "definition_md5": "558bd5d62fa396c90066f6771c07547f"
+    },
+    {
+      "nspname": "public",
+      "proname": "missed_opportunity_track",
+      "definition_md5": "52944f4264c2220fa735e502eba1b853"
+    },
+    {
+      "nspname": "public",
+      "proname": "missed_opportunity_track_lane",
+      "definition_md5": "052a02e6f5a1c462855ca97adf6e19d0"
+    }
+  ],
+  "functions_after": [
+    {
+      "nspname": "public",
+      "proname": "doa_gpt_capture_context_v3",
+      "definition_md5": "ebb7a234dc3ecf74d872974a8243ce56"
+    },
+    {
+      "nspname": "public",
+      "proname": "missed_opportunity_sync",
+      "definition_md5": "558bd5d62fa396c90066f6771c07547f"
+    },
+    {
+      "nspname": "public",
+      "proname": "missed_opportunity_track",
+      "definition_md5": "52944f4264c2220fa735e502eba1b853"
+    },
+    {
+      "nspname": "public",
+      "proname": "missed_opportunity_track_lane",
+      "definition_md5": "052a02e6f5a1c462855ca97adf6e19d0"
+    }
+  ],
+  "health": {
+    "checked_at": "2026-09-28 03:27:42.325486+00",
+    "last_sync": "2026-09-28 03:27:00.077381+00",
+    "missing": 0,
+    "runs": [
+      {
+        "jobid": 95,
+        "result": "1 row",
+        "status": "succeeded",
+        "end_time": "2026-09-28T03:27:09.900642+00:00",
+        "start_time": "2026-09-28T03:27:00.077161+00:00",
+        "elapsed_seconds": 9.823481
+      },
+      {
+        "jobid": 93,
+        "result": "1 row",
+        "status": "succeeded",
+        "end_time": "2026-09-28T03:25:02.945011+00:00",
+        "start_time": "2026-09-28T03:25:00.139357+00:00",
+        "elapsed_seconds": 2.805654
+      }
+    ],
+    "new_reviews": [
+      {
+        "ds": "SKIP",
+        "error": null,
+        "state": "DONE",
+        "valid": true,
+        "reason": "상승 구조는 있으나 현재 추진력이 부족합니다",
+        "symbol": "GRASSUSDT",
+        "job_key": "9d52aa4a6f537829e405844af1b7357c725760450c818904ceeb7c1b56bfcd6e",
+        "decision": "SKIP",
+        "created_at": "2026-09-28T03:27:08.005134+00:00",
+        "api_cost_usd": 0.0423456,
+        "completed_at": "2026-09-28T03:27:18.269721+00:00",
+        "capture_valid": "true"
+      }
+    ]
+  },
+  "security_advisors": {
+    "before": 7,
+    "after": 7,
+    "new": 0
+  },
+  "regression_tests": 8,
+  "readiness": {
+    "db": {
+      "openPositions": [],
+      "unresolvedOrders": [],
+      "openPositionCount": 0,
+      "unresolvedOrderCount": 0
+    },
+    "ok": true,
+    "patch": "FD1-MULTISLOT-CAPACITY-1",
+    "sizing": {
+      "leverage": 3,
+      "targetMarginUsdt": 150
+    },
+    "binance": {
+      "positions": [],
+      "positionCount": 0,
+      "availableQuote": 331.34419204,
+      "positionsComplete": true,
+      "openOrdersComplete": true,
+      "ordersObservedAtMs": 1790565674910,
+      "ordinaryOrderCount": 0,
+      "conditionalOrderCount": 0
+    },
+    "runtime": {
+      "last_error": null,
+      "circuit_open": false,
+      "incident_kind": "INCOMPLETE_OR_STALE_SNAPSHOT",
+      "circuit_reason": null,
+      "protection_health": "FLAT",
+      "entry_block_reason": "NO_FRESH_BULL_SIGNAL",
+      "incident_generation": 129,
+      "last_cycle_completed_at": "2026-09-28T03:21:08.46+00:00"
+    },
+    "maxSlots": 10,
+    "revision": "V11-LONG-REGIME-1.0.1",
+    "gptControl": {
+      "mode": "ENFORCE",
+      "updated_at": "2026-09-27T23:21:29.40427+00:00",
+      "approval_ref": "USER-APPROVED-2026-09-28-MONTHLY100-AI95-STORAGE5",
+      "daily_cap_usd": 3,
+      "enforce_approved": true,
+      "max_calls_per_day": 100
+    },
+    "observedAt": "2026-09-28T03:21:15.020Z",
+    "holdRelease": "FD1-EXIT-HARDENING-DS-SHADOW-1",
+    "deepseekShadow": {
+      "enabled": true,
+      "authority": [],
+      "keyPresent": true
+    },
+    "failsafeRelease": "PR193_EMERGENCY_VALIDATION_1",
+    "dynamicLifecycle": {
+      "version": "DYNAMIC_FLOW_LIFECYCLE_1",
+      "missingDataState": "DATA_DEGRADED",
+      "missingDataForcesExit": false,
+      "absoluteTrajectoryAgeMs": 10000,
+      "positionCaptureIntervalMs": 5000,
+      "fullTrajectoryRequiredForEntry": true
+    },
+    "openaiKeyPresent": true,
+    "nativeStopEnabled": true,
+    "protectionArbitration": {
+      "actions": [
+        "HOLD",
+        "RAISE_PROTECTION",
+        "EXIT"
+      ],
+      "version": "AI_PROTECTION_ARBITRATION_1",
+      "approver": "GPT_FINAL_ONLY",
+      "lowering": "IMPOSSIBLE",
+      "auditTable": "v11_protection_decisions",
+      "onReviewerFailure": "KEEP_LAST_APPROVED_PROTECTION",
+      "hardSafetyIndependent": true,
+      "candidateRaisesProtection": false
+    }
+  }
+}

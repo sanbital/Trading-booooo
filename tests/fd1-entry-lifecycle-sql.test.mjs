@@ -13,6 +13,7 @@ const read=f=>readFileSync(new URL('../supabase/migrations/'+f,import.meta.url),
 const original=read('20260924090000_fd1_execution_retry_missed_journal.sql');
 const accounting=read('20260924143851_fd1_retry_journal_accounting.sql');
 const lifecycle=read('20260925003050_fd1_entry_lifecycle_journal.sql');
+const lookupIndexes=read('20260928032432_missed_opportunity_lookup_indexes.sql');
 const MIN=60000;
 // The columns 20260924143851 adds to the journal (its functions need production-only objects).
 const accountingColumns=accounting.slice(accounting.indexOf('alter table public.missed_opportunity_journal'),
@@ -43,6 +44,9 @@ async function setup(){
       requested_quantity numeric,state text,reject_reason text);
     create table public.v11_long_regime_positions(id uuid,signal_id uuid,entry_at timestamptz,
       original_quantity numeric,entry_price numeric,realized_pnl_usdt numeric,state text);`);
+  // Run the existing classification/entry-only evidence regressions with the
+  // production audit lookup indexes installed; no result or authority changes.
+  await pg.exec('begin;'+lookupIndexes+'commit;');
   return pg;
 }
 const sig=(pg,n,{status='REJECTED',reason=null,setup={},minutesAgo=120}={})=>pg.query(
