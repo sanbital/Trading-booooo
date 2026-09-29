@@ -1461,7 +1461,8 @@ const first=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:1,quantity:siz
   payload:{...baseIntentPayload,ioc_attempt_evidence:firstEvidence},
   authorize:()=>attempt.gptFinalReview?.clockFinalAuthority?
     authorizeClockExecution(s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),
-      ()=>gptFinalCheck(db,s,attempt.finalRecheck)):gptFinalCheck(db,s,attempt.finalRecheck)});
+      ()=>gptFinalCheck(db,s,attempt.finalRecheck),{readTape:(startAt,endAt)=>fetchE1AggTrades(s.symbol,startAt,endAt)}):
+    gptFinalCheck(db,s,attempt.finalRecheck)});
 if(first.blocked)return await finishPartialOrAbort(first.reason,{executionAttempts:0});
 const retryArmed=gptConfirmFirstFinality(db,retryAuthority,first);
 lastEvidence=first.evidence;lastReceipt=first.receipt;
@@ -1583,7 +1584,7 @@ const second=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:2,quantity:re
       return authorizeClockExecution(s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),()=>{
         const check=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority);
         return check.allowed&&gptConsumeRetry(db,retryAuthority)?check:{allowed:false,reason:check.reason??"IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID"};
-      });
+      },{readTape:(startAt,endAt)=>fetchE1AggTrades(s.symbol,startAt,endAt)});
     const check=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority),age=Date.now()-Number(retryQuote?.timing?.received_at_ms);
     if(!check.allowed)return check;
     if(!Number.isFinite(age)||age<0||age>E1_POLICY.maxQuoteAgeMs)return {allowed:false,reason:"EXECUTION_SAFETY_REJECT:STALE_QUOTE"};
