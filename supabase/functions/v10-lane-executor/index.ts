@@ -1515,19 +1515,56 @@ const[retryPair,retryOrders,retrySnap,retryQuoteRead,retryInfo,retryCapture]=awa
   attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):gateway({action:"quote",market:s.symbol},3000),
   gateway({action:"symbol_info",market:s.symbol},3000),executionCapture(attempt.gptFinalReview,s.symbol,Date.now())]);
 const retryClockQuote=attempt.gptFinalReview?.clockFinalAuthority?await readClockExecutionQuote(s,attempt.gptFinalReview,ms=>gateway({action:"quote",market:s.symbol},ms)):null;
-const retryQuote=retryClockQuote?retryClockQuote.quote:retryQuoteRead;
+let retryQuote=retryClockQuote?retryClockQuote.quote:retryQuoteRead;
 attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:retryCapture,dispatch_quote:retryQuote};
-const retryDynamic=retryClockQuote&&!retryClockQuote.safety.ok?retryClockQuote.safety:executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
+let retryDynamic=retryClockQuote&&!retryClockQuote.safety.ok?retryClockQuote.safety:executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
 attempt.finalRecheck.dispatch_dynamic=retryDynamic;
 if(!retryDynamic.ok)return await finishPartialOrAbort(retryDynamic.reason,{executionAttempts:1,decision:"WAIT",dynamic:retryDynamic});
 await recordMismatch(db,retryPair.match);
-const retryNow=Date.now(),retryBid=N(retryQuote?.best_bid),retryAsk=N(retryQuote?.best_ask);
-if(!(retryBid>0&&retryAsk>=retryBid))return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:INVALID_BOOK",{executionAttempts:1});
-const retryQuoteAge=retryNow-N(retryQuote?.timing?.received_at_ms,NaN);
+
+let retryNow=Date.now(),retryBid=N(retryQuote?.best_bid),retryAsk=N(retryQuote?.best_ask),
+  retryQuoteAge=retryNow-N(retryQuote?.timing?.received_at_ms,NaN),
+  retryBook=normalizeEntryBook(retryQuote,E1_POLICY.maxQuoteAgeMs,retryNow);
+const structuralBookInvalid=()=>!(retryBid>0&&retryAsk>=retryBid)||
+  retryBook.health.reasons.some(r=>!["QUOTE_STALE","QUOTE_FROM_FUTURE","QUOTE_TIME_UNKNOWN"].includes(r));
+// A one-shot malformed REST depth must not consume an otherwise valid second slot. Refresh
+// exactly once while authority remains, then rerun the SAME clock/dynamic/book safety checks.
+// This is quote recovery only: no AI retry, no changed threshold and no order is sent here.
+if(structuralBookInvalid()){
+  const authorityExpiry=N(attempt.gptFinalReview?.clockFinalAuthority?.expires_at_ms,Infinity);
+  if(retryNow+1200<authorityExpiry){
+    try{
+      const refreshTimeout=Math.max(1,Math.min(1500,authorityExpiry-retryNow-250));
+      const freshQuote=await gateway({action:"quote",market:s.symbol},refreshTimeout),freshNow=Date.now(),
+        freshBid=N(freshQuote?.best_bid),freshAsk=N(freshQuote?.best_ask),
+        freshAge=freshNow-N(freshQuote?.timing?.received_at_ms,NaN),
+        freshBook=normalizeEntryBook(freshQuote,E1_POLICY.maxQuoteAgeMs,freshNow);
+      const freshStructuralInvalid=!(freshBid>0&&freshAsk>=freshBid)||
+        freshBook.health.reasons.some(r=>!["QUOTE_STALE","QUOTE_FROM_FUTURE","QUOTE_TIME_UNKNOWN"].includes(r));
+      attempt.finalRecheck.book_refresh={attempted:true,recovered:!freshStructuralInvalid,
+        at:freshNow,reasons:freshBook.health.reasons};
+      if(!freshStructuralInvalid){
+        retryQuote=freshQuote;retryNow=freshNow;retryBid=freshBid;retryAsk=freshAsk;
+        retryQuoteAge=freshAge;retryBook=freshBook;
+        attempt.finalRecheck.dispatch_quote=retryQuote;
+        retryDynamic=executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,retryNow);
+        attempt.finalRecheck.dispatch_dynamic=retryDynamic;
+        if(!retryDynamic.ok)return await finishPartialOrAbort(retryDynamic.reason,
+          {executionAttempts:1,decision:"WAIT",dynamic:retryDynamic});
+      }
+    }catch(error){
+      attempt.finalRecheck.book_refresh={attempted:true,recovered:false,error:String(error?.message??error).slice(0,120)};
+    }
+  }
+}
+if(!(retryBid>0&&retryAsk>=retryBid)||structuralBookInvalid())
+  return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:INVALID_BOOK",
+    {executionAttempts:1,bookReasons:retryBook.health.reasons,bookRefresh:attempt.finalRecheck.book_refresh??null});
 if(!Number.isFinite(retryQuoteAge)||retryQuoteAge<0||retryQuoteAge>E1_POLICY.maxQuoteAgeMs)
   return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:STALE_QUOTE",{executionAttempts:1});
-if(!normalizeEntryBook(retryQuote,E1_POLICY.maxQuoteAgeMs,retryNow).health.bookHealthy)
-  return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:INVALID_BOOK",{executionAttempts:1});
+if(!retryBook.health.bookHealthy)
+  return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:INVALID_BOOK",
+    {executionAttempts:1,bookReasons:retryBook.health.reasons,bookRefresh:attempt.finalRecheck.book_refresh??null});
 if(attempt.finalRecheck?.recheck_triggered===true){
   const safety=postRecheckSafety({recheck:attempt.finalRecheck.final,quote:retryQuote,at:retryNow});
   attempt.finalRecheck={...attempt.finalRecheck,postSafety:safety};
@@ -1756,15 +1793,24 @@ async function readOpsPair(db,gw=opsGateway(db),candidateSymbol=null) {
   return {pf,positions,manual,orders,quarantines:quarantines.data??[],match:classifyPortfolio(positions,pf,{manual,orders})};
 }
 function opsGateway(db){return scopedGateway(db,cycleBudgets.get(db)??createBudget({ms:55000,calls:160}));}
-function scopedGateway(db,budget) {
+const CAPACITY_REFRESH_BUDGET=Object.freeze({ms:6000,calls:4});
+function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
   return async(cmd,timeout=20000)=>{
     const cycle=cycleBudgets.get(db),cost=cmd.action==="v17_stop_fill"?3:["v18_open_orders","trade_history","order_history"].includes(cmd.action)?2:1;
-    const left=Math.min(budget.take(cost),cycle&&cycle!==budget?cycle.take(cost):Infinity);
-    await verifyExecutionLease(db);
+    // A post-fill capacity refresh is a read-only safety barrier, not another trading
+    // attempt. Give that one barrier its own tiny budget so the previous fill cannot
+    // consume the very read required to prove whether another slot is safe.
+    const cycleLeft=!allowCycleBudgetExceeded&&cycle&&cycle!==budget?cycle.take(cost):Infinity;
+    const left=Math.min(budget.take(cost),cycleLeft);
+    await verifyExecutionLease(db,allowCycleBudgetExceeded);
     const write=["create_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action);
+    if(allowCycleBudgetExceeded&&write)throw Error("CAPACITY_REFRESH_WRITE_FORBIDDEN");
     const result=await exchangeGateway(cmd,Math.max(1,Math.min(timeout,left,write?12000:2500)));
-    await verifyExecutionLease(db);return result;
+    await verifyExecutionLease(db,allowCycleBudgetExceeded);return result;
   };
+}
+function capacityRefreshGateway(db){
+  return scopedGateway(db,createBudget(CAPACITY_REFRESH_BUDGET),{allowCycleBudgetExceeded:true});
 }
 async function readClosedProtectionBacklog(db,limit=100) {
   const r=await db.rpc("v18_closed_protection_backlog",{p_limit:limit});
@@ -2412,7 +2458,13 @@ function admissionCapacity(view,ledger){
 // After a fill: the exchange portfolio, the DB positions and unresolved orders, and the account
 // snapshot, read again. Anything unreadable or stale throws and the caller stops admitting.
 async function refreshCapacityInputs(db){
-  const [fresh,sn]=await Promise.all([readOpsPair(db),snap(db)]);
+  // This is the mandatory post-fill proof before another slot may be admitted.
+  // It deliberately has a separate READ-ONLY budget: exhausting the general cycle
+  // budget after a valid fill must not make this safety proof impossible.
+  // The typeof fallback keeps the isolated queue harness on its injected readOpsPair
+  // seam; production always defines capacityRefreshGateway above.
+  const safetyGateway=typeof capacityRefreshGateway==="function"?capacityRefreshGateway(db):undefined;
+  const [fresh,sn]=await Promise.all([readOpsPair(db,safetyGateway),snap(db)]);
   if(!freshPortfolio(fresh.pf))throw Error("CAPACITY_PORTFOLIO_STALE");
   return capacityInputs(fresh,sn);
 }

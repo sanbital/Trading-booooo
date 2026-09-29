@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {rawCapture} from '../test-support/dynamic-fixtures.mjs';
-import {runEntryBatch} from '../supabase/functions/_shared/leader20/batch-runtime.mjs';
+import {runEntryBatch,clockBatchAdmissionDeadline} from '../supabase/functions/_shared/leader20/batch-runtime.mjs';
 import {clockDecisionWindow,CLOCK_VERSION} from '../supabase/functions/_shared/leader20/clock.mjs';
 import {batchFinalDecision,CLOCK_FINAL_MIN_BUDGET_MS} from '../supabase/functions/_shared/leader20/final.mjs';
 import {generateLeader20} from '../supabase/functions/_shared/leader20/runtime.mjs';
@@ -63,7 +63,9 @@ test('35-second READY starts; 100-second READY cannot spend AI reserve or roll i
  assert.equal(r.created,true);assert.ok(h.packets[0].as_of_ms>=slot+35000);
  const late=harness({ready:100000}),no=await runEntryBatch(late.db,late.ctl,late.options);
  assert.equal(no.reason,'DECISION_WINDOW_INSUFFICIENT');assert.equal(late.paid.length,0);assert.equal(late.packets.length,0);
- assert.ok(late.at<=slot+40000);assert.ok(late.reads.every(x=>Date.parse(x.p_as_of)<slot+40000));
+ const admission=clockBatchAdmissionDeadline(clockDecisionWindow(slot,80000));
+ assert.equal(admission,slot+65000,'late-wake recovery still leaves 55s before immutable T+120 expiry');
+ assert.ok(late.at<=admission);assert.ok(late.reads.every(x=>Date.parse(x.p_as_of)<admission));
  const firstLate=harness({start:100000,ready:100000});
  assert.equal((await runEntryBatch(firstLate.db,firstLate.ctl,firstLate.options)).reason,'DECISION_WINDOW_INSUFFICIENT');
  assert.equal(firstLate.reads.length,0);
