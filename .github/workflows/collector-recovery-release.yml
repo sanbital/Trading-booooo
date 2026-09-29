@@ -6,6 +6,7 @@ on:
     branches: [claude/production-recovery-etaajwpernzrcdrifdnw-enpb6i]
     paths:
       - .github/workflows/collector-recovery-release.yml
+      - collectors/doa-capture/update-production.mjs
 
 permissions:
   contents: read
@@ -109,6 +110,47 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           PREVIOUS_PROTOCOL_SHA256: ${{ steps.protocol.outputs.previous }}
         run: node collectors/doa-capture/update-production.mjs
+
+      - name: Verify exact Fly release configuration
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import {readFileSync} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          const app='sanbital-doa-capture-20260925';
+          const machineId='185030da006d48';
+          const protocol=createHash('sha256').update(readFileSync('collectors/doa-capture/PROTOCOL.md')).digest('hex');
+          const mr=await fetch('https://api.machines.dev/v1/apps/'+app+'/machines/'+machineId,{
+            headers:{authorization:'Bearer '+process.env.FLY_API_TOKEN},
+            signal:AbortSignal.timeout(30000)
+          });
+          if(!mr.ok)throw Error('MACHINE_HTTP_'+mr.status);
+          const m=await mr.json();
+          const dr=await fetch('https://api.supabase.com/v1/projects/etaajwpernzrcdrifdnw/database/query',{
+            method:'POST',
+            headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN,'content-type':'application/json'},
+            body:JSON.stringify({query:'select protocol_sha256 from doa_capture.control where id=1'}),
+            signal:AbortSignal.timeout(30000)
+          });
+          if(!dr.ok)throw Error('DATABASE_HTTP_'+dr.status);
+          const db=(await dr.json())[0]?.protocol_sha256;
+          const safe={
+            id:m.id,state:m.state,instance_id:m.instance_id,
+            restart:m.config?.restart,auto_destroy:m.config?.auto_destroy,
+            release_image:m.config?.image===('registry.fly.io/'+app+':'+process.env.GITHUB_SHA),
+            fly_protocol_matches:m.config?.env?.PROTOCOL_SHA256===protocol,
+            db_protocol_matches:db===protocol
+          };
+          console.log(JSON.stringify(safe));
+          if(safe.state!=='started'||safe.restart?.policy!=='always'||safe.restart?.max_retries!=null||
+             safe.auto_destroy!==false||!safe.release_image||!safe.fly_protocol_matches||!safe.db_protocol_matches){
+            throw Error('EXACT_RELEASE_CONFIG_NOT_ACTIVE');
+          }
+          NODE
 
       - name: Roll back DB protocol only if machine update never applied
         if: failure() && steps.protocol.outputs.changed == 'true'
