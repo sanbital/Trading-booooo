@@ -2,8 +2,13 @@
 import {readFileSync,writeFileSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-const app='sanbital-doa-capture-20260925',ref='refs/heads/codex/capture-transport-backlog-20260926';
-if(process.env.GITHUB_REF!==ref)throw Error('WRONG_RELEASE_REF');
+import {VERSION} from './core.mjs';
+const app='sanbital-doa-capture-20260925';
+const releaseRefs=new Set([
+ 'refs/heads/codex/capture-transport-backlog-20260926',
+ 'refs/heads/claude/production-recovery-etaajwpernzrcdrifdnw-enpb6i',
+]);
+if(!releaseRefs.has(process.env.GITHUB_REF))throw Error('WRONG_RELEASE_REF');
 const protocol=createHash('sha256').update(readFileSync('collectors/doa-capture/PROTOCOL.md')).digest('hex');
 const endpoint='https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/doa-capture-ingest';
 const image='registry.fly.io/'+app+':'+process.env.GITHUB_SHA;
@@ -20,7 +25,10 @@ const c=(await query('select enabled,production_enabled,protocol_sha256 from doa
 if(!c?.enabled||!c.production_enabled||c.protocol_sha256!==protocol)throw Error('CONTINUOUS_CAPTURE_MIGRATION_NOT_READY');
 const list=await machine();if(list.length!==1)throw Error('EXPECTED_ONE_EXISTING_CAPTURE_MACHINE');
 const before=await machine('/'+list[0].id),cfg=before.config;
-if(cfg.env?.CAPTURE_ENDPOINT!==endpoint||cfg.env?.PROTOCOL_SHA256!==protocol||cfg.services?.length||cfg.mounts?.length||
+const previousProtocol=process.env.PREVIOUS_PROTOCOL_SHA256??protocol;
+if(!/^[a-f0-9]{64}$/.test(previousProtocol))throw Error('INVALID_PREVIOUS_PROTOCOL');
+const machineProtocol=cfg.env?.PROTOCOL_SHA256;
+if(cfg.env?.CAPTURE_ENDPOINT!==endpoint||![protocol,previousProtocol].includes(machineProtocol)||cfg.services?.length||cfg.mounts?.length||
  !String(cfg.image).startsWith('registry.fly.io/'+app+':')||cfg.guest?.cpu_kind!=='shared'||
  !((cfg.guest?.memory_mb===256&&cfg.guest?.cpus===1)||(cfg.guest?.memory_mb===1024&&cfg.guest?.cpus===4)))throw Error('UNEXPECTED_CAPTURE_CONFIG');
 const evidence={source_commit:process.env.GITHUB_SHA,protocol_sha256:protocol,before:safe(before)};
@@ -34,7 +42,7 @@ try{
  const current=await machine('/'+before.id);if(current.instance_id!==before.instance_id)throw Error('CONCURRENT_CAPTURE_DEPLOYMENT');
  // Measured >90% CPU steal on shared-1x prevented sustained public stream capture.
  // Resize this existing machine only; preserve secrets, networking and execution config.
- const config={...cfg,image,guest:{...cfg.guest,cpu_kind:'shared',cpus:4,memory_mb:1024},auto_destroy:false,restart:{policy:'on-failure',max_retries:10}};
+ const config={...cfg,image,env:{...(cfg.env??{}),PROTOCOL_SHA256:protocol},guest:{...cfg.guest,cpu_kind:'shared',cpus:4,memory_mb:1024},auto_destroy:false,restart:{policy:'always'}};
  if(cfg.auto_destroy===true)throw Error('EXISTING_PERSISTENT_COLLECTOR_REQUIRED');
  await machine('/'+before.id,'POST',{current_version:before.instance_id,config},nonce);
 }finally{try{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}catch(e){if(!replaced||!String(e.message).includes('404'))throw e;}}
@@ -49,7 +57,7 @@ for(let i=0;i<60;i++){
  from (values('QUSDT'),('SPELLUSDT'),('JELLYJELLYUSDT')) s(symbol)
  cross join lateral (select public.doa_gpt_capture_context_v3(s.symbol,clock_timestamp()) c) x`);
  console.log(JSON.stringify({state,captures}));evidence.validation={state,captures};
- if(state.version==='DOA-CAPTURE-5-BOUNDED-TRANSPORT'&&Number(state.age_s)<25&&captures.every(x=>x.status==='AVAILABLE'&&Number(x.buckets)===24&&x.points===24)){
+ if(state.version===VERSION&&Number(state.age_s)<25&&captures.every(x=>x.status==='AVAILABLE'&&Number(x.buckets)===24&&x.points===24)){
    stableSamples++;if(stableSamples>=20){verified=true;break;}
  }else stableSamples=0;
 }
