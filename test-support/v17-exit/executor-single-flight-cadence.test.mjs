@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 
 const source=readFileSync(new URL('../../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
+const leaseSql=readFileSync(new URL('../../supabase/migrations/20260930075500_v17_execution_lease_single_flight_150s.sql',import.meta.url),'utf8');
 
 class LeaseModel{
   constructor(ttlMs=150_000){this.ttlMs=ttlMs;this.owner=null;this.releaseAt=null;this.expiresAt=0;this.maxActive=0;}
@@ -70,4 +71,15 @@ test('TEST K: executor retains ownership verification and duplicate execution fe
   assert.match(source,/v17_verify_execution_lease/);
   assert.match(source,/v17_release_execution_lease/);
   assert.match(source,/verifyExecutionLease/);
+});
+
+
+test('lease SQL is crash-safe, owner-refreshable and bounded to 150s',()=>{
+  assert.match(leaseSql,/interval '150 seconds'/);
+  assert.match(leaseSql,/expires_at < clock_timestamp\(\) or owner = p_owner/);
+  assert.match(leaseSql,/interval '30 seconds'/);
+  assert.match(source,/EXECUTION_LEASE_TTL_SECONDS=150,EXECUTION_LEASE_HEARTBEAT_MS=30000/);
+  assert.match(source,/setInterval\(async\(\)=>/);
+  assert.match(source,/clearInterval\(heartbeat\)/);
+  assert.match(source,/EXECUTOR_LEASE_HEARTBEAT_FAILED/);
 });
