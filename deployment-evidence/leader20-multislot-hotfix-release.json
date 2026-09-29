@@ -5,7 +5,7 @@
     "v10-lane-signal-generator": 46,
     "v10-lane-executor": 157
   },
-  "migration_version": "20260929122500",
+  "migration_version": "20260929130830",
   "release_mode": "HOTFIX_DEPLOY_AND_OBSERVE",
   "change_trading_settings": false,
   "validation_orders": false,
