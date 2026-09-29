@@ -59,7 +59,7 @@ try{
      started.image_ref?.repository===app && started.image_ref?.tag===process.env.GITHUB_SHA;
    const protocolApplied=started.config?.env?.PROTOCOL_SHA256===protocol;
    const restartApplied=started.config?.restart?.policy==='always' && started.config?.restart?.max_retries==null;
-   const persistenceApplied=started.config?.auto_destroy===false;
+   const persistenceApplied=started.config?.auto_destroy!==true;
    const guestApplied=started.config?.guest?.cpu_kind==='shared' &&
      Number(started.config?.guest?.cpus)===4 && Number(started.config?.guest?.memory_mb)===1024;
    if(i%5===0)console.log(JSON.stringify({event:'MACHINE_SETTLE',state:started.state,
@@ -94,7 +94,7 @@ try{
      latest.image_ref?.repository===app && latest.image_ref?.tag===process.env.GITHUB_SHA &&
      latest.config?.env?.PROTOCOL_SHA256===protocol &&
      latest.config?.restart?.policy==='always' && latest.config?.restart?.max_retries==null &&
-     latest.config?.auto_destroy===false &&
+     latest.config?.auto_destroy!==true &&
      latest.config?.guest?.cpu_kind==='shared' && Number(latest.config?.guest?.cpus)===4 &&
      Number(latest.config?.guest?.memory_mb)===1024;
    if(!releaseStillCurrent)throw Error('CONCURRENT_CAPTURE_DEPLOYMENT_AFTER_REPLACE');
