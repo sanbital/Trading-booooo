@@ -224,3 +224,81 @@ drive to zero by finishing sooner, never by widening the window.
   66,835ms) and the clock fan-out width is 4. With the measurements above both are now tunable on
   evidence: `epoch_publish_lag_ms`, `decision_total_latency_ms` and `final_after_expiry` are the
   three numbers to watch before changing either.
+
+---
+
+# The design defect behind all of it: a 90-second outage could end surveillance for hours
+
+Files: `collectors/doa-capture/{core,worker,deploy,PROTOCOL}.{mjs,md}`,
+`ops/leader20/{clock-release,book-bootstrap-release,collector-watchdog}.mjs`,
+`.github/workflows/collector-watchdog.yml`
+Tests: `collectors/doa-capture/control-resilience.test.mjs` (22 checks)
+
+The 04:33 KST outage was not bad luck. It was the documented design. Three independent single
+points of failure lined up:
+
+1. **The worker killed itself.** `now-lastControl>90000` → `process.exit`. Ninety seconds without
+   a control response — one Edge API blip — ended capture. A 418/429 set `stop=true` outright,
+   and startup threw `LEASE_START_TIMEOUT` after only two minutes of retries.
+2. **Fly deleted the machine.** `deploy.mjs` created it with `--restart no --rm --autostart=false`.
+   So that exit did not restart anything: it **destroyed** the collector.
+3. **Nothing watched.** No external check on the heartbeat. Recovery required a human noticing.
+
+`PROTOCOL.md` said so plainly: *"no restart, auto-destroy on exit… A crash ends capture and
+remains a gap; no autonomous restart."* That is now false, deliberately.
+
+## Layer 1 — a transport failure is never fatal
+
+`controlDisposition()` (pure, unit-tested) is now the only thing that can end the process:
+
+| state | action |
+|---|---|
+| SIGTERM / SIGINT | exit 0 |
+| crash, resource cap (queue 1200, RSS 230MB) | exit 1 — ask the supervisor for a fresh process |
+| control lost 90s | **idle**, keep polling |
+| control disabled, window ended | **idle**, keep polling — re-enabling needs no deploy |
+| otherwise | run |
+
+`controlBackoffMs()` retries forever with jittered exponential backoff (1s→30s, ±25%), so a fleet
+does not reconnect in lockstep after a shared outage. A 429/418 now pauses **REST only** for its
+retry-after interval; WebSocket capture is untouched by a REST weight limit. Startup waits out an
+Edge outage indefinitely instead of throwing. Idle closes streams and persists nothing (the lease
+may be gone) but keeps asking, so recovery is immediate rather than manual.
+
+## Layer 2 — an exit yields a fresh process, not a deleted machine
+
+`--restart no --rm` → `--restart always`, `--rm` dropped. Both release paths now also *repair*
+the live machine's supervision on their config patch (`auto_destroy:false`,
+`restart:{policy:'always'}`), and `clock-release.mjs` refuses to finish if the policy did not take
+(`COLLECTOR_SUPERVISION_NOT_APPLIED`).
+
+## Layer 3 — an external watchdog, outside the worker and outside Fly
+
+`.github/workflows/collector-watchdog.yml` runs every 5 minutes with the `FLY_API_TOKEN` and
+`SUPABASE_ACCESS_TOKEN` secrets that already exist in CI. It judges on the one fact that cannot
+lie — heartbeat age — and:
+
+* stale > 180s (floor enforced at 120s) and machine `started` → **restart** it, because
+  started-but-silent is the wedged case a plain start would not fix;
+* machine stopped → **start** it;
+* recovery counts only once the heartbeat moves again, else `COLLECTOR_DID_NOT_RESUME`;
+* **never** restarts a collector the operator disabled (`enabled=false`) or whose window ended;
+* touches no trading state — the test asserts it references no capacity, reservation, order,
+  admission or capture-policy object.
+
+## Deploying this, and the chicken-and-egg to know about
+
+`PROTOCOL.md` is the change-control contract: `protocol_sha256 = sha256(PROTOCOL.md)`, and the
+worker refuses to run when its `PROTOCOL_SHA256` env disagrees with the DB. The hash therefore
+moves from `9a2b0279…` to `469825d8…`, and it must roll in the DB **and** the machine env together.
+`book-bootstrap-release.mjs` already does exactly that on one machine lease, driven by
+`baseline_collector_commit` in `deployment-evidence/top20-book-bootstrap.json`.
+
+The catch: that release asserts a **live** collector (`heartbeat age ≤ 25s`), so it cannot revive a
+dead one. Order of operations right now:
+
+1. Bring the current collector back first — `fly machine start` if the machine still exists, or
+   re-provision via `deploy.mjs` if `--rm` already destroyed it.
+2. Then roll this change through `top20-book-bootstrap.json` (set `baseline_collector_commit` to
+   the commit whose `PROTOCOL.md` hashes to the live `protocol_sha256`).
+3. From then on the watchdog covers step 1 automatically.

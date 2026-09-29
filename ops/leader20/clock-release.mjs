@@ -46,7 +46,10 @@ run('flyctl',['auth','docker']);run('docker',['push',image],{stdio:'inherit'});
 const lease=await machine('/'+before.id+'/lease','POST',{description:'clock-'+sha.slice(0,12),ttl:60}),nonce=lease.data?.nonce;
 if(!nonce)throw Error('MACHINE_LEASE_MISSING');
 try{const current=await machine('/'+before.id);if(current.instance_id!==before.instance_id)throw Error('CONCURRENT_COLLECTOR_DEPLOY');
- await machine('/'+before.id,'POST',{current_version:before.instance_id,config:{...cfg,image}},nonce);
+ // Repair the supervisor policy on the live machine: it was created `--restart no --rm`, so any
+ // exit destroyed it and a brief Edge outage ended market surveillance for hours (2026-09-29).
+ await machine('/'+before.id,'POST',{current_version:before.instance_id,
+  config:{...cfg,image,auto_destroy:false,restart:{policy:'always'}}},nonce);
 }finally{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}
 let healthy=false;
 for(let i=0;i<24;i++){
@@ -74,5 +77,11 @@ const [after]=await query(`select c.clock_capture_enabled,c.watch_limit,c.genera
  (select schedule from cron.job where jobname='leader20-observer-tick') schedule
  from leader20_control c where singleton`);
 if(!after.clock_capture_enabled||after.watch_limit!==20||JSON.stringify(after.provider_limits)!==JSON.stringify(baseline.provider_limits)||after.schedule!=='10 seconds')throw Error('ACTIVATION_PARITY');
-evidence.after=after;evidence.collector_after=safe(await machine('/'+before.id));save();
+evidence.after=after;
+const finalMachine=await machine('/'+before.id);
+evidence.collector_after=safe(finalMachine);
+evidence.collector_supervision={restart:finalMachine.config?.restart??null,auto_destroy:finalMachine.config?.auto_destroy??null};
+if(evidence.collector_supervision.restart?.policy!=='always'||evidence.collector_supervision.auto_destroy===true)
+ throw Error('COLLECTOR_SUPERVISION_NOT_APPLIED');
+save();
 console.log(JSON.stringify({activated:true,source_commit:sha,watch_limit:20,capture_seconds:120,slot_seconds:600,provider_limits_changed:false}));

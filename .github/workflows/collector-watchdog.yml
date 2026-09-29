@@ -1,0 +1,41 @@
+name: Collector watchdog
+# Third survival layer: outside the worker and outside Fly. A brief Edge API outage must never
+# be able to end real-time market surveillance, and a machine that is gone or wedged must be
+# recovered without waiting for a human. Trading state is never touched.
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      stale_ms:
+        description: Heartbeat age that counts as an outage (ms, minimum 120000)
+        required: false
+        default: '180000'
+permissions:
+  contents: read
+concurrency:
+  group: collector-watchdog
+  cancel-in-progress: false
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Recover the collector if its heartbeat stopped
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          WATCHDOG_STALE_MS: ${{ github.event.inputs.stale_ms || '180000' }}
+        run: node ops/leader20/collector-watchdog.mjs | tee watchdog.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: collector-watchdog
+          path: watchdog.json
+          retention-days: 14

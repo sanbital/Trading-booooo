@@ -1,6 +1,6 @@
 import {captureDisposition} from './clock.mjs';
 import {exchangeMinuteWeight,restWeightLimit,recoveryOrder} from './bootstrap.mjs';
-import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue,initialBucketBoundary} from './core.mjs';
+import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue,initialBucketBoundary,controlBackoffMs,controlDisposition} from './core.mjs';
 import {randomUUID} from 'node:crypto';
 import {summarizeCapture} from './context.mjs';
 const endpoint=process.env.CAPTURE_ENDPOINT;
@@ -9,6 +9,9 @@ const expected=process.env.PROTOCOL_SHA256;
 if(endpoint!=='https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/doa-capture-ingest' || !/^[a-f0-9]{64}$/.test(token||'') || !/^[a-f0-9]{64}$/.test(expected||'')) throw Error('INVALID_CONFIG');
 const worker_id=randomUUID(), states=new Map(), budget=new WeightBudget(), queue=new Map(), seen=new Map();
 let windows=[],deadline=0,lastControl=0,lastWatch=0,lastFlush=0,busyRest=false,stop=false,restFailures=0,wsGaps=0,coverageRefreshes=0,backoffUntil=0;
+// A transport failure is never fatal (see controlDisposition). `signalled` and `crashed` are the
+// only states that end the process; `disabled` idles and keeps polling so a re-enable recovers.
+let controlFailures=0,controlRetryAt=0,signalled=false,crashed=false,disabled=false,idleSince=0;
 let clockWindow=null;
 let exchangeWeightLimit=null;
 const currentRestLimit=()=>restWeightLimit(clockWindow,[...states.values()],Date.now(),exchangeWeightLimit);
@@ -16,14 +19,30 @@ let production=false,universe=new Set(),universeAt=0,unavailableSymbols={};
 const boot=Date.now();
 const log=(event,extra={})=>console.log(JSON.stringify({event,at:iso(Date.now()),version:VERSION,...extra}));
 async function api(action,extra={}){
-  const r=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json','x-doa-capture-token':token},body:JSON.stringify({action,worker_id,...extra}),signal:AbortSignal.timeout(12000)});
-  if(!r.ok)throw Error('INGEST_'+r.status);
-  const out=await r.json();if(!out.enabled&&out.reason!=='LEASE_BUSY'){stop=true;log('CONTROL_STOP',{reason:out.reason});}return out;
+  let r;
+  try{
+    r=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json','x-doa-capture-token':token},body:JSON.stringify({action,worker_id,...extra}),signal:AbortSignal.timeout(12000)});
+  }catch(e){controlFail('NETWORK:'+e.name);throw Error('INGEST_NETWORK');}
+  // Only the control plane's own decision stops capture. Anything else is transport.
+  if(!r.ok){controlFail('HTTP_'+r.status);throw Error('INGEST_'+r.status);}
+  const out=await r.json();
+  controlFailures=0;controlRetryAt=0;
+  if(!out.enabled&&out.reason!=='LEASE_BUSY'){disabled=true;log('CONTROL_DISABLED',{reason:out.reason});}
+  else if(disabled){disabled=false;log('CONTROL_REENABLED');}
+  return out;
+}
+/** Back off, do not die: retry the control plane forever with jittered exponential backoff. */
+function controlFail(reason){
+  controlFailures++;
+  const wait=controlBackoffMs(controlFailures);
+  controlRetryAt=Date.now()+wait;
+  log('CONTROL_RETRY',{reason,failures:controlFailures,retry_in_ms:wait});
 }
 async function publicGet(path,weight){
   if(Date.now()<backoffUntil || !budget.claim(weight,Date.now(),currentRestLimit()))return null;
   const r=await fetch('https://fapi.binance.com'+path,{signal:AbortSignal.timeout(8000)});
-  if(r.status===418 || r.status===429){backoffUntil=Date.now()+Math.max(60000,Number(r.headers.get('retry-after')||60)*1000);stop=true;throw Error('RATE_LIMIT_STOP');}
+  // A REST rate limit pauses REST only. WebSocket capture is unaffected and must keep running.
+  if(r.status===418 || r.status===429){backoffUntil=Date.now()+Math.max(60000,Number(r.headers.get('retry-after')||60)*1000);log('REST_RATE_LIMIT_PAUSE',{status:r.status,until:iso(backoffUntil)});throw Error('RATE_LIMIT_PAUSE');}
   if(!r.ok)throw Error('PUBLIC_HTTP_'+r.status);
   return await r.json();
 }
@@ -153,15 +172,36 @@ async function flush(){
   const out=await api('ingest',pending);lastControl=Date.now();pending=null;
   log('HEARTBEAT',{watched:states.size,synced:[...states.values()].filter(s=>s.book.ready).length,queue:queue.size,inserted:out.inserted||0,bytes:out.bytes_reserved});
 }
-process.on('SIGTERM',()=>{stop=true;});process.on('SIGINT',()=>{stop=true;});
-// A rolling release waits for the previous worker's DB lease; it never steals it.
-for(let i=0;i<24&&!stop&&!deadline;i++){await watch();if(!deadline&&!stop)await new Promise(r=>setTimeout(r,5000));}
-if(!deadline&&!stop)throw Error('LEASE_START_TIMEOUT');
+process.on('SIGTERM',()=>{signalled=true;stop=true;});process.on('SIGINT',()=>{signalled=true;stop=true;});
+// A rolling release waits for the previous worker's DB lease; it never steals it. An Edge outage
+// at startup used to end the process here after two minutes, which with `--restart no --rm`
+// destroyed the machine. Wait indefinitely instead, with the same jittered backoff.
+for(let attempt=1;!signalled&&!deadline;attempt++){
+  try{await watch();}catch(e){log('CONTROL_ERROR',{reason:e.message,phase:'START'});}
+  if(deadline||signalled)break;
+  await new Promise(r=>setTimeout(r,Math.max(5000,controlBackoffMs(Math.min(attempt,16)))));
+}
 let watchTask=null,flushTask=null,bucketFlushDue=false;
 log('STARTED',{worker_id,protocol_sha256:expected,deadline:iso(deadline)});
 const timer=setInterval(()=>{
   const now=Date.now();
-  if(stop || now>=deadline || now-lastControl>90000 || (!production&&now-boot>14*86400000) || process.memoryUsage().rss>230000000){clearInterval(timer);for(const s of states.values()){s.socket?.close();s.marketSocket?.close();}log('STOPPED',{reason:stop?'CONTROL_OR_SIGNAL':now>=deadline?'DEADLINE':now-lastControl>90000?'CONTROL_STALE':'RESOURCE_CAP'});setTimeout(()=>process.exit(stop?0:1),1000);return;}
+  // A lost control plane is a DEGRADED state, not a death sentence: the 90-second exit here,
+  // with `--restart no --rm` on the machine, is what turned a brief Edge outage into hours of
+  // blindness. Only a signal, a crash or the resource cap ends the process now.
+  const decided=controlDisposition({stopped:now-lastControl>90000,signalled,crashed,disabled,
+    pastDeadline:deadline>0&&now>=deadline,
+    overResourceCap:process.memoryUsage().rss>230000000||(!production&&now-boot>14*86400000)});
+  if(decided.action==='exit'){
+    clearInterval(timer);for(const s of states.values()){s.socket?.close();s.marketSocket?.close();}
+    log('STOPPED',{reason:decided.reason});setTimeout(()=>process.exit(decided.code),1000);return;}
+  if(decided.action==='idle'){
+    // Hold no streams and persist nothing, but keep asking: authority can come back.
+    if(!idleSince){idleSince=now;for(const [symbol,st] of states){st.socket?.close();st.marketSocket?.close();states.delete(symbol);}
+      queue.clear();pending=null;log('IDLE',{reason:decided.reason});}
+    if(!watchTask&&now>=controlRetryAt&&now-lastWatch>=5000){
+      lastWatch=now;watchTask=watch().catch(e=>log('CONTROL_ERROR',{reason:e.message,phase:'IDLE'})).finally(()=>{watchTask=null;});}
+    return;}
+  if(idleSince){log('RESUMED',{idle_ms:now-idleSince});idleSince=0;}
   try{
     if(bucket(now))bucketFlushDue=true;
     // Disconnect candidate streams locally at the boundary; do not wait for the next watch poll.
@@ -170,8 +210,8 @@ const timer=setInterval(()=>{
     }
     for(const s of states.values())if((!s.socket && now>=s.bookReconnectAt)||(!s.marketSocket && now>=s.marketReconnectAt))openSocket(s);
     void recover();
-    if(!watchTask&&now-lastWatch>=15000){lastWatch=now;watchTask=watch().catch(e=>log('CONTROL_ERROR',{reason:e.message})).finally(()=>{watchTask=null;});}
+    if(!watchTask&&now>=controlRetryAt&&now-lastWatch>=15000){lastWatch=now;watchTask=watch().catch(e=>log('CONTROL_ERROR',{reason:e.message})).finally(()=>{watchTask=null;});}
     // Keep one in-flight ingest; a newly closed bucket must not wait for an unrelated timer phase.
-    if(!flushTask&&((production&&bucketFlushDue)||now-lastFlush>=(production?5000:15000))){bucketFlushDue=false;lastFlush=now;flushTask=flush().catch(e=>log('CONTROL_ERROR',{reason:e.message})).finally(()=>{flushTask=null;});}
-  }catch(e){log('FATAL',{reason:e.message});stop=true;}
+    if(!flushTask&&now>=controlRetryAt&&((production&&bucketFlushDue)||now-lastFlush>=(production?5000:15000))){bucketFlushDue=false;lastFlush=now;flushTask=flush().catch(e=>log('CONTROL_ERROR',{reason:e.message})).finally(()=>{flushTask=null;});}
+  }catch(e){log('FATAL',{reason:e.message});crashed=true;}
 },200);

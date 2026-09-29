@@ -34,7 +34,9 @@ const lease=await machine('/'+before.id+'/lease','POST',{description:'bootstrap-
 if(!nonce)throw Error('LEASE_MISSING');
 try{
  const current=await machine('/'+before.id);if(current.instance_id!==before.instance_id)throw Error('CONCURRENT_COLLECTOR_DEPLOY');
- await machine('/'+before.id,'POST',{current_version:before.instance_id,config:{...cfg,image,env:{...cfg.env,PROTOCOL_SHA256:protocol}}},nonce);
+ // Also repair supervision: the machine was created `--restart no --rm`, so any exit destroyed it.
+ await machine('/'+before.id,'POST',{current_version:before.instance_id,
+  config:{...cfg,image,auto_destroy:false,restart:{policy:'always'},env:{...cfg.env,PROTOCOL_SHA256:protocol}}},nonce);
  const updated=await query(`update doa_capture.control set protocol_sha256='${protocol}' where id=1 and protocol_sha256='${baselineProtocol}' returning id`);
  if(updated.length!==1)throw Error('PROTOCOL_COMPARE_AND_SET');
 }finally{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}

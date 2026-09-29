@@ -23,7 +23,11 @@ fly(['secrets','import','--stage','--app',app],'CAPTURE_TOKEN='+token+'\n');
 const image='registry.fly.io/'+app+':'+process.env.GITHUB_SHA;
 fly(['auth','docker']);
 const push=spawnSync('docker',['push',image],{stdio:'inherit'});if(push.status!==0)throw Error('IMAGE_PUSH_FAILED');
-fly(['machine','run',image,'--app',app,'--region','cdg','--name','doa-capture','--vm-cpu-kind','shared','--vm-cpus','1','--vm-memory','256','--restart','no','--rm','--autostart=false','--env','CAPTURE_ENDPOINT=https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/doa-capture-ingest','--env','PROTOCOL_SHA256='+sha]);
+// `--restart no --rm` meant any exit DESTROYED the collector: a 90-second Edge outage ended
+// real-time market surveillance until a human noticed (2026-09-29, over five hours blind).
+// The worker no longer exits on transport failures, and when it does exit -- a crash or the
+// resource cap -- the supervisor must hand it a fresh process instead of deleting the machine.
+fly(['machine','run',image,'--app',app,'--region','cdg','--name','doa-capture','--vm-cpu-kind','shared','--vm-cpus','1','--vm-memory','256','--restart','always','--autostart=false','--env','CAPTURE_ENDPOINT=https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/doa-capture-ingest','--env','PROTOCOL_SHA256='+sha]);
 const machines=JSON.parse(fly(['machine','list','--app',app,'--json']));
 writeFileSync('capture-release.json',JSON.stringify({app,sha:process.env.GITHUB_SHA,protocol_sha256:sha,machines:machines.map(x=>({id:x.id,state:x.state,region:x.region}))},null,2));
 console.log(readFileSync('capture-release.json','utf8'));

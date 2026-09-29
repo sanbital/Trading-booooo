@@ -98,6 +98,44 @@ export function retireMarketCapture(s,now){
   s.flow.complete=false;s.marketSequenceVerified=false;
   s.marketResetAt=now;s.marketReconnectAt=now+5000;
 }
+/** Control-plane resilience (2026-09-29).
+ *
+ * WHY
+ * ---
+ * A 90-second Edge API outage used to end real-time market surveillance for HOURS. The worker
+ * exited when `now-lastControl>90000`, and the machine was created with `--restart no --rm`, so
+ * that exit DESTROYED it: nothing streamed again until a human noticed. On 2026-09-29 the
+ * collector stopped at 04:33 KST and the account was blind for over five hours.
+ *
+ * THE RULE
+ * --------
+ * A transport failure is never fatal. Only the control plane saying "stop", or a signal, is.
+ *   - 5xx / network / timeout / rate limit -> exponential backoff with jitter, retry forever.
+ *   - control explicitly disabled, or past its scheduled end -> IDLE, keep polling, never exit,
+ *     so re-enabling recovers without a deploy.
+ *   - a crash or a resource cap -> exit non-zero so the supervisor hands us a fresh process.
+ * Jitter keeps a fleet from retrying in lockstep after a shared outage.
+ */
+export const CONTROL_RECOVERY=Object.freeze({baseMs:1000,maxMs:30000,factor:2,jitter:.25});
+export function controlBackoffMs(failures,policy=CONTROL_RECOVERY,random=Math.random){
+  if(!Number.isInteger(failures)||failures<1)return 0;
+  const {baseMs,maxMs,factor,jitter}=policy;
+  const raw=Math.min(maxMs,baseMs*factor**Math.min(failures-1,32));
+  return Math.max(0,Math.round(raw*(1-jitter+2*jitter*random())));
+}
+/** What the worker does next. `exit` is the ONLY path that ends the process. */
+export function controlDisposition({stopped=false,signalled=false,disabled=false,
+  pastDeadline=false,overResourceCap=false,crashed=false}={}){
+  if(signalled)return {action:'exit',code:0,reason:'SIGNAL'};
+  if(crashed)return {action:'exit',code:1,reason:'CRASHED'};
+  if(overResourceCap)return {action:'exit',code:1,reason:'RESOURCE_CAP'};
+  // Not exits: the control plane can hand authority back at any time, and a destroyed
+  // machine cannot come back on its own.
+  if(disabled)return {action:'idle',code:null,reason:'CONTROL_DISABLED'};
+  if(pastDeadline)return {action:'idle',code:null,reason:'CONTROL_WINDOW_ENDED'};
+  if(stopped)return {action:'idle',code:null,reason:'CONTROL_UNAVAILABLE'};
+  return {action:'run',code:null,reason:null};
+}
 export function snapshotStillCurrent(s,generation,socket){
   return s.bookGeneration===generation && s.socket===socket;
 }
