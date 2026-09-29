@@ -1756,15 +1756,24 @@ async function readOpsPair(db,gw=opsGateway(db),candidateSymbol=null) {
   return {pf,positions,manual,orders,quarantines:quarantines.data??[],match:classifyPortfolio(positions,pf,{manual,orders})};
 }
 function opsGateway(db){return scopedGateway(db,cycleBudgets.get(db)??createBudget({ms:55000,calls:160}));}
-function scopedGateway(db,budget) {
+const CAPACITY_REFRESH_BUDGET=Object.freeze({ms:6000,calls:4});
+function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
   return async(cmd,timeout=20000)=>{
     const cycle=cycleBudgets.get(db),cost=cmd.action==="v17_stop_fill"?3:["v18_open_orders","trade_history","order_history"].includes(cmd.action)?2:1;
-    const left=Math.min(budget.take(cost),cycle&&cycle!==budget?cycle.take(cost):Infinity);
-    await verifyExecutionLease(db);
+    // A post-fill capacity refresh is a read-only safety barrier, not another trading
+    // attempt. Give that one barrier its own tiny budget so the previous fill cannot
+    // consume the very read required to prove whether another slot is safe.
+    const cycleLeft=!allowCycleBudgetExceeded&&cycle&&cycle!==budget?cycle.take(cost):Infinity;
+    const left=Math.min(budget.take(cost),cycleLeft);
+    await verifyExecutionLease(db,allowCycleBudgetExceeded);
     const write=["create_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action);
+    if(allowCycleBudgetExceeded&&write)throw Error("CAPACITY_REFRESH_WRITE_FORBIDDEN");
     const result=await exchangeGateway(cmd,Math.max(1,Math.min(timeout,left,write?12000:2500)));
-    await verifyExecutionLease(db);return result;
+    await verifyExecutionLease(db,allowCycleBudgetExceeded);return result;
   };
+}
+function capacityRefreshGateway(db){
+  return scopedGateway(db,createBudget(CAPACITY_REFRESH_BUDGET),{allowCycleBudgetExceeded:true});
 }
 async function readClosedProtectionBacklog(db,limit=100) {
   const r=await db.rpc("v18_closed_protection_backlog",{p_limit:limit});
@@ -2412,7 +2421,10 @@ function admissionCapacity(view,ledger){
 // After a fill: the exchange portfolio, the DB positions and unresolved orders, and the account
 // snapshot, read again. Anything unreadable or stale throws and the caller stops admitting.
 async function refreshCapacityInputs(db){
-  const [fresh,sn]=await Promise.all([readOpsPair(db),snap(db)]);
+  // This is the mandatory post-fill proof before another slot may be admitted.
+  // It deliberately has a separate READ-ONLY budget: exhausting the general cycle
+  // budget after a valid fill must not make this safety proof impossible.
+  const [fresh,sn]=await Promise.all([readOpsPair(db,capacityRefreshGateway(db)),snap(db)]);
   if(!freshPortfolio(fresh.pf))throw Error("CAPACITY_PORTFOLIO_STALE");
   return capacityInputs(fresh,sn);
 }
