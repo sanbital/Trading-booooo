@@ -73,11 +73,19 @@ export function executionDynamicSafety(s,ticket,record,at){
 }
 /** Final venue boundary: intent/lease I/O is already complete. Never restamp an
  * old quote or widen its 1000ms limit. Reuse the frozen strategy authority only. */
-export async function authorizeClockExecution(s,ticket,record,readQuote,authorize,{now=Date.now}={}){
-  const {quote,safety,at}=await readClockExecutionQuote(s,ticket,readQuote,{now});
-  record.dispatch_quote=quote;record.execution_safety=safety;
+export async function authorizeClockExecution(s,ticket,record,readQuote,authorize,{now=Date.now,readTape=null}={}){
+  // Quote and 10s taker tape are acquired at the FINAL venue boundary, after durable
+  // intent/lease/identity I/O. This closes the AAVE gap where a healthy frozen BUY
+  // survived while propulsion vanished during those last seconds.
+  const tapeEnd=now(),tapePromise=readTape?readTape(tapeEnd-10000,tapeEnd):Promise.resolve(record?.dispatch_tape??null);
+  const [{quote,safety},tape]=await Promise.all([
+    readClockExecutionQuote(s,ticket,readQuote,{now}),
+    tapePromise.catch?.(()=>({available:false,reason:'CLOCK_EXECUTION_FLOW_FETCH_FAILED'}))??tapePromise
+  ]);
+  const at=now();
+  record.dispatch_quote=quote;record.dispatch_tape=tape;record.execution_safety=safety;
   if(!safety.ok)return {allowed:false,reason:safety.reason};
-  const flow=clockExecutionFlowSafety(ticket,record?.dispatch_tape,quote,at);
+  const flow=clockExecutionFlowSafety(ticket,tape,quote,at);
   record.execution_flow_safety=flow;
   if(!flow.ok)return {allowed:false,reason:flow.reason};
   const checked=authorize();
