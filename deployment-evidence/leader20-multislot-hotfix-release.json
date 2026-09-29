@@ -1,0 +1,19 @@
+{
+  "source_commit": "f8292f64c7abd472217c1b8b8e26a4bd656ead0f",
+  "project_ref": "etaajwpernzrcdrifdnw",
+  "expected_versions": {
+    "v10-lane-signal-generator": 46,
+    "v10-lane-executor": 157
+  },
+  "migration_version": "20260929122500",
+  "release_mode": "HOTFIX_DEPLOY_AND_OBSERVE",
+  "change_trading_settings": false,
+  "validation_orders": false,
+  "deploy_collector": false,
+  "authorization": "User explicitly approved production deployment in chat on 2026-09-29.",
+  "scope": [
+    "late clock wake admission within immutable T+120 authority",
+    "post-fill read-only capacity refresh budget isolation",
+    "one-shot malformed book refresh with full safety revalidation"
+  ]
+}
