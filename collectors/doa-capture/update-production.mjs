@@ -53,7 +53,8 @@ try{
  for(let i=0;i<60;i++){
    await new Promise(r=>setTimeout(r,2000));
    started=await machine('/'+before.id);
-   const imageApplied=String(started.config?.image??'')===image;
+   const imageApplied=started.image_ref?.registry==='registry.fly.io' &&
+     started.image_ref?.repository===app && started.image_ref?.tag===process.env.GITHUB_SHA;
    const protocolApplied=started.config?.env?.PROTOCOL_SHA256===protocol;
    const restartApplied=started.config?.restart?.policy==='always' && started.config?.restart?.max_retries==null;
    const persistenceApplied=started.config?.auto_destroy===false;
