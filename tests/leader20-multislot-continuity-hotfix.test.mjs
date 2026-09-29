@@ -46,7 +46,8 @@ test('post-fill capacity proof has a separate read-only budget, never a write es
   assert.ok(src.includes('capacityRefreshGateway(db)'));
   assert.ok(src.includes('{allowCycleBudgetExceeded:true}'));
   assert.ok(src.includes('CAPACITY_REFRESH_WRITE_FORBIDDEN'));
-  assert.ok(src.includes('readOpsPair(db,capacityRefreshGateway(db))'));
+  assert.ok(src.includes('const safetyGateway=typeof capacityRefreshGateway==="function"?capacityRefreshGateway(db):undefined'));
+  assert.ok(src.includes('readOpsPair(db,safetyGateway)'));
   assert.ok(src.includes('await verifyExecutionLease(db,allowCycleBudgetExceeded)'));
 });
 
