@@ -1,0 +1,47 @@
+name: Collector production evidence
+# Read-only by default. The only place that can reach api.machines.dev and the Supabase paths at
+# once, so this is where production evidence for the 2026-09-29 collector recovery is collected.
+# Recovery is opt-in via the `mode` input and is limited to the collector process lifecycle:
+# it never touches capacity, admission, orders, TTLs, deadlines or sizing.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: observe (read-only) or recover (may start/restart the collector machine)
+        required: true
+        default: observe
+        type: choice
+        options: [observe, recover]
+permissions:
+  contents: read
+concurrency:
+  group: collector-watchdog
+  cancel-in-progress: false
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Collect production evidence
+        env:
+          MODE: ${{ github.event.inputs.mode }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        # pipefail so a failing probe can never be reported as a green job.
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ops/leader20/production-evidence.mjs | tee evidence.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: collector-production-evidence-${{ github.run_number }}
+          path: evidence.json
+          retention-days: 30
