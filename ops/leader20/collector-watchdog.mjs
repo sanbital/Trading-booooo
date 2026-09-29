@@ -69,6 +69,24 @@ async function runtimeReachable(){
   return {reachable:true,status:r.status,proves:'FUNCTION_GATEWAY_ONLY'};
  }catch(e){return {reachable:false,status:null,error:e.name};}
 }
+// Exercise the same Edge -> DB dependency the worker needs without using the real collector token.
+// A syntactically valid but deliberately wrong token forces the function to read the expected token
+// from Postgres before it can return 401. Therefore:
+//   401 = Edge reached Postgres and completed the token lookup (safe to consider recovery)
+//   503 = the function could not complete its DB access (NEVER restart into this outage)
+// No state is mutated by this probe.
+async function probeIngestDbPath(){
+ try{
+  const r=await fetch(`https://${project}.supabase.co/functions/v1/doa-capture-ingest`,
+   {method:'POST',
+    headers:{'Content-Type':'application/json','x-doa-capture-token':'0'.repeat(64)},
+    body:JSON.stringify({action:'status',worker_id:'watchdog-readiness-probe'}),
+    signal:AbortSignal.timeout(15000)});
+  if(r.status===401)return {ready:true,status:401,proves:'EDGE_TO_DB_TOKEN_LOOKUP'};
+  if(r.status===503)return {ready:false,status:503,reason:'EDGE_TO_DB_UNAVAILABLE'};
+  return {ready:false,status:r.status,reason:'UNEXPECTED_PROBE_STATUS'};
+ }catch(e){return {ready:false,status:null,reason:'PROBE_'+e.name};}
+}
 async function machines(path='',method='GET',body){
  const r=await fetch(`https://api.machines.dev/v1/apps/${app}/machines`+path,
   {method,headers:{authorization:'Bearer '+token,'content-type':'application/json'},
@@ -78,6 +96,7 @@ async function machines(path='',method='GET',body){
 }
 
 out.runtime=await runtimeReachable();
+out.ingest_db_path=await probeIngestDbPath();
 // The control row is the authority on whether capture is supposed to be running at all. A
 // deliberately disabled or ended collector is NOT an outage and must never be restarted.
 const CONTROL_SQL=`select enabled,
@@ -102,6 +121,10 @@ out.control={enabled:c.enabled,heartbeat_age_ms:Math.round(Number(c.heartbeat_ag
 
 if(!c.enabled){out.action='NONE';out.reason='COLLECTOR_DISABLED_BY_OPERATOR';}
 else if(c.window_ended){out.action='NONE';out.reason='CAPTURE_WINDOW_ENDED';}
+else if(!out.ingest_db_path.ready){
+ out.action='NONE';out.reason='INGEST_DB_PATH_UNAVAILABLE';
+ fail('INGEST_DB_PATH_UNAVAILABLE');
+}
 else if(!(Number(c.heartbeat_age_ms)>STALE_MS)){out.action='NONE';out.reason='HEARTBEAT_HEALTHY';}
 else{
  out.reason='HEARTBEAT_STALE';
