@@ -25,11 +25,23 @@ const fail=m=>{out.error=m;console.log(JSON.stringify(out,null,2));process.exit(
 // stayed down. The direct Postgres connection is an independent path; either one answering is
 // enough to judge, and neither is trusted to be the only one.
 const FIELD_SEP='\t';
+// Why the direct path failed matters: a missing secret is an operator fix, an unreachable
+// database is an outage. Never record psql's raw stderr -- it can echo the connection string.
 function queryDirect(sql){
- if(!dbUrl)return null;
+ if(!dbUrl){out.direct_probe='NO_DB_URL_CONFIGURED';return null;}
  const r=spawnSync('psql',[dbUrl,'-At','-F',FIELD_SEP,'--no-psqlrc','-v','ON_ERROR_STOP=1','-c',sql],
   {encoding:'utf8',timeout:30000});
- if(r.status!==0)return null;
+ if(r.error?.code==='ENOENT'){out.direct_probe='PSQL_NOT_INSTALLED';return null;}
+ if(r.status!==0){
+  const e=String(r.stderr??'');
+  out.direct_probe=r.signal==='SIGTERM'?'DB_CONNECT_TIMEOUT'
+   :/password|authentication/i.test(e)?'DB_AUTH_REJECTED'
+   :/could not translate host|Name or service not known/i.test(e)?'DB_DNS_UNRESOLVED'
+   :/could not connect|Connection refused|timeout expired|server closed/i.test(e)?'DB_UNREACHABLE'
+   :'DB_QUERY_FAILED';
+  return null;
+ }
+ out.direct_probe='OK';
  return r.stdout.trim().split('\n').filter(Boolean).map(line=>line.split(FIELD_SEP));
 }
 async function queryManaged(sql,attempts=3){
@@ -47,15 +59,14 @@ async function queryManaged(sql,attempts=3){
  out.managed_query_error=last;
  return null;
 }
-// Is the project's own runtime serving, independent of the management API? The 2026-09-29 outage
-// showed "the control plane cannot answer" and "the platform is down" are different failures,
-// and only the second one means trading is actually blind.
+// Is the project's own runtime serving, independent of the management API? Note a 401 only
+// proves the function gateway answered -- it does NOT prove the database behind it is serving.
 async function runtimeReachable(){
  try{
   const r=await fetch(`https://${project}.supabase.co/functions/v1/doa-capture-ingest`,
    {method:'POST',headers:{'Content-Type':'application/json'},body:'{}',
     signal:AbortSignal.timeout(15000)});
-  return {reachable:true,status:r.status};
+  return {reachable:true,status:r.status,proves:'FUNCTION_GATEWAY_ONLY'};
  }catch(e){return {reachable:false,status:null,error:e.name};}
 }
 async function machines(path='',method='GET',body){
