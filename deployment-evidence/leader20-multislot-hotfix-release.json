@@ -15,5 +15,6 @@
     "late clock wake admission within immutable T+120 authority",
     "post-fill read-only capacity refresh budget isolation",
     "one-shot malformed book refresh with full safety revalidation"
-  ]
+  ],
+  "release_attempt": 2
 }
