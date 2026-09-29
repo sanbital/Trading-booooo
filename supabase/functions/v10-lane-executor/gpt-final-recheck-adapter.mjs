@@ -17,7 +17,7 @@ import {gptRecheckConfig} from './gpt-final-review-adapter.mjs';
 import {nilTicket,NIL_E1,NIL_DISPATCH_QUOTE,NIL_SIGNAL,NIL_DISPATCH_AT} from './recheck-nil-fixture.mjs';
 import {resumeReviewTimeouts} from '../_shared/gpt-final-decision/timeout-recovery.mjs';
 import {isLeader20,leaderIdentity} from '../_shared/leader20/campaign.mjs';
-import {CLOCK_FINAL,clockExecutionSafety,clockTicketCheck} from '../_shared/leader20/clock-final.mjs';
+import {CLOCK_FINAL,clockExecutionSafety,clockExecutionFlowSafety,clockTicketCheck} from '../_shared/leader20/clock-final.mjs';
 import {sameClockCapture} from '../_shared/leader20/clock.mjs';
 export {RECHECK_VERSION,postRecheckSafety};
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
@@ -67,7 +67,9 @@ export function executionDynamicSafety(s,ticket,record,at){
   if(!safety.ok)return safety;
   if(!sameClockCapture(ticket.initial.capture_context,record?.dispatch_capture,at))
     return {ok:false,reason:'CLOCK_FINAL_SNAPSHOT_MISMATCH'};
-  return safety;
+  const flow=clockExecutionFlowSafety(ticket,record?.dispatch_tape,record?.dispatch_quote,at);
+  if(!flow.ok)return flow;
+  return {...safety,flow:flow.flow};
 }
 /** Final venue boundary: intent/lease I/O is already complete. Never restamp an
  * old quote or widen its 1000ms limit. Reuse the frozen strategy authority only. */
@@ -75,8 +77,11 @@ export async function authorizeClockExecution(s,ticket,record,readQuote,authoriz
   const {quote,safety,at}=await readClockExecutionQuote(s,ticket,readQuote,{now});
   record.dispatch_quote=quote;record.execution_safety=safety;
   if(!safety.ok)return {allowed:false,reason:safety.reason};
+  const flow=clockExecutionFlowSafety(ticket,record?.dispatch_tape,quote,at);
+  record.execution_flow_safety=flow;
+  if(!flow.ok)return {allowed:false,reason:flow.reason};
   const checked=authorize();
-  return {...checked,clock_execution_safety:{...safety,checked_at_ms:at,received_at_ms:quote.timing.received_at_ms,
+  return {...checked,clock_execution_safety:{...safety,flow:flow.flow,checked_at_ms:at,received_at_ms:quote.timing.received_at_ms,
     bid:quote.best_bid,ask:quote.best_ask,slot_ms:ticket.clockFinalAuthority.slot_ms,
     expires_at_ms:ticket.clockFinalAuthority.expires_at_ms,telemetry:{...clockExecutionTrace(ticket)}}};
 }
