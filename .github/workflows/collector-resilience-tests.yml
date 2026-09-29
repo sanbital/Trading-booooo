@@ -1,0 +1,40 @@
+name: Collector resilience regression
+on:
+  push:
+    branches: [main]
+    paths:
+      - collectors/doa-capture/**
+      - ops/leader20/collector-watchdog.mjs
+      - ops/leader20/production-evidence.mjs
+      - tests/workflow-failure-propagation.test.mjs
+      - .github/workflows/collector-watchdog.yml
+      - .github/workflows/collector-production-evidence.yml
+      - .github/workflows/collector-resilience-tests.yml
+  pull_request:
+    paths:
+      - collectors/doa-capture/**
+      - ops/leader20/collector-watchdog.mjs
+      - ops/leader20/production-evidence.mjs
+      - tests/workflow-failure-propagation.test.mjs
+      - .github/workflows/collector-watchdog.yml
+      - .github/workflows/collector-production-evidence.yml
+      - .github/workflows/collector-resilience-tests.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Collector survival and recovery regressions
+        run: |
+          node --test \
+            collectors/doa-capture/control-resilience.test.mjs \
+            tests/workflow-failure-propagation.test.mjs
