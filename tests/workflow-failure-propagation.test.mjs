@@ -38,11 +38,43 @@ test('a failing probe can never be reported as a successful job',async t=>{
  await t.test('the watchdog exits non-zero on every refusal path it can report',()=>{
   const src=readFileSync(new URL('../ops/leader20/collector-watchdog.mjs',import.meta.url),'utf8');
   assert.ok(/const fail=m=>\{[^}]*process\.exit\(1\)/.test(src),'fail() must exit non-zero');
-  for(const reason of ['CONTROL_UNREADABLE_ON_EVERY_PATH','COLLECTOR_DID_NOT_RESUME',
-   'EXPECTED_ONE_COLLECTOR_FOUND_'])
+  for(const reason of ['CONTROL_UNREADABLE_ON_EVERY_PATH','INGEST_DB_PATH_UNAVAILABLE',
+   'COLLECTOR_DID_NOT_RESUME','EXPECTED_ONE_COLLECTOR_FOUND_'])
    assert.ok(src.includes(reason),'a refusal path must be reportable: '+reason);
   // A silent `return` after a failed read would be the false-green bug in JS form.
   assert.equal(/catch\(\)=>\{\}/.test(src),false,'no swallowed errors');
+ });
+});
+
+test('collector recovery never burns restarts into an Edge-to-DB outage',async t=>{
+ const wd=readFileSync(new URL('../ops/leader20/collector-watchdog.mjs',import.meta.url),'utf8');
+ const ev=readFileSync(new URL('../ops/leader20/production-evidence.mjs',import.meta.url),'utf8');
+ await t.test('the readiness probe exercises DB token lookup rather than only the gateway',()=>{
+  for(const src of [wd,ev]){
+   assert.ok(src.includes("'x-doa-capture-token':'0'.repeat(64)"),
+    'probe must force the Edge function to read its expected token from Postgres');
+   assert.ok(src.includes('r.status===401'),
+    '401 is the healthy result: DB lookup completed before the deliberate token mismatch');
+   assert.ok(src.includes('r.status===503'),
+    '503 must be classified as the same Edge-to-DB failure the worker sees');
+  }
+ });
+ await t.test('scheduled watchdog gates machine mutation on DB readiness',()=>{
+  const gate=wd.indexOf('else if(!out.ingest_db_path.ready)');
+  const mutation=wd.indexOf("await machines(`/${m.id}/${m.state==='started'?'restart':'start'}`");
+  assert.ok(gate>=0&&mutation>gate,'START/RESTART must be unreachable until ingest DB readiness passes');
+  assert.ok(wd.includes("fail('INGEST_DB_PATH_UNAVAILABLE')"),
+   'DB-path outage must fail loudly instead of being reported healthy');
+ });
+ await t.test('manual recovery requires both a readable control row and healthy ingest DB path',()=>{
+  const recover=ev.indexOf("if(MODE==='recover')");
+  const noControl=ev.indexOf('else if(!control)',recover);
+  const dbGate=ev.indexOf('else if(!ingestDb.ready)',recover);
+  const start=ev.indexOf("ev.actions.push('START')",recover);
+  assert.ok(recover>=0&&noControl>recover&&dbGate>noControl&&start>dbGate,
+   'manual START must come only after control and Edge-to-DB gates');
+  assert.ok(ev.includes('RECOVERY_REFUSED_CONTROL_UNREADABLE'));
+  assert.ok(ev.includes('RECOVERY_REFUSED_INGEST_DB_PATH_UNAVAILABLE'));
  });
 });
 
