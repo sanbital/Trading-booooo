@@ -156,6 +156,31 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
     return {...step,close:emergency.action==='EMERGENCY_EXIT_THESIS_FAILURE',reason:emergency.action,fallback:true,state:st,approval,
       protectApproval:{verdict:'EMERGENCY_APPROVED',authority:approval.authority,level:emergency.level,at}};
   };
+  // A valid GPT PROTECT must bind to the exact fresh capture that GPT actually reviewed.
+  // The management tick may have started with an older capture that had no deterministic
+  // candidate yet (CRVUSDT 2026-09-29). Recompute only from the persisted reviewed packet;
+  // never from model-supplied prices. This preserves the existing candidate-only authority
+  // split while preventing HOLD_WITH_TIGHTER_RISK from becoming a no-op.
+  const bindReviewedProtectionCandidate=(baseState,baseTrigger,row)=>{
+    const packet=row?.record?.packet,reviewPosition=packet?.position,reviewExit=reviewPosition?.exit_context,
+      capture=packet?.facts?.capture_context,reviewAt=Number(packet?.dynamic_as_of_ms??reviewExit?.snapshot_at_ms),
+      reviewBid=Number(reviewExit?.current_price),reviewPeak=Number(reviewExit?.peak),
+      reviewHard=Number(reviewExit?.hard_floor);
+    if(reviewPosition?.position_id!==String(p.id)||reviewPosition?.generation!==generation||
+       !Number.isSafeInteger(reviewAt)||!entryCaptureSafety(capture,reviewAt).ok||
+       ![reviewBid,reviewPeak,reviewHard].every(Number.isFinite))return {state:baseState,softTrigger:baseTrigger,candidate:null};
+    const reviewed=emergencyProtection({capture,now:reviewAt,bid:reviewBid,peak:reviewPeak,hardFloor:reviewHard,
+      standing:Number(baseState?.protectLevel)||0,technicalFailure:{candidateOnly:true}});
+    const existing=Math.max(Number(baseTrigger?.level)||0,Number(baseState?.pending?.softLevel)||0,
+      Number(baseState?.protectLevel)||0);
+    if(!reviewed||reviewed.level<=existing)return {state:baseState,softTrigger:baseTrigger,candidate:null};
+    const reason='THESIS_REVIEW_PROTECTION',key='THESIS_120S:'+reviewed.level,
+      trigger={active:true,crossed:reviewBid<=reviewed.level,key,reason,level:reviewed.level};
+    return {state:{...baseState,pending:baseState?.pending?{...baseState.pending,
+      softKey:key,softLevel:reviewed.level,softReason:reason}:baseState?.pending},
+      softTrigger:trigger,candidate:reviewed};
+  };
+
   // Offer the calibrated floor as a candidate; only valid GPT PROTECT or a
   // subsequent technical failure can promote it to standing protection.
   const candidate=emergencyProtection({capture:prior.dynamicTracker?.capture,now,bid,peak:Number(state.peakPrice),
@@ -230,7 +255,9 @@ export async function fd1HoldTick(db,p,{meta,state,bid,now,timeCandidate,softTri
       if((prior.dynamicTracker||urgentHoldEvent(step.start.event))&&!testHooks?.schedule){
         await task;now=(testHooks?.now??Date.now)();
         if(!completedRow)return fail('REVIEW_COMPLETION_FAILED');
-        const consumed=await holdStep(step.state,{now,price:bid,peak:state.peakPrice,timeCandidate,softTrigger,dynamics,positionId:p.id,generation,answerOf,clock:testHooks?.now??Date.now},MONTHLY_HOLD_POLICY);
+        const reviewedBinding=bindReviewedProtectionCandidate(step.state,softTrigger,completedRow);
+        const consumed=await holdStep(reviewedBinding.state,{now,price:bid,peak:state.peakPrice,timeCandidate,
+          softTrigger:reviewedBinding.softTrigger,dynamics,positionId:p.id,generation,answerOf,clock:testHooks?.now??Date.now},MONTHLY_HOLD_POLICY);
         if(consumed.state.technicalFailure){
           const capture=await (testHooks?.capture??readCaptureWithRecovery)(p.symbol,now,{positionId:p.id,now:testHooks?.now??Date.now});
           now=(testHooks?.now??Date.now)();
