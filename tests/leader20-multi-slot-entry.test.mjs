@@ -5,7 +5,7 @@ import {pathToFileURL} from 'node:url';
 import {buildBatch} from '../supabase/functions/_shared/leader20/batch.mjs';
 const read=p=>readFile(new URL('../'+p,import.meta.url),'utf8');
 const MIGRATION='supabase/migrations/20260928161500_leader20_multi_slot_entry_continuity.sql';
-const REVIEW_ALL_MIGRATION='supabase/migrations/20260929104932_leader20_review_all_ready_before_capacity.sql';
+const REVIEW_ALL_MIGRATION='supabase/migrations/20260929105139_leader20_review_all_ready_before_capacity.sql';
 // Production sizing authority, unchanged and read (not redefined) by the migration.
 const SLOT_COST=152.021375,BUFFER=.10,MAX_SLOTS=10,ARM_LEAD_MS=25000;
 const ARM_DEADLINE=slot=>slot-120000-ARM_LEAD_MS;
