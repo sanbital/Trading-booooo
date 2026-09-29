@@ -68,7 +68,7 @@ const IOC_RETRY_RESERVE=Object.freeze({ms:20000,calls:14});
 // Wall-clock companion to the budget reserve: an E1 fast-weak watch can wait up to
 // E1_POLICY.watchMs per attempt. Stop STARTING new attempts past this point; an attempt
 // already running is never cut short.
-const ENTRY_RUN_BUDGET_MS=40000;
+const ENTRY_RUN_BUDGET_MS=70000;
 // A soft defer hands the claim back. Whether it should also END THE RUN depends on
 // WHOSE answer it was. An account-wide shortfall -- no free cash, the portfolio moved
 // under us -- means no other candidate will do better this cycle, so stopping is
@@ -3324,7 +3324,7 @@ async function runWithLease(db,operation=run){
     throw new Error("V17_LEASE_UNAVAILABLE");
   }
   if(lock.data!==true)return {ok:true,skipped:"V17_EXECUTOR_BUSY"};
-  leaseOwners.set(db,owner);cycleBudgets.set(db,createBudget({ms:55000,calls:160}));
+  leaseOwners.set(db,owner);cycleBudgets.set(db,createBudget({ms:90000,calls:240}));
   try{return await operation(db);}finally{
     leaseOwners.delete(db);cycleBudgets.delete(db);
     const released=await db.rpc("v17_release_execution_lease",{p_owner:owner});
