@@ -551,7 +551,11 @@ const DB_LIGHT_TIMEOUT_MS = 3_000;
 const AUTOTRADER_CYCLE_LEASE_TTL_SECONDS = 150;
 const AUTOTRADER_CYCLE_LEASE_RENEW_MS = 30_000;
 
-async function db(path: string, init: RequestInit = {}, timeoutMs: number | null = null): Promise<any> {
+async function db(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs: number | null = null,
+): Promise<any> {
   const boundedSignal = Number.isFinite(timeoutMs) && Number(timeoutMs) > 0
     ? AbortSignal.timeout(Number(timeoutMs))
     : undefined;
@@ -12780,7 +12784,13 @@ Deno.serve(async (request: Request) => {
   const cronScheduledAt = request.headers.get("x-cron-scheduled-at");
   let action = "unknown";
   let cycleId = "";
-  let cycleLease: { name: string; owner: string; renew: number; acquiredAt: number; expiresAt: number } | null = null;
+  let cycleLease: {
+    name: string;
+    owner: string;
+    renew: number;
+    acquiredAt: number;
+    expiresAt: number;
+  } | null = null;
   try {
     requiredConfiguration();
     const body = await request.json().catch(() => ({})) as JsonRecord;
@@ -12840,13 +12850,15 @@ Deno.serve(async (request: Request) => {
           p_name: leaseName,
           p_owner: owner,
           p_seconds: AUTOTRADER_CYCLE_LEASE_TTL_SECONDS,
-        }, DB_LIGHT_TIMEOUT_MS).catch((error) => console.warn(JSON.stringify({
-          event: "LEASE_HEARTBEAT_FAILED",
-          invocation_id: invocationId,
-          action,
-          lease_owner: owner,
-          db_error: error instanceof Error ? error.message : String(error),
-        })));
+        }, DB_LIGHT_TIMEOUT_MS).catch((error) =>
+          console.warn(JSON.stringify({
+            event: "LEASE_HEARTBEAT_FAILED",
+            invocation_id: invocationId,
+            action,
+            lease_owner: owner,
+            db_error: error instanceof Error ? error.message : String(error),
+          }))
+        );
       }, AUTOTRADER_CYCLE_LEASE_RENEW_MS);
       cycleLease = {
         name: leaseName,
@@ -13214,7 +13226,9 @@ Deno.serve(async (request: Request) => {
       /gateway\s+(?:5\d\d)|expired gateway request|fetch failed|network|timeout|timed out|abort|econn|enotfound|socket|502|503|504|LOAD_SETTINGS_DB|database\s+5\d\d/i
         .test(message);
     const databaseFailure =
-      /LOAD_SETTINGS_DB|database\s+(?:5\d\d|429)|connection timeout|connection terminated/i.test(message);
+      /LOAD_SETTINGS_DB|database\s+(?:5\d\d|429)|connection timeout|connection terminated/i.test(
+        message,
+      );
     if (databaseFailure) {
       // Do not amplify a DB outage by re-reading and PATCHing trading_settings from the error
       // handler. The next cron invocation re-evaluates after a bounded lease acquisition.
@@ -13272,13 +13286,15 @@ Deno.serve(async (request: Request) => {
       await rpc("release_trading_lease", {
         p_name: cycleLease.name,
         p_owner: cycleLease.owner,
-      }, DB_LIGHT_TIMEOUT_MS).catch((error) => console.warn(JSON.stringify({
-        event: "LEASE_RELEASE_FAILED",
-        invocation_id: invocationId,
-        action,
-        lease_owner: cycleLease?.owner,
-        db_error: error instanceof Error ? error.message : String(error),
-      })));
+      }, DB_LIGHT_TIMEOUT_MS).catch((error) =>
+        console.warn(JSON.stringify({
+          event: "LEASE_RELEASE_FAILED",
+          invocation_id: invocationId,
+          action,
+          lease_owner: cycleLease?.owner,
+          db_error: error instanceof Error ? error.message : String(error),
+        }))
+      );
       console.log(JSON.stringify({
         event: "EXECUTOR_INVOCATION_FINISHED",
         invocation_id: invocationId,
