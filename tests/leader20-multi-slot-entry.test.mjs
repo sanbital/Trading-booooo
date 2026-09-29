@@ -5,6 +5,7 @@ import {pathToFileURL} from 'node:url';
 import {buildBatch} from '../supabase/functions/_shared/leader20/batch.mjs';
 const read=p=>readFile(new URL('../'+p,import.meta.url),'utf8');
 const MIGRATION='supabase/migrations/20260928161500_leader20_multi_slot_entry_continuity.sql';
+const REVIEW_ALL_MIGRATION='supabase/migrations/20260929104932_leader20_review_all_ready_before_capacity.sql';
 // Production sizing authority, unchanged and read (not redefined) by the migration.
 const SLOT_COST=152.021375,BUFFER=.10,MAX_SLOTS=10,ARM_LEAD_MS=25000;
 const ARM_DEADLINE=slot=>slot-120000-ARM_LEAD_MS;
@@ -415,6 +416,7 @@ test('concurrent GPT BUYs are admitted up to the remaining slots and no further'
   await h.q("insert into doa_capture.live_micro select 'micro',symbol,$1,$2,$3 from leader20_members",[h.iso(at),h.iso(end+100),payload]);
  }
  await h.load(MIGRATION);
+ await h.load(REVIEW_ALL_MIGRATION);
  // Two more positions are affordable. Three candidates come back BUY.
  await h.fundAt(marginFor(2),slot+11000);
  const capture=s=>h.rpc('doa_context_for_role_v1',[s,h.iso(slot+11000),'TRADE_CANDIDATE',null]);
@@ -433,34 +435,37 @@ test('concurrent GPT BUYs are admitted up to the remaining slots and no further'
   return h.rpc('leader20_materialize_event',[event,{referenceClose:1,
    execution_snapshot:{complete:true,causal:true,bucket_count:24,end_ms:c.end_ms,entry_window:c.entry_window,trajectory_hash:'hash'}}]);
  };
- await t.test('the third simultaneous BUY is refused NO_ENTRY_CAPACITY, not silently overbooked',async()=>{
+ await t.test('READY candidates all materialize before capacity is applied',async()=>{
   const first=await materialize('C0USDT');assert.equal(first.created,true,JSON.stringify(first));
   const second=await materialize('C1USDT');assert.equal(second.created,true,JSON.stringify(second));
-  const third=await materialize('C2USDT');
-  assert.equal(third.created,false);assert.equal(third.reason,'NO_ENTRY_CAPACITY');
+  const third=await materialize('C2USDT');assert.equal(third.created,true,JSON.stringify(third));
+  const cap=await h.capacity();
+  assert.equal(cap.reserved_slots,0,'GPT review candidates do not consume order slots');
+  assert.equal(cap.available_for_new_entry,2,'the two actual entry slots remain available for post-GPT admission');
+  const live=await h.q("select symbol,state,signal_id from leader20_entry_reservations where state in ('RESERVED','ORDER_PENDING')");
+  assert.equal(live.length,0,'materialization never creates an entry reservation');
+  const states=await h.q("select symbol,state,signal_id from leader20_review_events where symbol in ('C0USDT','C1USDT','C2USDT') order by symbol");
+  assert.deepEqual(states.map(r=>r.state),['REVIEWING','REVIEWING','REVIEWING']);
+  assert.ok(states.every(r=>r.signal_id!==null),'all READY candidates have a signal for GPT review');
+ });
+ await t.test('atomic slot reservation still caps actual post-GPT admission',async()=>{
+  const signals=await h.q("select symbol,signal_id from leader20_review_events where symbol in ('C0USDT','C1USDT','C2USDT') order by symbol");
+  const bySymbol=new Map(signals.map(r=>[r.symbol,r.signal_id]));
+  const reserveAfterReview=symbol=>h.rpc('leader20_reserve_entry_slot',[symbol,slot,bySymbol.get(symbol),h.iso(slot+120000)]);
+  const [a,b,c]=await Promise.all([reserveAfterReview('C0USDT'),reserveAfterReview('C1USDT'),reserveAfterReview('C2USDT')]);
+  const ok=[a,b,c].filter(x=>x.reserved===true),blocked=[a,b,c].filter(x=>x.reserved!==true);
+  assert.equal(ok.length,2,JSON.stringify([a,b,c]));
+  assert.equal(blocked.length,1);
+  assert.equal(blocked[0].reason,'NO_ENTRY_CAPACITY');
   const cap=await h.capacity();
   assert.equal(cap.reserved_slots,2);assert.equal(cap.available_for_new_entry,0);
-  const live=await h.q("select symbol,state,signal_id from leader20_entry_reservations order by symbol");
-  assert.deepEqual(live.map(r=>r.symbol),['C0USDT','C1USDT']);
-  assert.ok(live.every(r=>r.state==='RESERVED'&&r.signal_id!==null),'each reservation is bound to its signal');
-  // The refused candidate is still a live campaign: the batch is not closed by two fills.
-  assert.equal((await h.q("select state from leader20_review_events where symbol='C2USDT'"))[0].state,'REQUESTED');
  });
- await t.test('a reserved candidate can still pay for its own final recheck',async()=>{
+ await t.test('reviewed candidates can still pay for their final review',async()=>{
   await h.load('supabase/migrations/20260928034100_leader20_transient_capacity_pause.sql');
   await h.load('supabase/migrations/20260928152753_hold_thesis_protection.sql');
   await h.q("insert into ai_provider_limits values('openai',95,3,true) on conflict(provider) do update set enabled=true");
   const reserved=await h.rpc('ai_call_reserve',['a'.repeat(64),'openai','gpt-5.4-mini-2026-03-17','RECHECK',null,'v1',.1]);
   assert.equal(reserved.created,true,JSON.stringify(reserved));
- });
- await t.test('a released reservation returns its slot to the same batch',async()=>{
-  const c0=(await h.q("select id,signal_id from leader20_entry_reservations where symbol='C0USDT'"))[0];
-  await h.q("update v11_long_regime_signals set status='REJECTED' where id=$1",[c0.signal_id]);
-  const swept=await h.rpc('leader20_entry_reservation_sweep');
-  assert.equal(swept.released,1,JSON.stringify(swept));
-  assert.equal((await h.capacity()).available_for_new_entry,1);
-  const third=await materialize('C3USDT');
-  assert.equal(third.created,true,JSON.stringify(third),'the freed slot admits the next valid BUY');
  });
 });
 
