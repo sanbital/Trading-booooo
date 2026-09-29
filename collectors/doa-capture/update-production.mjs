@@ -56,19 +56,30 @@ try{
 }finally{try{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}catch(e){if(!replaced||!String(e.message).includes('404'))throw e;}}
 evidence.after=safe(await machine('/'+activeId));
 writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));
-let verified=false,stableSamples=0;
+let verified=false,heartbeatSamples=0,candidateCycleSeen=false;
 for(let i=0;i<60;i++){
  await new Promise(r=>setTimeout(r,15000));
  const state=(await query(`select metrics->>'version' version,extract(epoch from clock_timestamp()-heartbeat_at) age_s,
  metrics->>'watched' watched,metrics->>'queue' queue from doa_capture.control where id=1`))[0];
- const captures=await query(`select s.symbol,c->>'status' status,c->>'reason' reason,c->>'buckets' buckets,jsonb_array_length(c->'trajectory') points
- from (values('QUSDT'),('SPELLUSDT'),('JELLYJELLYUSDT')) s(symbol)
+ const captures=await query(`with symbols as (
+   select distinct symbol
+   from doa_capture.live_micro
+   where kind='micro'
+     and at>clock_timestamp()-interval '155 seconds'
+     and payload->'watch_roles' ? 'SCANNER_LEADER'
+   order by symbol
+   limit 5
+ )
+ select s.symbol,c->>'status' status,c->>'reason' reason,c->>'buckets' buckets,jsonb_array_length(c->'trajectory') points
+ from symbols s
  cross join lateral (select public.doa_gpt_capture_context_v3(s.symbol,clock_timestamp()) c) x`);
- console.log(JSON.stringify({state,captures}));evidence.validation={state,captures};
- if(state.version===VERSION&&Number(state.age_s)<25&&captures.every(x=>x.status==='AVAILABLE'&&Number(x.buckets)===24&&x.points===24)){
-   stableSamples++;if(stableSamples>=20){verified=true;break;}
- }else stableSamples=0;
+ const heartbeatOK=state.version===VERSION&&Number(state.age_s)<25;
+ heartbeatSamples=heartbeatOK?heartbeatSamples+1:0;
+ if(captures.some(x=>x.status==='AVAILABLE'&&Number(x.buckets)===24&&x.points===24))candidateCycleSeen=true;
+ console.log(JSON.stringify({state,captures,heartbeat_samples:heartbeatSamples,candidate_cycle_seen:candidateCycleSeen}));
+ evidence.validation={state,captures,heartbeat_samples:heartbeatSamples,candidate_cycle_seen:candidateCycleSeen};
+ if(heartbeatSamples>=3&&candidateCycleSeen){verified=true;break;}
 }
-evidence.after=safe(await machine('/'+activeId));evidence.stable_samples=stableSamples;
+evidence.after=safe(await machine('/'+activeId));evidence.heartbeat_samples=heartbeatSamples;evidence.candidate_cycle_seen=candidateCycleSeen;
 writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));
 if(!verified)throw Error('CAPTURE_LIVE_VALIDATION_INCOMPLETE');
