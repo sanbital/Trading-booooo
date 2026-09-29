@@ -3212,6 +3212,7 @@ async function qv3AfterProtection(db,p,ctx){
 }
 const exchangeGateway=gateway;
 const leaseOwners=new WeakMap(),cycleBudgets=new WeakMap();
+const EXECUTION_LEASE_TTL_SECONDS=150,EXECUTION_LEASE_HEARTBEAT_MS=30000;
 async function verifyExecutionLease(db,allowBudgetExceeded=false){
   if(!allowBudgetExceeded&&cycleBudgets.get(db)?.remaining()===0)throw Error("V18_API_BUDGET_EXHAUSTED");
   const owner=leaseOwners.get(db);if(!owner)throw new Error("V17_EXECUTION_LEASE_MISSING");
@@ -3305,7 +3306,7 @@ async function gptDryRun(db,body){
     review,concurrentCycle,guarded,journal:job.data??null};
 }
 async function runWithLease(db,operation=run){
-  const owner=crypto.randomUUID();
+  const owner=crypto.randomUUID(),invocationId=crypto.randomUUID(),startedAt=Date.now();
   let lock;
   try{
     lock=await db.rpc("v17_acquire_execution_lease",{p_owner:owner});
@@ -3313,7 +3314,8 @@ async function runWithLease(db,operation=run){
   }catch{
     // Acquisition may have committed before its acknowledgement was lost.
     // Never execute on uncertain ownership. Release only this unstarted request's
-    // owner; the RPC cannot release another worker's lease. Keep the 10 min TTL.
+    // owner; the RPC cannot release another worker's lease. The bounded 150 s TTL
+    // remains the crash-recovery backstop if acknowledgement and cleanup both fail.
     let cleaned=false;
     for(let attempt=0;attempt<3;attempt++){
       const released=await db.rpc("v17_release_execution_lease",{p_owner:owner}).catch(()=>null);
@@ -3323,12 +3325,40 @@ async function runWithLease(db,operation=run){
     if(!cleaned)console.error("V17_UNCERTAIN_LEASE_CLEANUP_FAILED");
     throw new Error("V17_LEASE_UNAVAILABLE");
   }
-  if(lock.data!==true)return {ok:true,skipped:"V17_EXECUTOR_BUSY"};
+  if(lock.data!==true){
+    console.log(JSON.stringify({event:"SKIPPED_ALREADY_RUNNING",invocation_id:invocationId,
+      started_at:new Date(startedAt).toISOString(),lease_owner:owner,skipped_already_running:true,
+      total_runtime_ms:Date.now()-startedAt}));
+    return {ok:true,skipped:"V17_EXECUTOR_BUSY"};
+  }
+  const acquiredAt=Date.now();
+  console.log(JSON.stringify({event:"EXECUTOR_LEASE_ACQUIRED",invocation_id:invocationId,
+    started_at:new Date(startedAt).toISOString(),lease_acquired_at:new Date(acquiredAt).toISOString(),
+    lease_owner:owner,lease_expires_at:new Date(acquiredAt+EXECUTION_LEASE_TTL_SECONDS*1000).toISOString(),
+    active_executor_concurrency:1}));
   leaseOwners.set(db,owner);cycleBudgets.set(db,createBudget({ms:90000,calls:240}));
+  let heartbeatFailures=0;
+  const heartbeat=setInterval(async()=>{
+    try{
+      const renewed=await db.rpc("v17_acquire_execution_lease",{p_owner:owner});
+      if(renewed.error||renewed.data!==true)throw new Error(renewed.error?.message||"LEASE_NOT_OWNED");
+    }catch(error){
+      heartbeatFailures++;
+      console.error(JSON.stringify({event:"EXECUTOR_LEASE_HEARTBEAT_FAILED",invocation_id:invocationId,
+        lease_owner:owner,heartbeat_failures:heartbeatFailures,
+        db_error:String(error?.message??error).slice(0,240)}));
+    }
+  },EXECUTION_LEASE_HEARTBEAT_MS);
   try{return await operation(db);}finally{
+    clearInterval(heartbeat);
     leaseOwners.delete(db);cycleBudgets.delete(db);
     const released=await db.rpc("v17_release_execution_lease",{p_owner:owner});
     if(released.error)console.error("V17_LEASE_RELEASE_FAILED");
+    console.log(JSON.stringify({event:"EXECUTOR_INVOCATION_FINISHED",invocation_id:invocationId,
+      started_at:new Date(startedAt).toISOString(),lease_acquired_at:new Date(acquiredAt).toISOString(),
+      lease_owner:owner,skipped_already_running:false,finished_at:new Date().toISOString(),
+      total_runtime_ms:Date.now()-startedAt,heartbeat_failures:heartbeatFailures,
+      active_executor_concurrency:0}));
   }
 }
 Deno.serve(async req=>{
