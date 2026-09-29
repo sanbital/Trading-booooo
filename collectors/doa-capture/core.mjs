@@ -111,7 +111,7 @@ export function retireMarketCapture(s,now){
  * --------
  * A transport failure is never fatal. Only the control plane saying "stop", or a signal, is.
  *   - 5xx / network / timeout / rate limit -> exponential backoff with jitter, retry forever.
- *   - control explicitly disabled, or past its scheduled end -> IDLE, keep polling, never exit,
+ *   - control transport unavailable -> RUN DEGRADED on the last authoritative watch set; keep streams alive.\n *   - control explicitly disabled, or past its scheduled end -> IDLE, keep polling, never exit,
  *     so re-enabling recovers without a deploy.
  *   - a crash or a resource cap -> exit non-zero so the supervisor hands us a fresh process.
  * Jitter keeps a fleet from retrying in lockstep after a shared outage.
@@ -133,7 +133,7 @@ export function controlDisposition({stopped=false,signalled=false,disabled=false
   // machine cannot come back on its own.
   if(disabled)return {action:'idle',code:null,reason:'CONTROL_DISABLED'};
   if(pastDeadline)return {action:'idle',code:null,reason:'CONTROL_WINDOW_ENDED'};
-  if(stopped)return {action:'idle',code:null,reason:'CONTROL_UNAVAILABLE'};
+  if(stopped)return {action:'run',code:null,reason:'CONTROL_UNAVAILABLE'};
   return {action:'run',code:null,reason:null};
 }
 export function snapshotStillCurrent(s,generation,socket){
