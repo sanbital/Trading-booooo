@@ -35,7 +35,7 @@ const evidence={source_commit:process.env.GITHUB_SHA,protocol_sha256:protocol,be
 writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));console.log(JSON.stringify({before:evidence.before}));
 const auth=spawnSync('flyctl',['auth','docker'],{encoding:'utf8'});if(auth.status!==0)throw Error('REGISTRY_AUTH_FAILED');
 const push=spawnSync('docker',['push',image],{stdio:'inherit'});if(push.status!==0)throw Error('IMAGE_PUSH_FAILED');
-const lease=await machine('/'+before.id+'/lease','POST',{description:'capture-'+process.env.GITHUB_SHA.slice(0,12),ttl:60});
+const lease=await machine('/'+before.id+'/lease','POST',{description:'capture-'+process.env.GITHUB_SHA.slice(0,12),ttl:180});
 const nonce=lease.data?.nonce;if(!nonce)throw Error('MACHINE_LEASE_MISSING');
 let activeId=before.id,replaced=false;
 try{
@@ -45,8 +45,35 @@ try{
  const config={...cfg,image,env:{...(cfg.env??{}),PROTOCOL_SHA256:protocol},guest:{...cfg.guest,cpu_kind:'shared',cpus:4,memory_mb:1024},auto_destroy:false,restart:{policy:'always'}};
  if(cfg.auto_destroy===true)throw Error('EXISTING_PERSISTENT_COLLECTOR_REQUIRED');
  await machine('/'+before.id,'POST',{current_version:before.instance_id,config},nonce);
- let started=await machine('/'+before.id);
- if(started.state!=='started')await machine('/'+before.id+'/start','POST',undefined,nonce);
+
+ // A machine update is a replacement transition. Starting it before that transition
+ // has settled returns 412 "machine getting replaced". Wait until the new instance
+ // and exact release config are observable before issuing start.
+ let started=null,applied=false;
+ for(let i=0;i<60;i++){
+   await new Promise(r=>setTimeout(r,2000));
+   started=await machine('/'+before.id);
+   const imageApplied=String(started.config?.image??'')===image;
+   const protocolApplied=started.config?.env?.PROTOCOL_SHA256===protocol;
+   const restartApplied=started.config?.restart?.policy==='always' && started.config?.restart?.max_retries==null;
+   const persistenceApplied=started.config?.auto_destroy===false;
+   if(started.instance_id!==before.instance_id&&imageApplied&&protocolApplied&&restartApplied&&persistenceApplied){
+     replaced=true;applied=true;break;
+   }
+ }
+ if(!applied)throw Error('MACHINE_REPLACEMENT_NOT_APPLIED');
+
+ if(started.state!=='started'){
+   let startAccepted=false;
+   for(let i=0;i<30&&!startAccepted;i++){
+     try{await machine('/'+before.id+'/start','POST',undefined,nonce);startAccepted=true;}
+     catch(e){
+       if(!String(e.message).includes('MACHINE_HTTP_412'))throw e;
+       await new Promise(r=>setTimeout(r,2000));
+     }
+   }
+   if(!startAccepted)throw Error('MACHINE_START_REPLACEMENT_TIMEOUT');
+ }
  for(let i=0;i<30;i++){
    started=await machine('/'+before.id);
    if(started.state==='started')break;
