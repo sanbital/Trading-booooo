@@ -3,7 +3,19 @@ import {buildBatch,callBatch} from './batch.mjs';
 import {paidTransport} from './paid-transport.mjs';
 import {hash} from '../gpt-final-decision/snapshot-hash.mjs';
 
-export const CLOCK_BATCH_ADMISSION_MS=EXECUTION_MS-DECISION_RESERVE_MS;
+// Production cron/edge jitter can deliver a funded slot after the historical +40s
+// reserve boundary. Do not widen the immutable +120s authority: only allow a late
+// batch to start when at least this much wall time still remains for capture, model
+// review and order safety. 55s admits the observed +52..59s wakes while retaining a
+// hard 55s completion budget.
+export const CLOCK_BATCH_MIN_REMAINING_MS=55000;
+export const CLOCK_BATCH_ADMISSION_MS=EXECUTION_MS-CLOCK_BATCH_MIN_REMAINING_MS;
+export function clockBatchAdmissionDeadline(window){
+ if(!window)return Infinity;
+ const configured=Number(window.decision_reserve_ms);
+ const required=Math.min(Number.isFinite(configured)&&configured>0?configured:DECISION_RESERVE_MS,CLOCK_BATCH_MIN_REMAINING_MS);
+ return window.decision_deadline_ms-required;
+}
 const sleepDefault=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export function batchOutcome(result,window,extra={}){
  const reason=result.reason??(result.created?'CREATED':'NOT_DUE');
@@ -11,7 +23,7 @@ export function batchOutcome(result,window,extra={}){
   reason==='CLOCK_CAPTURE_NOT_READY'?'CAPTURE_NOT_READY':reason==='NO_ENTRY_CAPACITY'?'CAPACITY_ZERO':reason,
   ...(window?{slot_at:new Date(window.slot_ms).toISOString(),capture_start:new Date(window.capture_start_ms).toISOString(),
    capture_end:new Date(window.capture_end_ms).toISOString(),decision_deadline:new Date(window.decision_deadline_ms).toISOString(),
-   latest_batch_start:new Date(window.latest_batch_start_ms).toISOString(),decision_reserve_ms:window.decision_reserve_ms}:{}),
+   latest_batch_start:new Date(window.latest_batch_start_ms).toISOString(),batch_admission_deadline:new Date(clockBatchAdmissionDeadline(window)).toISOString(),decision_reserve_ms:window.decision_reserve_ms}:{}),
   capture_ready_count:0,capture_blocked_count:0,available_slots:null,...extra};
 }
 const pendingCapture=c=>!c||/CAPTURE_READ|INCOMPLETE|MISSING|NOT_READY|INGEST_PENDING|STALE_BUCKET/.test(c.reason??'');
@@ -73,7 +85,7 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sle
   window=clockDecisionWindow(requested,current.decision_reserve_ms??DECISION_RESERVE_MS);
   if(Date.parse(current.last_periodic_slot)>=window.slot_ms)return outcome({created:false,reason:'NOT_DUE'});
   await note({batch_requested_at:new Date(requested).toISOString(),slot_status:'BATCH_WAITING',decision_reserve_ms:window.decision_reserve_ms});
-  if(now()>=window.latest_batch_start_ms){
+  if(now()>=clockBatchAdmissionDeadline(window)){
    await note({batch_reason:'DECISION_WINDOW_INSUFFICIENT',slot_status:'EXPIRED'});
    return outcome({created:false,reason:'DECISION_WINDOW_INSUFFICIENT'});
   }
@@ -112,7 +124,7 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sle
  stats.watch_count=members.data.length;
  let rows,packet;
  for(let attempt=0;attempt<160;attempt++){
-  if(window&&now()>=window.latest_batch_start_ms){
+  if(window&&now()>=clockBatchAdmissionDeadline(window)){
    await note({...stats,batch_reason:'DECISION_WINDOW_INSUFFICIENT',slot_status:'EXPIRED'});
    return outcome({created:false,reason:'DECISION_WINDOW_INSUFFICIENT'});
   }
@@ -129,7 +141,7 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sle
   stats.blocked_reasons=blockedReasons(rows,cap.held);
   if(!window||stats.capture_ready_count>0&&!rows.some(r=>!cap.held?.includes(r.symbol)&&pendingCapture(r.capture)))break;
   await note({...stats,batch_reason:'CAPTURE_NOT_READY',slot_status:'BATCH_WAITING'});
-  const delay=Math.min(1000,250*2**Math.min(attempt,2),window.latest_batch_start_ms-now());
+  const delay=Math.min(1000,250*2**Math.min(attempt,2),clockBatchAdmissionDeadline(window)-now());
   if(delay<=0)continue;
   const before=now();await sleep(delay);stats.retry_count++;
   // A non-advancing injected/test clock cannot create an unbounded live loop.
@@ -137,7 +149,7 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sle
   const current=await batchControl(db);
   if(Date.parse(current.last_periodic_slot)>=window.slot_ms)return outcome({created:false,reason:'NOT_DUE'});
  }
- if(window&&(!stats.capture_ready_count||now()>=window.latest_batch_start_ms)){
+ if(window&&(!stats.capture_ready_count||now()>=clockBatchAdmissionDeadline(window))){
   await note({...stats,batch_reason:'DECISION_WINDOW_INSUFFICIENT',slot_status:'EXPIRED'});
   return outcome({created:false,reason:'DECISION_WINDOW_INSUFFICIENT'});
  }
@@ -145,7 +157,7 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sle
  // Momentum is also bounded by T, not shifted to a later minute during retries.
  rows=await Promise.all(rows.map(async r=>({...r,market_context:await batchMomentum(r.symbol,window?.slot_ms??now(),fetchFn)})));
  packet=await buildBatch(rows,{asOf:now(),epochId:ctl.epoch_id,generation:ctl.generation,held:cap.held});
- if(window&&(now()>=window.latest_batch_start_ms||packet.symbols.some(s=>s.state==='READY'&&s.entry_window?.slot_ms!==window.slot_ms))){
+ if(window&&(now()>=clockBatchAdmissionDeadline(window)||packet.symbols.some(s=>s.state==='READY'&&s.entry_window?.slot_ms!==window.slot_ms))){
   await note({...stats,batch_reason:'DECISION_WINDOW_INSUFFICIENT',slot_status:'EXPIRED'});
   return outcome({created:false,reason:'DECISION_WINDOW_INSUFFICIENT'});
  }
