@@ -32,7 +32,7 @@ test('a stricter configured reserve is preserved instead of weakened',()=>{
 });
 
 test('SQL batch claim mirrors the late-wake boundary and keeps both absolute expiry checks',async()=>{
-  const sql=await read('supabase/migrations/20260929122500_leader20_late_wake_multislot_recovery.sql');
+  const sql=await read('supabase/migrations/20260929130830_leader20_late_wake_multislot_recovery.sql');
   assert.equal((sql.match(/least\(c\.decision_reserve_ms,55000\)/g)||[]).length,2,
     'both pre-claim and pre-insert reserve checks must use the 55s floor');
   assert.ok(sql.includes("at_time>=slot_at+interval '120 seconds'"));
