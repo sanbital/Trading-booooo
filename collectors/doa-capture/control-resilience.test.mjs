@@ -27,11 +27,12 @@ test('a transport failure backs off and never ends the process',async t=>{
   assert.equal(controlDisposition({crashed:true}).code,1,'a crash asks for a fresh process');
   assert.equal(controlDisposition({overResourceCap:true}).code,1);
  });
- await t.test('a lost control plane idles and keeps polling instead of dying',()=>{
+ await t.test('a lost control plane keeps the last watch set streaming while retries back off',()=>{
   // This is the exact 2026-09-29 case: 90s without a control response.
   const d=controlDisposition({stopped:true});
-  assert.equal(d.action,'idle');assert.equal(d.code,null);
+  assert.equal(d.action,'run');assert.equal(d.code,null);
   assert.equal(d.reason,'CONTROL_UNAVAILABLE');
+  assert.notEqual(d.action,'idle','a DB/Edge outage must not close market-data sockets');
   assert.notEqual(d.action,'exit','a brief Edge outage must not end market surveillance');
  });
  await t.test('a disabled or ended window idles, so re-enabling needs no deploy',()=>{
@@ -62,6 +63,12 @@ test('the worker no longer carries any path that ends capture on a transport fai
  await t.test('only an explicit control decision disables capture',()=>{
   assert.ok(worker.includes("disabled=true;log('CONTROL_DISABLED'"));
   assert.ok(worker.includes('CONTROL_REENABLED'),'and it can be handed back');
+ });
+ await t.test('ingest backlog is bounded by eviction, not process death',()=>{
+  assert.ok(worker.includes('const PERSIST_QUEUE_CAP=1200'));
+  assert.ok(worker.includes("log('PERSIST_QUEUE_EVICT'"));
+  assert.equal(worker.includes("throw Error('PERSIST_QUEUE_CAP')"),false);
+  assert.ok(worker.includes('buffer_dropped_rows:bufferDrops'));
  });
 });
 
