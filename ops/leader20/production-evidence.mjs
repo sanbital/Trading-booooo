@@ -68,6 +68,22 @@ async function functionGateway(){
     return {reachable:true,status:r.status,proves:'FUNCTION_GATEWAY_ONLY'};
   }catch(e){return {reachable:false,error:e.name};}
 }
+// Probe the exact Edge -> Postgres dependency used by the collector, without a real token.
+// A valid-looking wrong token makes the function read the expected token from Postgres first.
+// 401 therefore proves the DB token lookup completed; 503 proves the worker would hit the same
+// database outage seen in production. This probe is read-only.
+async function probeIngestDbPath(){
+  try{
+    const r=await fetch(`https://${project}.supabase.co/functions/v1/doa-capture-ingest`,
+      {method:'POST',
+       headers:{'Content-Type':'application/json','x-doa-capture-token':'0'.repeat(64)},
+       body:JSON.stringify({action:'status',worker_id:'production-evidence-readiness-probe'}),
+       signal:AbortSignal.timeout(15000)});
+    if(r.status===401)return {ready:true,status:401,proves:'EDGE_TO_DB_TOKEN_LOOKUP'};
+    if(r.status===503)return {ready:false,status:503,reason:'EDGE_TO_DB_UNAVAILABLE'};
+    return {ready:false,status:r.status,reason:'UNEXPECTED_PROBE_STATUS'};
+  }catch(e){return {ready:false,status:null,reason:'PROBE_'+e.name};}
+}
 // PostgREST answering at all is independent evidence that Postgres is serving that path.
 async function postgrestReachable(){
   try{
@@ -77,6 +93,8 @@ async function postgrestReachable(){
 }
 
 note('function_gateway',await functionGateway());
+const ingestDb=await probeIngestDbPath();
+note('ingest_db_path',ingestDb);
 note('postgrest',await postgrestReachable());
 
 const CONTROL_SQL=`select enabled,protocol_sha256,
@@ -143,21 +161,27 @@ if(machine&&control){
 // ---------------------------------------------------------------- recovery (opt-in only)
 if(MODE==='recover'){
   if(!machine){err('CANNOT_RECOVER_WITHOUT_MACHINE');}
-  else if(control&&control.enabled===false){ev.actions.push('SKIPPED_COLLECTOR_DISABLED_BY_OPERATOR');}
-  else if(control&&control.window_ended===true){ev.actions.push('SKIPPED_CAPTURE_WINDOW_ENDED');}
+  // Never spend Fly restart attempts into a database outage. The old recovery path started a
+  // stopped machine even when every DB read was unavailable; the old worker then immediately
+  // exited on INGEST_503, burning the machine restart budget without any chance of recovery.
+  else if(!control){
+    ev.actions.push('SKIPPED_CONTROL_UNREADABLE');
+    err('RECOVERY_REFUSED_CONTROL_UNREADABLE');
+  }
+  else if(!ingestDb.ready){
+    ev.actions.push('SKIPPED_INGEST_DB_PATH_UNAVAILABLE');
+    err('RECOVERY_REFUSED_INGEST_DB_PATH_UNAVAILABLE');
+  }
+  else if(control.enabled===false){ev.actions.push('SKIPPED_COLLECTOR_DISABLED_BY_OPERATOR');}
+  else if(control.window_ended===true){ev.actions.push('SKIPPED_CAPTURE_WINDOW_ENDED');}
   else{
-    const stale=control?control.heartbeat_age_ms>STALE_MS:null;
-    // With no readable control row a STOPPED machine is still unambiguous: a stopped collector
-    // is never the intended running state, and the control row governs whether it captures
-    // (a started worker whose control says disabled now idles rather than trading).
+    const stale=control.heartbeat_age_ms>STALE_MS;
     if(machine.state!=='started'){
       ev.actions.push('START');
       try{await machines('/'+machine.id+'/start','POST');}catch(e){err('START_FAILED:'+e.message);}
     }else if(stale===true){
       ev.actions.push('RESTART');
       try{await machines('/'+machine.id+'/restart','POST');}catch(e){err('RESTART_FAILED:'+e.message);}
-    }else if(stale===null){
-      ev.actions.push('NO_ACTION_STARTED_BUT_HEARTBEAT_UNREADABLE');
     }else{
       ev.actions.push('NO_ACTION_HEARTBEAT_HEALTHY');
     }
