@@ -45,6 +45,14 @@ try{
  const config={...cfg,image,env:{...(cfg.env??{}),PROTOCOL_SHA256:protocol},guest:{...cfg.guest,cpu_kind:'shared',cpus:4,memory_mb:1024},auto_destroy:false,restart:{policy:'always'}};
  if(cfg.auto_destroy===true)throw Error('EXISTING_PERSISTENT_COLLECTOR_REQUIRED');
  await machine('/'+before.id,'POST',{current_version:before.instance_id,config},nonce);
+ let started=await machine('/'+before.id);
+ if(started.state!=='started')await machine('/'+before.id+'/start','POST',undefined,nonce);
+ for(let i=0;i<30;i++){
+   started=await machine('/'+before.id);
+   if(started.state==='started')break;
+   await new Promise(r=>setTimeout(r,2000));
+ }
+ if(started.state!=='started')throw Error('MACHINE_NOT_STARTED');
 }finally{try{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}catch(e){if(!replaced||!String(e.message).includes('404'))throw e;}}
 evidence.after=safe(await machine('/'+activeId));
 writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));
