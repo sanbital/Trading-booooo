@@ -140,7 +140,7 @@ jobs:
           const db=(await dr.json())[0]?.protocol_sha256;
           const safe={
             id:m.id,state:m.state,instance_id:m.instance_id,
-            restart:m.config?.restart,auto_destroy:m.config?.auto_destroy,
+            restart:m.config?.restart,auto_destroy:m.config?.auto_destroy??false,
             release_image:m.image_ref?.registry==='registry.fly.io' &&
               m.image_ref?.repository===app && m.image_ref?.tag===process.env.GITHUB_SHA,
             fly_protocol_matches:m.config?.env?.PROTOCOL_SHA256===protocol,
@@ -148,7 +148,7 @@ jobs:
           };
           console.log(JSON.stringify(safe));
           if(safe.state!=='started'||safe.restart?.policy!=='always'||safe.restart?.max_retries!=null||
-             safe.auto_destroy!==false||!safe.release_image||!safe.fly_protocol_matches||!safe.db_protocol_matches){
+             safe.auto_destroy===true||!safe.release_image||!safe.fly_protocol_matches||!safe.db_protocol_matches){
             throw Error('EXACT_RELEASE_CONFIG_NOT_ACTIVE');
           }
           NODE
