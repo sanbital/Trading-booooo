@@ -141,7 +141,8 @@ jobs:
           const safe={
             id:m.id,state:m.state,instance_id:m.instance_id,
             restart:m.config?.restart,auto_destroy:m.config?.auto_destroy,
-            release_image:m.config?.image===('registry.fly.io/'+app+':'+process.env.GITHUB_SHA),
+            release_image:m.image_ref?.registry==='registry.fly.io' &&
+              m.image_ref?.repository===app && m.image_ref?.tag===process.env.GITHUB_SHA,
             fly_protocol_matches:m.config?.env?.PROTOCOL_SHA256===protocol,
             db_protocol_matches:db===protocol
           };
