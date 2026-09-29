@@ -67,7 +67,7 @@ begin
   last_periodic_slot=slot_at,
   next_periodic_at=slot_at+interval '10 minutes' where singleton;
  return jsonb_build_object('created',true,'row',to_jsonb(b),'capacity',cap);
-end $function$
+end $function$;
 
 
 comment on function public.leader20_batch_claim(jsonb,text,boolean) is
