@@ -1,0 +1,176 @@
+name: Collector production recovery release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/production-recovery-etaajwpernzrcdrifdnw-enpb6i]
+    paths:
+      - .github/workflows/collector-recovery-release.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-doa-capture-only
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate collector and execution regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --prefix test-support/v18-ops --ignore-scripts
+          export PGLITE_MODULE="$PWD/test-support/v18-ops/node_modules/@electric-sql/pglite/dist/index.js"
+          node --test tests/cron-runtime-load-shed.test.mjs collectors/doa-capture/*.test.mjs tests/fd1*.test.mjs test-support/v17-entry/*.test.mjs test-support/v17-exit/*.test.mjs
+          npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/v10-lane-executor/index.ts
+          npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/doa-capture-ingest/index.ts
+          node --check collectors/doa-capture/worker.mjs
+          node --check collectors/doa-capture/update-production.mjs
+
+      - name: Build exact commit image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="registry.fly.io/sanbital-doa-capture-20260925:$GITHUB_SHA"
+          docker build -t "$image" collectors/doa-capture
+          if docker run --rm "$image" > boot.log 2>&1; then exit 1; fi
+          grep -q INVALID_CONFIG boot.log
+
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: 0.4.108
+
+      - name: Prove Edge to DB path is live
+        shell: bash
+        run: |
+          set -euo pipefail
+          bad_token="$(printf '0%.0s' {1..64})"
+          code="$(curl --silent --show-error --output edge-db-probe.json --write-out '%{http_code}' \
+            --request POST \
+            --header 'content-type: application/json' \
+            --header "x-doa-capture-token: $bad_token" \
+            --data '{"action":"status"}' \
+            https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/doa-capture-ingest)"
+          test "$code" = "401"
+
+      - name: Synchronize protocol hash at release boundary
+        id: protocol
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import {appendFileSync,readFileSync} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          const project='etaajwpernzrcdrifdnw';
+          const protocol=createHash('sha256').update(readFileSync('collectors/doa-capture/PROTOCOL.md')).digest('hex');
+          async function query(sql){
+            const r=await fetch('https://api.supabase.com/v1/projects/'+project+'/database/query',{
+              method:'POST',
+              headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN,'content-type':'application/json'},
+              body:JSON.stringify({query:sql}),
+              signal:AbortSignal.timeout(30000)
+            });
+            if(!r.ok)throw Error('DATABASE_HTTP_'+r.status);
+            return r.json();
+          }
+          const rows=await query('select enabled,production_enabled,ends_at,protocol_sha256 from doa_capture.control where id=1');
+          const c=rows[0];
+          if(!c?.enabled||!c.production_enabled||Date.parse(c.ends_at)<=Date.now())throw Error('CONTROL_NOT_READY');
+          const previous=String(c.protocol_sha256??'');
+          if(!/^[a-f0-9]{64}$/.test(previous))throw Error('INVALID_CURRENT_PROTOCOL');
+          const changed=previous!==protocol;
+          if(changed){
+            const updated=await query("update doa_capture.control set protocol_sha256='"+protocol+"' where id=1 and protocol_sha256='"+previous+"' returning protocol_sha256");
+            if(updated.length!==1||updated[0].protocol_sha256!==protocol)throw Error('PROTOCOL_CAS_FAILED');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT,'previous='+previous+'\nchanged='+String(changed)+'\nprotocol='+protocol+'\n');
+          console.log(JSON.stringify({protocol_sha256:protocol,changed}));
+          NODE
+
+      - name: Update existing collector and verify live Top20 trajectory
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PREVIOUS_PROTOCOL_SHA256: ${{ steps.protocol.outputs.previous }}
+        run: node collectors/doa-capture/update-production.mjs
+
+      - name: Roll back DB protocol only if machine update never applied
+        if: failure() && steps.protocol.outputs.changed == 'true'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          PREVIOUS_PROTOCOL_SHA256: ${{ steps.protocol.outputs.previous }}
+          RELEASE_PROTOCOL_SHA256: ${{ steps.protocol.outputs.protocol }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const app='sanbital-doa-capture-20260925';
+          const machineId='185030da006d48';
+          async function db(sql){
+            const r=await fetch('https://api.supabase.com/v1/projects/etaajwpernzrcdrifdnw/database/query',{
+              method:'POST',
+              headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN,'content-type':'application/json'},
+              body:JSON.stringify({query:sql}),
+              signal:AbortSignal.timeout(30000)
+            });
+            if(!r.ok)throw Error('DATABASE_HTTP_'+r.status);
+            return r.json();
+          }
+          const m=await fetch('https://api.machines.dev/v1/apps/'+app+'/machines/'+machineId,{
+            headers:{authorization:'Bearer '+process.env.FLY_API_TOKEN},
+            signal:AbortSignal.timeout(30000)
+          });
+          if(!m.ok)throw Error('MACHINE_HTTP_'+m.status);
+          const machine=await m.json();
+          const flyProtocol=machine.config?.env?.PROTOCOL_SHA256;
+          const previous=process.env.PREVIOUS_PROTOCOL_SHA256;
+          const release=process.env.RELEASE_PROTOCOL_SHA256;
+          const current=(await db('select protocol_sha256 from doa_capture.control where id=1'))[0]?.protocol_sha256;
+          if(flyProtocol===previous&&current===release){
+            const rolled=await db("update doa_capture.control set protocol_sha256='"+previous+"' where id=1 and protocol_sha256='"+release+"' returning protocol_sha256");
+            if(rolled.length!==1||rolled[0].protocol_sha256!==previous)throw Error('PROTOCOL_ROLLBACK_FAILED');
+            console.log('DB protocol hash rolled back because the Fly machine update did not apply.');
+          }else if(flyProtocol===release){
+            console.log('Fly machine already uses the release protocol; DB hash is intentionally retained.');
+          }else{
+            throw Error('UNKNOWN_PROTOCOL_TRANSITION_STATE');
+          }
+          NODE
+
+      - name: Capture recent collector logs
+        if: always()
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          flyctl logs --app sanbital-doa-capture-20260925 --no-tail 2>&1 | tail -160 | tee collector.log || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: collector-recovery-release-${{ github.run_number }}
+          path: |
+            capture-release.json
+            collector.log
+            edge-db-probe.json
+            boot.log
+          if-no-files-found: ignore
+          retention-days: 30
