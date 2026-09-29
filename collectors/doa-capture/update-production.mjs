@@ -35,9 +35,9 @@ const evidence={source_commit:process.env.GITHUB_SHA,protocol_sha256:protocol,be
 writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));console.log(JSON.stringify({before:evidence.before}));
 const auth=spawnSync('flyctl',['auth','docker'],{encoding:'utf8'});if(auth.status!==0)throw Error('REGISTRY_AUTH_FAILED');
 const push=spawnSync('docker',['push',image],{stdio:'inherit'});if(push.status!==0)throw Error('IMAGE_PUSH_FAILED');
-const lease=await machine('/'+before.id+'/lease','POST',{description:'capture-'+process.env.GITHUB_SHA.slice(0,12),ttl:180});
+const lease=await machine('/'+before.id+'/lease','POST',{description:'capture-update-'+process.env.GITHUB_SHA.slice(0,12),ttl:60});
 const nonce=lease.data?.nonce;if(!nonce)throw Error('MACHINE_LEASE_MISSING');
-let activeId=before.id,replaced=false;
+let activeId=before.id,updateLeaseHeld=true;
 try{
  const current=await machine('/'+before.id);if(current.instance_id!==before.instance_id)throw Error('CONCURRENT_CAPTURE_DEPLOYMENT');
  // Measured >90% CPU steal on shared-1x prevented sustained public stream capture.
@@ -46,9 +46,11 @@ try{
  if(cfg.auto_destroy===true)throw Error('EXISTING_PERSISTENT_COLLECTOR_REQUIRED');
  await machine('/'+before.id,'POST',{current_version:before.instance_id,config},nonce);
 
- // A machine update is a replacement transition. Starting it before that transition
- // has settled returns 412 "machine getting replaced". Wait until the new instance
- // and exact release config are observable before issuing start.
+ // The update creates a new Machine version. Release the lease tied to the old
+ // version so the replacement can settle, then observe the new version.
+ await machine('/'+before.id+'/lease','DELETE',undefined,nonce);
+ updateLeaseHeld=false;
+
  let started=null,applied=false;
  for(let i=0;i<60;i++){
    await new Promise(r=>setTimeout(r,2000));
@@ -59,29 +61,50 @@ try{
    const restartApplied=started.config?.restart?.policy==='always' && started.config?.restart?.max_retries==null;
    const persistenceApplied=started.config?.auto_destroy===false;
    if(started.instance_id!==before.instance_id&&imageApplied&&protocolApplied&&restartApplied&&persistenceApplied){
-     replaced=true;applied=true;break;
+     applied=true;break;
    }
  }
  if(!applied)throw Error('MACHINE_REPLACEMENT_NOT_APPLIED');
 
- if(started.state!=='started'){
-   let startAccepted=false;
-   for(let i=0;i<30&&!startAccepted;i++){
-     try{await machine('/'+before.id+'/start','POST',undefined,nonce);startAccepted=true;}
-     catch(e){
-       if(!String(e.message).includes('MACHINE_HTTP_412'))throw e;
-       await new Promise(r=>setTimeout(r,2000));
+ // Reacquire a lease on the new version before starting it, so a concurrent
+ // deployment cannot slip between replacement validation and start.
+ const startLease=await machine('/'+before.id+'/lease','POST',{description:'capture-start-'+process.env.GITHUB_SHA.slice(0,12),ttl:90});
+ const startNonce=startLease.data?.nonce;if(!startNonce)throw Error('MACHINE_START_LEASE_MISSING');
+ try{
+   const latest=await machine('/'+before.id);
+   const releaseStillCurrent=latest.instance_id===started.instance_id &&
+     latest.image_ref?.registry==='registry.fly.io' &&
+     latest.image_ref?.repository===app && latest.image_ref?.tag===process.env.GITHUB_SHA &&
+     latest.config?.env?.PROTOCOL_SHA256===protocol;
+   if(!releaseStillCurrent)throw Error('CONCURRENT_CAPTURE_DEPLOYMENT_AFTER_REPLACE');
+   started=latest;
+   if(started.state!=='started'){
+     let startAccepted=false;
+     for(let i=0;i<30&&!startAccepted;i++){
+       try{await machine('/'+before.id+'/start','POST',undefined,startNonce);startAccepted=true;}
+       catch(e){
+         if(!String(e.message).includes('MACHINE_HTTP_412'))throw e;
+         await new Promise(r=>setTimeout(r,2000));
+       }
      }
+     if(!startAccepted)throw Error('MACHINE_START_REPLACEMENT_TIMEOUT');
    }
-   if(!startAccepted)throw Error('MACHINE_START_REPLACEMENT_TIMEOUT');
+   for(let i=0;i<30;i++){
+     started=await machine('/'+before.id);
+     if(started.state==='started')break;
+     await new Promise(r=>setTimeout(r,2000));
+   }
+   if(started.state!=='started')throw Error('MACHINE_NOT_STARTED');
+ }finally{
+   try{await machine('/'+before.id+'/lease','DELETE',undefined,startNonce);}
+   catch(e){if(!String(e.message).includes('404'))throw e;}
  }
- for(let i=0;i<30;i++){
-   started=await machine('/'+before.id);
-   if(started.state==='started')break;
-   await new Promise(r=>setTimeout(r,2000));
+}finally{
+ if(updateLeaseHeld){
+   try{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}
+   catch(e){if(!String(e.message).includes('404'))throw e;}
  }
- if(started.state!=='started')throw Error('MACHINE_NOT_STARTED');
-}finally{try{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}catch(e){if(!replaced||!String(e.message).includes('404'))throw e;}}
+}
 evidence.after=safe(await machine('/'+activeId));
 writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));
 let verified=false,heartbeatSamples=0,candidateCycleSeen=false;
