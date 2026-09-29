@@ -2461,7 +2461,10 @@ async function refreshCapacityInputs(db){
   // This is the mandatory post-fill proof before another slot may be admitted.
   // It deliberately has a separate READ-ONLY budget: exhausting the general cycle
   // budget after a valid fill must not make this safety proof impossible.
-  const [fresh,sn]=await Promise.all([readOpsPair(db,capacityRefreshGateway(db)),snap(db)]);
+  // The typeof fallback keeps the isolated queue harness on its injected readOpsPair
+  // seam; production always defines capacityRefreshGateway above.
+  const safetyGateway=typeof capacityRefreshGateway==="function"?capacityRefreshGateway(db):undefined;
+  const [fresh,sn]=await Promise.all([readOpsPair(db,safetyGateway),snap(db)]);
   if(!freshPortfolio(fresh.pf))throw Error("CAPACITY_PORTFOLIO_STALE");
   return capacityInputs(fresh,sn);
 }
