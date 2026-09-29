@@ -7,6 +7,8 @@ on:
       - ops/leader20/collector-watchdog.mjs
       - ops/leader20/production-evidence.mjs
       - tests/workflow-failure-propagation.test.mjs
+      - tests/cron-runtime-load-shed.test.mjs
+      - supabase/migrations/20260929100200_pg_cron_runtime_load_shed.sql
       - .github/workflows/collector-watchdog.yml
       - .github/workflows/collector-production-evidence.yml
       - .github/workflows/collector-resilience-tests.yml
@@ -16,6 +18,8 @@ on:
       - ops/leader20/collector-watchdog.mjs
       - ops/leader20/production-evidence.mjs
       - tests/workflow-failure-propagation.test.mjs
+      - tests/cron-runtime-load-shed.test.mjs
+      - supabase/migrations/20260929100200_pg_cron_runtime_load_shed.sql
       - .github/workflows/collector-watchdog.yml
       - .github/workflows/collector-production-evidence.yml
       - .github/workflows/collector-resilience-tests.yml
@@ -37,4 +41,5 @@ jobs:
         run: |
           node --test \
             collectors/doa-capture/control-resilience.test.mjs \
-            tests/workflow-failure-propagation.test.mjs
+            tests/workflow-failure-propagation.test.mjs \
+            tests/cron-runtime-load-shed.test.mjs
