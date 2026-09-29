@@ -48,6 +48,47 @@ for(const mode of ['EXIT','TIGHTER','FAIL'])test('urgent review '+mode+' in the 
  else{assert.equal(r.close,true);assert.equal(r.reason,'FD1_GPT_EXIT');}
  }finally{setFd1HoldTestHooks(null);}
 });
+test('CRV regression: GPT tighter-risk binds candidate from the exact reviewed fresh capture',async()=>{
+ const p={id:packet.position.position_id,entry_at:'2026-09-28T15:01:38.742+00:00',
+  entry_price:.1187672245651028,remaining_quantity:3794,symbol:'HBARUSDT',state:'OPEN'};
+ const generation=positionGeneration(p),at=packet.dynamic_as_of_ms,reviewCapture=structuredClone(packet.facts.capture_context),
+  preCapture=structuredClone(reviewCapture),exit=packet.position.exit_context,q=structuredClone(packet);
+ // Reproduce the CRV wiring shape: the management tick starts without an emergency candidate,
+ // then the fresher packet actually reviewed by GPT contains the full PRICE+FLOW+BOOK failure.
+ preCapture.dynamics.horizons.s30.bid_liquidity_change=Math.abs(preCapture.dynamics.horizons.s30.bid_liquidity_change)||0.1;
+ assert.equal(emergencyProtection({capture:preCapture,now:at,bid:exit.current_price,peak:exit.peak,
+  hardFloor:exit.hard_floor,standing:0,technicalFailure:{candidateOnly:true}}),null);
+ const reviewedCandidate=emergencyProtection({capture:reviewCapture,now:at,bid:exit.current_price,peak:exit.peak,
+  hardFloor:exit.hard_floor,standing:0,technicalFailure:{candidateOnly:true}});
+ assert.ok(reviewedCandidate?.level>exit.hard_floor);
+ q.position.generation=generation;
+ let completed=false;
+ const result=await dualEntryDecision(q,{apiKey:'test',deepseekKey:'',now:()=>at,snapshotAtMs:at,
+  deadlineMs:at+8000,reviewTier:'FAST',policy:baselinePolicy(),
+  counterCall:async()=>({valid:false,attempted:false,error:'DEEPSEEK_KEY_MISSING'}),
+  gptCall:async(z,o)=>{
+   const wire={...exitWire(z),d:'HOLD',action:'HOLD',support:['return_5m'],
+    dynamic_action:'HOLD_WITH_TIGHTER_RISK'};
+   const answer=o.validate(wire,z);
+   return {valid:true,decision:answer.decision,answer,wire,attempted:true,api_cost_usd:.01,
+    started_at_ms:at,completed_at_ms:at};
+  }});
+ assert.equal(result.valid,true,result.error);
+ setFd1HoldTestHooks({apiKey:'test',
+  config:{mode:'ENFORCE',modeValid:true,approvalRef:'test',apiBudgetUsd:3,maxCalls:300,enforceApproved:true},
+  leader20Control:{},capture:async()=>preCapture,now:()=>at,review:async()=>({packet:q,result}),
+  store:{get:async()=>null,claim:async()=>({created:true,row:{owner:'test'}}),complete:async()=>{completed=true;}}});
+ try{
+  const r=await fd1HoldTick(null,p,{now:at,bid:exit.current_price,state:{peakPrice:exit.peak},
+   exitContext:exit,meta:{}});
+  assert.equal(completed,true);
+  assert.equal(r.reason,'FD1_GPT_PROTECT');
+  assert.equal(r.protectApproval?.verdict,'APPROVED');
+  assert.equal(r.state.protectLevel,reviewedCandidate.level);
+  assert.equal(r.state.protectReason,'THESIS_REVIEW_PROTECTION');
+ }finally{setFd1HoldTestHooks(null);}
+});
+
 const candles=fixture('hbar-completed-candles-20260929.json.gz');
 const expand=x=>{const root=x;function resolve(v){if(v?.$ref){return resolve(v.$ref.slice(2).split('/').map(k=>k.replace(/~1/g,'/').replace(/~0/g,'~')).reduce((a,k)=>a[k],root));}return Array.isArray(v)?v.map(resolve):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,z])=>[k,resolve(z)])):v;}return resolve(x);};
 test('lossless JSON references reconstruct identical data, including every ordered bucket',()=>{
