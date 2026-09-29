@@ -60,22 +60,43 @@ try{
    const protocolApplied=started.config?.env?.PROTOCOL_SHA256===protocol;
    const restartApplied=started.config?.restart?.policy==='always' && started.config?.restart?.max_retries==null;
    const persistenceApplied=started.config?.auto_destroy===false;
-   if(started.instance_id!==before.instance_id&&imageApplied&&protocolApplied&&restartApplied&&persistenceApplied){
+   const guestApplied=started.config?.guest?.cpu_kind==='shared' &&
+     Number(started.config?.guest?.cpus)===4 && Number(started.config?.guest?.memory_mb)===1024;
+   if(i%5===0)console.log(JSON.stringify({event:'MACHINE_SETTLE',state:started.state,
+     image_tag:started.image_ref?.tag,image_applied:imageApplied,protocol_applied:protocolApplied,
+     restart_applied:restartApplied,persistence_applied:persistenceApplied,guest_applied:guestApplied}));
+   // The exact release image tag is unique to this GitHub commit. Fly may expose
+   // the new config before/without a same-session instance_id transition, so
+   // config identity is the authoritative replacement proof here.
+   if(imageApplied&&protocolApplied&&restartApplied&&persistenceApplied&&guestApplied){
      applied=true;break;
    }
  }
  if(!applied)throw Error('MACHINE_REPLACEMENT_NOT_APPLIED');
+ console.log(JSON.stringify({event:'MACHINE_RELEASE_VISIBLE',state:started.state,image_tag:started.image_ref?.tag}));
 
- // Reacquire a lease on the new version before starting it, so a concurrent
- // deployment cannot slip between replacement validation and start.
- const startLease=await machine('/'+before.id+'/lease','POST',{description:'capture-start-'+process.env.GITHUB_SHA.slice(0,12),ttl:90});
- const startNonce=startLease.data?.nonce;if(!startNonce)throw Error('MACHINE_START_LEASE_MISSING');
+ // Reacquire a lease after the exact release config is visible. A just-settled
+ // replacement can transiently reject a lease, so retry only 409/412.
+ let startLease=null;
+ for(let i=0;i<30&&!startLease;i++){
+   try{startLease=await machine('/'+before.id+'/lease','POST',{description:'capture-start-'+process.env.GITHUB_SHA.slice(0,12),ttl:90});}
+   catch(e){
+     const msg=String(e.message);
+     if(!msg.includes('MACHINE_HTTP_409')&&!msg.includes('MACHINE_HTTP_412'))throw e;
+     await new Promise(r=>setTimeout(r,2000));
+   }
+ }
+ const startNonce=startLease?.data?.nonce;if(!startNonce)throw Error('MACHINE_START_LEASE_MISSING');
  try{
    const latest=await machine('/'+before.id);
-   const releaseStillCurrent=latest.instance_id===started.instance_id &&
+   const releaseStillCurrent=
      latest.image_ref?.registry==='registry.fly.io' &&
      latest.image_ref?.repository===app && latest.image_ref?.tag===process.env.GITHUB_SHA &&
-     latest.config?.env?.PROTOCOL_SHA256===protocol;
+     latest.config?.env?.PROTOCOL_SHA256===protocol &&
+     latest.config?.restart?.policy==='always' && latest.config?.restart?.max_retries==null &&
+     latest.config?.auto_destroy===false &&
+     latest.config?.guest?.cpu_kind==='shared' && Number(latest.config?.guest?.cpus)===4 &&
+     Number(latest.config?.guest?.memory_mb)===1024;
    if(!releaseStillCurrent)throw Error('CONCURRENT_CAPTURE_DEPLOYMENT_AFTER_REPLACE');
    started=latest;
    if(started.state!=='started'){
