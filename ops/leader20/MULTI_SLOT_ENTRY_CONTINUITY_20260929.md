@@ -302,3 +302,60 @@ dead one. Order of operations right now:
 2. Then roll this change through `top20-book-bootstrap.json` (set `baseline_collector_commit` to
    the commit whose `PROTOCOL.md` hashes to the live `protocol_sha256`).
 3. From then on the watchdog covers step 1 automatically.
+
+---
+
+# Live deployment, and what the watchdog found
+
+All of the above is on `main`. The watchdog runs every 5 minutes and was dispatched four times
+during rollout; its reports are the evidence below.
+
+## What the watchdog proved about the 08:47 KST incident
+
+```json
+{ "runtime":      { "reachable": true, "status": 401, "proves": "FUNCTION_GATEWAY_ONLY" },
+  "direct_probe":        "DB_AUTH_REJECTED",
+  "managed_query_error": "SUPABASE_QUERY_544" }
+```
+
+Read carefully, because two of these were easy to misread:
+
+* `runtime 401` means only that the **function gateway** answered. It does **not** prove the
+  database behind it is serving, and an earlier reading of mine that treated it as proof of a
+  healthy platform was wrong. The field now says so in its own name.
+* `direct_probe: DB_AUTH_REJECTED` is the important one: the direct Postgres connection
+  **reached the database and completed a handshake**, then had its credentials refused. A
+  reachable server that rejects auth is a **stale `SUPABASE_DB_URL` secret**, not an outage.
+* `SUPABASE_QUERY_544` is a genuine failure of `api.supabase.com/.../database/query` — the admin
+  SQL-over-HTTP path used by the MCP tooling, `deploy.mjs`, `clock-release.mjs` and
+  `book-bootstrap-release.mjs`. Every release script in this repo depends on it.
+
+So the trading database is very likely healthy; what is broken is one management API plus one
+stale secret. That is why the collector could not be recovered automatically: both read paths were
+unusable for unrelated reasons at the same moment.
+
+## Two bugs this rollout found in its own work
+
+1. **The workflow reported success while blind.** `node … | tee watchdog.json` returns *tee's*
+   status, and the step had no `pipefail`, so run 1 went green while carrying
+   `"error": "SUPABASE_QUERY_544"`. A watchdog that can pass while it cannot see is worse than no
+   watchdog. Fixed with `set -euo pipefail`; run 2 onward fail correctly.
+2. **One read path is not a watchdog.** It depended solely on the management API — the exact thing
+   that was down. Now it reads the control row over the direct Postgres connection first and falls
+   back to the management API, reports which path answered (`control_source`) and classifies why
+   the other failed, without ever recording psql's stderr (it can echo the DSN).
+
+## To finish normalization
+
+1. **Refresh the `SUPABASE_DB_URL` secret** with the project's current connection string. That
+   alone restores the watchdog's independent path, and within 5 minutes it will start or restart
+   the collector on its own — no management API required.
+2. Or restart the collector directly (`fly machine start`, app `sanbital-doa-capture-20260925`).
+3. When `api.supabase.com` recovers, apply the still-pending migration
+   `20260929090000_leader20_collector_liveness_and_final_budget.sql`. It is backward compatible:
+   `runEntryBatch` guards its `leader20_collector_health()` call with `if(!health.error…)`, so the
+   deployed bundle behaves exactly as before until the function exists.
+
+`decision_reserve_ms` (80,000, derived from a two-slot p95 of 66,835ms) and the clock fan-out width
+(4) remain the two tunables to revisit once `epoch_publish_lag_ms`, `decision_total_latency_ms` and
+`final_after_expiry` have live data.
