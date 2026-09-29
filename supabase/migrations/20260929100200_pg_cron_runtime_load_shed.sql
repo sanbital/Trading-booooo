@@ -46,8 +46,8 @@ begin
     from cron.job
     where active
       and (
-        command ~* 'missed_opportunity_track[[:space:]]*\\('
-        or command ~* 'missed_opportunity_track_lane[[:space:]]*\\('
+        command ilike '%missed_opportunity_track(%'
+        or command ilike '%missed_opportunity_track_lane(%'
       )
   loop
     perform cron.alter_job(j.jobid, active := false);
