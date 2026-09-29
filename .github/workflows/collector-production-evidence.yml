@@ -28,6 +28,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: 0.4.108
       - name: Collect production evidence
         env:
           MODE: ${{ github.event.inputs.mode }}
@@ -39,9 +42,21 @@ jobs:
         run: |
           set -euo pipefail
           node ops/leader20/production-evidence.mjs | tee evidence.json
+      # The worker's own log is the only place that says WHY it exited. Read-only, and it runs
+      # even when the evidence step failed, because that is exactly when it is needed.
+      - name: Capture recent collector logs
+        if: always()
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          flyctl logs --app sanbital-doa-capture-20260925 --no-tail 2>&1 | tail -120 | tee collector.log || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: collector-production-evidence-${{ github.run_number }}
-          path: evidence.json
+          path: |
+            evidence.json
+            collector.log
           retention-days: 30
