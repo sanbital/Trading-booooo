@@ -17,12 +17,33 @@ if(!(STALE_MS>=120000))throw Error('WATCHDOG_STALE_MS_TOO_TIGHT');
 const out={checked_at:new Date().toISOString(),stale_threshold_ms:STALE_MS,action:'NONE'};
 const fail=m=>{out.error=m;console.log(JSON.stringify(out,null,2));process.exit(1);};
 
-async function query(sql){
- const r=await fetch(`https://api.supabase.com/v1/projects/${project}/database/query`,
-  {method:'POST',headers:{Authorization:'Bearer '+access,'Content-Type':'application/json'},
-   body:JSON.stringify({query:sql}),signal:AbortSignal.timeout(30000)});
- if(!r.ok)throw Error('SUPABASE_QUERY_'+r.status);
- return r.json();
+// The management query API can be unavailable on its own: on 2026-09-29 it returned HTTP 544 to a
+// GitHub runner while the project still reported ACTIVE_HEALTHY. A watchdog that gives up on the
+// first failure is not a watchdog, so retry before concluding anything about the collector.
+async function query(sql,attempts=4){
+ let last;
+ for(let i=1;i<=attempts;i++){
+  try{
+   const r=await fetch(`https://api.supabase.com/v1/projects/${project}/database/query`,
+    {method:'POST',headers:{Authorization:'Bearer '+access,'Content-Type':'application/json'},
+     body:JSON.stringify({query:sql}),signal:AbortSignal.timeout(30000)});
+   if(r.ok)return r.json();
+   last='SUPABASE_QUERY_'+r.status;
+  }catch(e){last='SUPABASE_QUERY_'+(e.name==='TimeoutError'?'TIMEOUT':'NETWORK');}
+  if(i<attempts)await new Promise(r=>setTimeout(r,i*5000));
+ }
+ throw Error(last);
+}
+// Is the project's own runtime serving, independent of the management API? The 2026-09-29 outage
+// showed "the control plane cannot answer" and "the platform is down" are different failures,
+// and only the second one means trading is actually blind.
+async function runtimeReachable(){
+ try{
+  const r=await fetch(`https://${project}.supabase.co/functions/v1/doa-capture-ingest`,
+   {method:'POST',headers:{'Content-Type':'application/json'},body:'{}',
+    signal:AbortSignal.timeout(15000)});
+  return {reachable:true,status:r.status};
+ }catch(e){return {reachable:false,status:null,error:e.name};}
 }
 async function machines(path='',method='GET',body){
  const r=await fetch(`https://api.machines.dev/v1/apps/${app}/machines`+path,
@@ -32,6 +53,7 @@ async function machines(path='',method='GET',body){
  return r.status===200?r.json():{};
 }
 
+out.runtime=await runtimeReachable();
 // The control row is the authority on whether capture is supposed to be running at all. A
 // deliberately disabled or ended collector is NOT an outage and must never be restarted.
 const [c]=await query(`select enabled,
