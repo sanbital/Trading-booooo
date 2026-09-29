@@ -4,7 +4,7 @@ import {canonical} from '../gpt-final-review/contract.mjs';
 
 export const CLOCK_FINAL='TOP20_CLOCK_GPT_FINAL_3';
 export const CLOCK_EXECUTION_FLOW_POLICY=Object.freeze({
- windowMs:10000,minTrades:5,maxTapeAgeMs:3000,
+ windowMs:10000,minTrades:5,maxTapeAgeMs:5000,
  // Absolute reversal: the latest tape is both falling and seller-dominated.
  reversalReturnLt:-0.0005,reversalBuyShareLt:0.45,
  // Relative collapse: a BUY whose short-horizon propulsion was strong may not be sent
