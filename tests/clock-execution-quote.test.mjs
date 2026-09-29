@@ -20,7 +20,10 @@ async function fixture(){
  let firstQuotes=0;
  const initial=await clockExecutionStep(f.s,f.ticket,async()=>{firstQuotes++;return f.quote();},{now:f.now});
  assert.equal(firstQuotes,1);assert.notEqual(initial.record.dispatch_quote,oldQuote);
- assert.equal(initial.proceed,true);const record={...initial.record,dispatch_capture:f.ticket.initial.capture_context,dispatch_quote:f.quote()};
+ assert.equal(initial.proceed,true);const tapeAt=f.now(),record={...initial.record,
+  dispatch_capture:f.ticket.initial.capture_context,dispatch_quote:f.quote(),
+  dispatch_tape:{available:true,source:'TEST',startAt:tapeAt-10000,endAt:tapeAt,receivedAt:tapeAt,
+    tradeCount:30,last10sReturn:.001,takerBuyQuoteShare:.7}};
  assert.ok(gptBeginExecution(f.db,f.s,record));
  f.db.rpc=async()=>({data:{allowed:true}});
  f.db.from=table=>table==='leader20_control'?{select(){return this;},eq(){return this;},async maybeSingle(){

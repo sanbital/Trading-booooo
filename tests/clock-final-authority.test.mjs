@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {nmrClockFinal,nmrOriginal} from '../test-support/nmr-clock-final.mjs';
-import {CLOCK_FINAL,validClockFinalPacket,clockExecutionSafety} from '../supabase/functions/_shared/leader20/clock-final.mjs';
+import {CLOCK_FINAL,validClockFinalPacket,clockExecutionSafety,clockExecutionFlowSafety} from '../supabase/functions/_shared/leader20/clock-final.mjs';
 import {hash} from '../supabase/functions/_shared/gpt-final-decision/api.mjs';
 import {batchFinalPayload} from '../supabase/functions/_shared/leader20/final.mjs';
 import {finalRecheckStep,setRecheckTestHooks,executionCapture,executionDynamicSafety} from '../supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs';
@@ -12,6 +12,8 @@ import {entryCapacity} from '../supabase/functions/v10-lane-executor/entry-capac
 import {requireEntryAuthority} from '../supabase/functions/_shared/leader20/runtime.mjs';
 
 const capacity=available=>entryCapacity({maxSlots:10,slotCost:152.121375,cashBufferUsdt:.1,liveAvailableUsdt:available});
+const healthyTape=(at,{ret=.001,buy=.7,trades=20}={})=>({available:true,source:'TEST',startAt:at-10000,endAt:at,
+ receivedAt:at,tradeCount:trades,last10sReturn:ret,takerBuyQuoteShare:buy});
 function forbidRecheck(){let reads=0,ai=0;setRecheckTestHooks({capture:async()=>{reads++;throw Error('NO_NEW_CAPTURE');},
  fetchFn:async()=>{ai++;throw Error('NO_AI_RECHECK');},readFresh:async()=>{reads++;throw Error('NO_NEW_MARKET');},
  store:{claim:async()=>{throw Error('NO_RECHECK_ROW');}},log:[]});return {reads:()=>reads,ai:()=>ai};}
@@ -34,6 +36,7 @@ test('NMR original 22:10 BUY -> actual coordinator -> safety -> real IOC dispatc
  assert.equal(step.proceed,true,step.reason);assert.equal(step.record.recheck_triggered,false);
  assert.equal(step.reason,'CLOCK_FINAL_BUY_TO_EXECUTION');
  step.record.dispatch_capture=await executionCapture(f.ticket,f.s.symbol,f.now());step.record.dispatch_quote=f.quote();
+ step.record.dispatch_tape=healthyTape(f.now());
  assert.equal(executionDynamicSafety(f.s,f.ticket,step.record,f.now()).ok,true);
  assert.equal(gptFinalCheck(f.db,f.s,step.record).allowed,true);assert.ok(gptBeginExecution(f.db,f.s,step.record));
  assert.equal(gptBeginExecution(f.db,f.s,step.record),null);
@@ -54,6 +57,25 @@ test('NMR original 22:10 BUY -> actual coordinator -> safety -> real IOC dispatc
  await assert.rejects(ctx.dispatch(f.db,f.s,exchange,options),/duplicate client order id/);assert.equal(orders.length,1);
  assert.equal(guard.reads(),0);assert.equal(guard.ai(),0);assert.equal(f.store.rows.size,1);
  assert.ok(!JSON.stringify(step.record).includes('RC_BATCH_CAPTURE_NOT_ADVANCED'));
+});
+
+test('AAVE 20:01 regression: strong BUY propulsion that collapses before dispatch is blocked',()=>{
+ const at=Date.parse('2026-09-29T11:01:49.000Z');
+ const ticket={initial:{executionRef:{mid:168.23},capture_context:{dynamics:{horizons:{
+  s15:{return:.0014866352,buy_share:.89596876},s30:{return:.0018440855,buy_share:.71899844}}}}}};
+ const aaveTape={available:true,source:'BINANCE_FUTURES_AGGTRADES_REST',startAt:at-10000,endAt:at,receivedAt:at,
+  tradeCount:53,last10sReturn:.00017838030681405215,takerBuyQuoteShare:.5572119998044506};
+ const quote={best_bid:168.20,best_ask:168.22,timing:{received_at_ms:at}};
+ const blocked=clockExecutionFlowSafety(ticket,aaveTape,quote,at);
+ assert.equal(blocked.ok,false);assert.equal(blocked.reason,'CLOCK_EXECUTION_PROPULSION_COLLAPSED');
+ assert.ok(blocked.flow.initialBuyShare-blocked.flow.buyShare>.20);
+ const healthy=clockExecutionFlowSafety(ticket,healthyTape(at,{ret:.001,buy:.72,trades:50}),
+  {best_bid:168.39,best_ask:168.41,timing:{received_at_ms:at}},at);
+ assert.equal(healthy.ok,true,JSON.stringify(healthy));
+ const reversed=clockExecutionFlowSafety(ticket,healthyTape(at,{ret:-.001,buy:.35,trades:50}),quote,at);
+ assert.equal(reversed.ok,false);assert.equal(reversed.reason,'CLOCK_EXECUTION_FLOW_REVERSED');
+ const stale=clockExecutionFlowSafety(ticket,{...aaveTape,receivedAt:at-5001},quote,at);
+ assert.equal(stale.ok,false);assert.equal(stale.reason,'CLOCK_EXECUTION_FLOW_INVALID_OR_STALE');
 });
 
 test('clock expiry is absolute, including retry/superseding parameters and a fresh quote',async()=>{

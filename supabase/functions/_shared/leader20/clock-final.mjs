@@ -3,6 +3,48 @@ import {entryCaptureSafety,DYNAMIC_VERSION} from '../gpt-final-decision/dynamic-
 import {canonical} from '../gpt-final-review/contract.mjs';
 
 export const CLOCK_FINAL='TOP20_CLOCK_GPT_FINAL_3';
+export const CLOCK_EXECUTION_FLOW_POLICY=Object.freeze({
+ windowMs:10000,minTrades:5,maxTapeAgeMs:5000,
+ // Absolute reversal: the latest tape is both falling and seller-dominated.
+ reversalReturnLt:-0.0005,reversalBuyShareLt:0.45,
+ // Relative collapse: a BUY whose short-horizon propulsion was strong may not be sent
+ // after that propulsion mostly disappears unless price has actually advanced.
+ initialReturnGte:0.0005,initialBuyShareGte:0.65,buyShareDrop:0.20,
+ freshBuyShareMax:0.60,returnRetentionMax:0.25,freshReturnCap:0.0003,
+ priceProgressBps:5,
+});
+const flowNum=x=>x!==null&&x!==undefined&&x!==''&&Number.isFinite(Number(x))?Number(x):null;
+/** Deterministic venue safety, not a second strategy decision.
+ * GPT remains FINAL strategy authority. This only refuses to SEND an order when the
+ * exact short-horizon propulsion that justified BUY has disappeared by dispatch time.
+ * No AI call, no deadline extension and no change to sizing/risk parameters. */
+export function clockExecutionFlowSafety(ticket,tape,quote,at,policy=CLOCK_EXECUTION_FLOW_POLICY){
+ const fail=(reason,evidence={})=>({ok:false,reason,...evidence});
+ if(!tape?.available)return fail('CLOCK_EXECUTION_FLOW_UNAVAILABLE',{flow:{available:false,source:tape?.source??null,
+  detail:tape?.reason??'UNAVAILABLE'}});
+ const start=flowNum(tape.startAt),end=flowNum(tape.endAt),received=flowNum(tape.receivedAt),
+  ret=flowNum(tape.last10sReturn),buy=flowNum(tape.takerBuyQuoteShare),trades=flowNum(tape.tradeCount);
+ if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||end-start!==policy.windowMs||
+  !Number.isSafeInteger(received)||received>end+policy.maxTapeAgeMs||at-received<0||at-received>policy.maxTapeAgeMs||
+  ret===null||buy===null||buy<0||buy>1||!Number.isInteger(trades)||trades<policy.minTrades)
+  return fail('CLOCK_EXECUTION_FLOW_INVALID_OR_STALE',{flow:{available:true,startAt:start,endAt:end,receivedAt:received,
+   ageMs:received===null?null:at-received,return:ret,buyShare:buy,tradeCount:trades}});
+ const h=ticket?.initial?.capture_context?.dynamics?.horizons??{},base=h.s15??h.s30??null,
+  initialReturn=flowNum(base?.return),initialBuy=flowNum(base?.buy_share),
+  bid=flowNum(quote?.best_bid),ask=flowNum(quote?.best_ask),mid=bid!==null&&ask!==null&&bid>0&&ask>=bid?(bid+ask)/2:null,
+  ref=flowNum(ticket?.initial?.executionRef?.mid),priceProgress=mid!==null&&ref!==null&&ref>0?mid/ref-1:null,
+  evidence={flow:{available:true,source:tape.source??null,startAt:start,endAt:end,receivedAt:received,ageMs:at-received,
+    return:ret,buyShare:buy,tradeCount:trades,initialReturn,initialBuyShare:initialBuy,priceProgress}};
+ if(ret<policy.reversalReturnLt&&buy<policy.reversalBuyShareLt)
+  return fail('CLOCK_EXECUTION_FLOW_REVERSED',evidence);
+ const strong=initialReturn!==null&&initialBuy!==null&&initialReturn>=policy.initialReturnGte&&initialBuy>=policy.initialBuyShareGte,
+  buyCollapsed=strong&&buy<=Math.min(policy.freshBuyShareMax,initialBuy-policy.buyShareDrop),
+  returnCollapsed=strong&&ret<=Math.max(policy.freshReturnCap,initialReturn*policy.returnRetentionMax),
+  noProgress=priceProgress===null||priceProgress<=policy.priceProgressBps/10000;
+ if(strong&&buyCollapsed&&returnCollapsed&&noProgress)
+  return fail('CLOCK_EXECUTION_PROPULSION_COLLAPSED',evidence);
+ return {ok:true,reason:null,...evidence};
+}
 const windowKeys=['version','slot_ms','expires_at_ms','epoch_id','generation','capture_hash'];
 /** The event, advisory and GPT must bind the exact frozen slot, not a later observation. */
 export function validClockFinalPacket(p,at){

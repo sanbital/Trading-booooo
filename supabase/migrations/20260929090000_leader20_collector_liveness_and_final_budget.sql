@@ -59,7 +59,11 @@ end $migration$;
 -- A blocked slot now names its own cause. capture_state separates the three cases the
 -- 04:33 outage proved indistinguishable: the transport was gone, the capture was late,
 -- or the account had no room.
-create or replace view public.leader20_clock_slot_report as
+-- capture_state and the collector_* columns land ahead of open_position_count, and
+-- CREATE OR REPLACE VIEW cannot insert columns mid-list -- it can only append. Nothing
+-- depends on this view (checked against pg_depend), so drop it and rebuild it in place.
+drop view if exists public.leader20_clock_slot_report;
+create view public.leader20_clock_slot_report as
 select t.slot_at,t.slot_status,t.batch_reason,t.batch_id,
  case
   when t.collector_reason is not null then t.collector_reason

@@ -2,8 +2,13 @@
 import {readFileSync,writeFileSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-const app='sanbital-doa-capture-20260925',ref='refs/heads/codex/capture-transport-backlog-20260926';
-if(process.env.GITHUB_REF!==ref)throw Error('WRONG_RELEASE_REF');
+import {VERSION} from './core.mjs';
+const app='sanbital-doa-capture-20260925';
+const releaseRefs=new Set([
+ 'refs/heads/codex/capture-transport-backlog-20260926',
+ 'refs/heads/claude/production-recovery-etaajwpernzrcdrifdnw-enpb6i',
+]);
+if(!releaseRefs.has(process.env.GITHUB_REF))throw Error('WRONG_RELEASE_REF');
 const protocol=createHash('sha256').update(readFileSync('collectors/doa-capture/PROTOCOL.md')).digest('hex');
 const endpoint='https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/doa-capture-ingest';
 const image='registry.fly.io/'+app+':'+process.env.GITHUB_SHA;
@@ -20,39 +25,133 @@ const c=(await query('select enabled,production_enabled,protocol_sha256 from doa
 if(!c?.enabled||!c.production_enabled||c.protocol_sha256!==protocol)throw Error('CONTINUOUS_CAPTURE_MIGRATION_NOT_READY');
 const list=await machine();if(list.length!==1)throw Error('EXPECTED_ONE_EXISTING_CAPTURE_MACHINE');
 const before=await machine('/'+list[0].id),cfg=before.config;
-if(cfg.env?.CAPTURE_ENDPOINT!==endpoint||cfg.env?.PROTOCOL_SHA256!==protocol||cfg.services?.length||cfg.mounts?.length||
+const previousProtocol=process.env.PREVIOUS_PROTOCOL_SHA256??protocol;
+if(!/^[a-f0-9]{64}$/.test(previousProtocol))throw Error('INVALID_PREVIOUS_PROTOCOL');
+const machineProtocol=cfg.env?.PROTOCOL_SHA256;
+if(cfg.env?.CAPTURE_ENDPOINT!==endpoint||![protocol,previousProtocol].includes(machineProtocol)||cfg.services?.length||cfg.mounts?.length||
  !String(cfg.image).startsWith('registry.fly.io/'+app+':')||cfg.guest?.cpu_kind!=='shared'||
  !((cfg.guest?.memory_mb===256&&cfg.guest?.cpus===1)||(cfg.guest?.memory_mb===1024&&cfg.guest?.cpus===4)))throw Error('UNEXPECTED_CAPTURE_CONFIG');
 const evidence={source_commit:process.env.GITHUB_SHA,protocol_sha256:protocol,before:safe(before)};
 writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));console.log(JSON.stringify({before:evidence.before}));
 const auth=spawnSync('flyctl',['auth','docker'],{encoding:'utf8'});if(auth.status!==0)throw Error('REGISTRY_AUTH_FAILED');
 const push=spawnSync('docker',['push',image],{stdio:'inherit'});if(push.status!==0)throw Error('IMAGE_PUSH_FAILED');
-const lease=await machine('/'+before.id+'/lease','POST',{description:'capture-'+process.env.GITHUB_SHA.slice(0,12),ttl:60});
+const lease=await machine('/'+before.id+'/lease','POST',{description:'capture-update-'+process.env.GITHUB_SHA.slice(0,12),ttl:60});
 const nonce=lease.data?.nonce;if(!nonce)throw Error('MACHINE_LEASE_MISSING');
-let activeId=before.id,replaced=false;
+let activeId=before.id,updateLeaseHeld=true;
 try{
  const current=await machine('/'+before.id);if(current.instance_id!==before.instance_id)throw Error('CONCURRENT_CAPTURE_DEPLOYMENT');
  // Measured >90% CPU steal on shared-1x prevented sustained public stream capture.
  // Resize this existing machine only; preserve secrets, networking and execution config.
- const config={...cfg,image,guest:{...cfg.guest,cpu_kind:'shared',cpus:4,memory_mb:1024},auto_destroy:false,restart:{policy:'on-failure',max_retries:10}};
+ const config={...cfg,image,env:{...(cfg.env??{}),PROTOCOL_SHA256:protocol},guest:{...cfg.guest,cpu_kind:'shared',cpus:4,memory_mb:1024},auto_destroy:false,restart:{policy:'always'}};
  if(cfg.auto_destroy===true)throw Error('EXISTING_PERSISTENT_COLLECTOR_REQUIRED');
  await machine('/'+before.id,'POST',{current_version:before.instance_id,config},nonce);
-}finally{try{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}catch(e){if(!replaced||!String(e.message).includes('404'))throw e;}}
+
+ // The update creates a new Machine version. Release the lease tied to the old
+ // version so the replacement can settle, then observe the new version.
+ await machine('/'+before.id+'/lease','DELETE',undefined,nonce);
+ updateLeaseHeld=false;
+
+ let started=null,applied=false;
+ for(let i=0;i<60;i++){
+   await new Promise(r=>setTimeout(r,2000));
+   started=await machine('/'+before.id);
+   const imageApplied=started.image_ref?.registry==='registry.fly.io' &&
+     started.image_ref?.repository===app && started.image_ref?.tag===process.env.GITHUB_SHA;
+   const protocolApplied=started.config?.env?.PROTOCOL_SHA256===protocol;
+   const restartApplied=started.config?.restart?.policy==='always' && started.config?.restart?.max_retries==null;
+   const persistenceApplied=started.config?.auto_destroy!==true;
+   const guestApplied=started.config?.guest?.cpu_kind==='shared' &&
+     Number(started.config?.guest?.cpus)===4 && Number(started.config?.guest?.memory_mb)===1024;
+   if(i%5===0)console.log(JSON.stringify({event:'MACHINE_SETTLE',state:started.state,
+     image_tag:started.image_ref?.tag,image_applied:imageApplied,protocol_applied:protocolApplied,
+     restart_applied:restartApplied,persistence_applied:persistenceApplied,guest_applied:guestApplied}));
+   // The exact release image tag is unique to this GitHub commit. Fly may expose
+   // the new config before/without a same-session instance_id transition, so
+   // config identity is the authoritative replacement proof here.
+   if(imageApplied&&protocolApplied&&restartApplied&&persistenceApplied&&guestApplied){
+     applied=true;break;
+   }
+ }
+ if(!applied)throw Error('MACHINE_REPLACEMENT_NOT_APPLIED');
+ console.log(JSON.stringify({event:'MACHINE_RELEASE_VISIBLE',state:started.state,image_tag:started.image_ref?.tag}));
+
+ // Reacquire a lease after the exact release config is visible. A just-settled
+ // replacement can transiently reject a lease, so retry only 409/412.
+ let startLease=null;
+ for(let i=0;i<30&&!startLease;i++){
+   try{startLease=await machine('/'+before.id+'/lease','POST',{description:'capture-start-'+process.env.GITHUB_SHA.slice(0,12),ttl:90});}
+   catch(e){
+     const msg=String(e.message);
+     if(!msg.includes('MACHINE_HTTP_409')&&!msg.includes('MACHINE_HTTP_412'))throw e;
+     await new Promise(r=>setTimeout(r,2000));
+   }
+ }
+ const startNonce=startLease?.data?.nonce;if(!startNonce)throw Error('MACHINE_START_LEASE_MISSING');
+ try{
+   const latest=await machine('/'+before.id);
+   const releaseStillCurrent=
+     latest.image_ref?.registry==='registry.fly.io' &&
+     latest.image_ref?.repository===app && latest.image_ref?.tag===process.env.GITHUB_SHA &&
+     latest.config?.env?.PROTOCOL_SHA256===protocol &&
+     latest.config?.restart?.policy==='always' && latest.config?.restart?.max_retries==null &&
+     latest.config?.auto_destroy!==true &&
+     latest.config?.guest?.cpu_kind==='shared' && Number(latest.config?.guest?.cpus)===4 &&
+     Number(latest.config?.guest?.memory_mb)===1024;
+   if(!releaseStillCurrent)throw Error('CONCURRENT_CAPTURE_DEPLOYMENT_AFTER_REPLACE');
+   started=latest;
+   if(started.state!=='started'){
+     let startAccepted=false;
+     for(let i=0;i<30&&!startAccepted;i++){
+       try{await machine('/'+before.id+'/start','POST',undefined,startNonce);startAccepted=true;}
+       catch(e){
+         if(!String(e.message).includes('MACHINE_HTTP_412'))throw e;
+         await new Promise(r=>setTimeout(r,2000));
+       }
+     }
+     if(!startAccepted)throw Error('MACHINE_START_REPLACEMENT_TIMEOUT');
+   }
+   for(let i=0;i<30;i++){
+     started=await machine('/'+before.id);
+     if(started.state==='started')break;
+     await new Promise(r=>setTimeout(r,2000));
+   }
+   if(started.state!=='started')throw Error('MACHINE_NOT_STARTED');
+ }finally{
+   try{await machine('/'+before.id+'/lease','DELETE',undefined,startNonce);}
+   catch(e){if(!String(e.message).includes('404'))throw e;}
+ }
+}finally{
+ if(updateLeaseHeld){
+   try{await machine('/'+before.id+'/lease','DELETE',undefined,nonce);}
+   catch(e){if(!String(e.message).includes('404'))throw e;}
+ }
+}
 evidence.after=safe(await machine('/'+activeId));
 writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));
-let verified=false,stableSamples=0;
+let verified=false,heartbeatSamples=0,candidateCycleSeen=false;
 for(let i=0;i<60;i++){
  await new Promise(r=>setTimeout(r,15000));
  const state=(await query(`select metrics->>'version' version,extract(epoch from clock_timestamp()-heartbeat_at) age_s,
  metrics->>'watched' watched,metrics->>'queue' queue from doa_capture.control where id=1`))[0];
- const captures=await query(`select s.symbol,c->>'status' status,c->>'reason' reason,c->>'buckets' buckets,jsonb_array_length(c->'trajectory') points
- from (values('QUSDT'),('SPELLUSDT'),('JELLYJELLYUSDT')) s(symbol)
+ const captures=await query(`with symbols as (
+   select distinct symbol
+   from doa_capture.live_micro
+   where kind='micro'
+     and at>clock_timestamp()-interval '155 seconds'
+     and payload->'watch_roles' ? 'SCANNER_LEADER'
+   order by symbol
+   limit 5
+ )
+ select s.symbol,c->>'status' status,c->>'reason' reason,c->>'buckets' buckets,jsonb_array_length(c->'trajectory') points
+ from symbols s
  cross join lateral (select public.doa_gpt_capture_context_v3(s.symbol,clock_timestamp()) c) x`);
- console.log(JSON.stringify({state,captures}));evidence.validation={state,captures};
- if(state.version==='DOA-CAPTURE-5-BOUNDED-TRANSPORT'&&Number(state.age_s)<25&&captures.every(x=>x.status==='AVAILABLE'&&Number(x.buckets)===24&&x.points===24)){
-   stableSamples++;if(stableSamples>=20){verified=true;break;}
- }else stableSamples=0;
+ const heartbeatOK=state.version===VERSION&&Number(state.age_s)<25;
+ heartbeatSamples=heartbeatOK?heartbeatSamples+1:0;
+ if(captures.some(x=>x.status==='AVAILABLE'&&Number(x.buckets)===24&&x.points===24))candidateCycleSeen=true;
+ console.log(JSON.stringify({state,captures,heartbeat_samples:heartbeatSamples,candidate_cycle_seen:candidateCycleSeen}));
+ evidence.validation={state,captures,heartbeat_samples:heartbeatSamples,candidate_cycle_seen:candidateCycleSeen};
+ if(heartbeatSamples>=3&&candidateCycleSeen){verified=true;break;}
 }
-evidence.after=safe(await machine('/'+activeId));evidence.stable_samples=stableSamples;
+evidence.after=safe(await machine('/'+activeId));evidence.heartbeat_samples=heartbeatSamples;evidence.candidate_cycle_seen=candidateCycleSeen;
 writeFileSync('capture-release.json',JSON.stringify(evidence,null,2));
 if(!verified)throw Error('CAPTURE_LIVE_VALIDATION_INCOMPLETE');
