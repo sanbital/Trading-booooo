@@ -251,7 +251,14 @@ export class FinalReviewCoordinator {
       // while RUNNING, before terminal CAS. Recovery can promote this immutable snapshot
       // without another paid provider call.
       preparationStage='RESULT_SNAPSHOT';
-      if(this.store.snapshot)await this.store.snapshot(key,owner,record);
+      if(this.store.snapshot)try{await this.store.snapshot(key,owner,record);}
+      catch(e){
+        // Do not replace a valid paid provider decision with LOCAL_DATA_ERROR merely
+        // because the pre-CAS durability checkpoint had a transient write failure.
+        // complete() gets its own bounded CAS retries; if that also fails the journal
+        // remains fail-closed and the provider ledger still records the physical call.
+        record.result={...record.result,durability_snapshot_error:'REVIEW_RESULT_SNAPSHOT_FAILED'};
+      }
     }catch(e){
       const error=['RETRY_CAPTURE_NOT_ADVANCED','DYNAMIC_INFERENCE_CAPTURE_NOT_READY','DYNAMIC_TRAJECTORY_STALE_OR_FUTURE',
         'REVIEW_TRIGGER_EXPIRED','REVIEW_RECHECK_ROOM_REQUIRED'].includes(e?.message)?e.message:'REVIEW_PREPARATION_FAILED';
