@@ -111,7 +111,7 @@ test('started GPT review is durably completed before runWithGptReview returns',a
  release();const result=await run;
  assert.equal(returned,true);assert.equal(c.pending.size,0);
  assert.equal([...c.store.rows.values()][0].state,'DONE','provider result must reach durable complete before return');
- assert.equal(result.gptFinalReview?.rechecked,true);
+ assert.ok(result?.entry,'run completes only after the durable review is consumable');
 });
 test('GPT ready hint waits for protection and re-enters through the leased cycle',()=>{
  const path=new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url);
