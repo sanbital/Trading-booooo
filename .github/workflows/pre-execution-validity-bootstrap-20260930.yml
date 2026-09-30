@@ -1,11 +1,13 @@
 name: Bootstrap pre-execution BUY validity production release
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths: [deployment-evidence/pre-execution-validity-bootstrap-20260930.patch]
 permissions:
   contents: write
   actions: write
+  pull-requests: write
 concurrency:
   group: deploy-v10-lane-executor
   cancel-in-progress: false
@@ -38,15 +40,16 @@ jobs:
             tests/pre-execution-validity.test.mjs
           git diff --cached --quiet && { echo PATCH_EMPTY; exit 1; }
           git commit -m 'Complete and release pre-execution BUY validity'
-          git push origin HEAD:main
-      - name: Dispatch production release
+          branch=codex/pre-execution-validity-20260930
+          git push --force-with-lease origin HEAD:"$branch"
+          echo "RELEASE_BRANCH=$branch" >> "$GITHUB_ENV"
+      - name: Open verified release PR
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 12); do
-            gh workflow run pre-execution-validity-release-20260930.yml --ref main && exit 0
-            test "$attempt" -lt 12 || exit 1
-            sleep 5
-          done
+          gh pr create --base main --head "$RELEASE_BRANCH" \
+            --title 'Prevent stale GPT BUY execution' \
+            --body 'Verified PRE_EXECUTION_VALIDITY_CHECK release: full regression and production verification run automatically after merge.' \
+            || gh pr view "$RELEASE_BRANCH" --json url
