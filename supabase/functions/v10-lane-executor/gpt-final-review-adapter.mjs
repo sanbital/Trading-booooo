@@ -202,31 +202,37 @@ export async function runWithGptReview(db,runWithLease,switches=recoverySwitches
   return resumeReviewTimeouts(()=>runReviewCycle(db,runWithLease,switches),{now:clock,enabled:()=>c.config.mode==='ENFORCE'});
 }
 async function runReviewCycle(db,runWithLease,switches){
-  const c=coordinatorFor(db),clock=typeof c.now==='function'?()=>c.now():Date.now,started=clock(),first=await runWithLease(db);
+  const c=coordinatorFor(db),clock=typeof c.now==='function'?()=>c.now():Date.now,started=clock(),
+    pendingBefore=new Set(c.pending.keys());
   const followUp=async(result,prior)=>{
     if(!switches.followUp||c.config.mode!=='ENFORCE'||!wantsFollowUp(result,started,clock()))return result;
     const next=await runWithLease(db);
     return {...next,gptFinalReview:{...(next?.gptFinalReview??{}),mode:c.config.mode,followUp:true,priorEntries:[...prior,result.entry]}};
   };
-  if(c.config.mode!=='ENFORCE'||first?.ok===false||first?.skipped)return first;
-  if(first?.entry?.entered||first?.entry?.followUpArmed)return await followUp(first,[]);
-  if(first?.entry?.reason!=='GPT_REVIEW_PENDING')return first;
-  // A started provider call is part of this request's durability contract. Production
-  // showed the request returning while four successful OpenAI responses were still
-  // completing, leaving their review rows RUNNING until TTL recovery. Keep the request
-  // alive through provider ledger settlement + gpt_final_review_complete CAS; this does
-  // not wait for or create unrelated work and does not widen the clock deadline.
-  await c.drainPending();
+  try{
+    const first=await runWithLease(db);
+    if(c.config.mode!=='ENFORCE'||first?.ok===false||first?.skipped)return first;
+    if(first?.entry?.entered||first?.entry?.followUpArmed)return await followUp(first,[]);
+    if(first?.entry?.reason!=='GPT_REVIEW_PENDING')return first;
 
-  let ready=false;try{ready=await c.waitReady();}catch{/* GPT errors are candidate-scoped. */}
-  if(!ready){
-    const outcomes=c.waitOutcomes??[];
-    return outcomes.length?{...first,entry:{...first.entry,reason:outcomes.at(-1).reason},
-      gptFinalReview:{mode:c.config.mode,rechecked:false,resolved:outcomes}}:first;
+    // For pending-entry flows, consume durable answers immediately after all provider
+    // work started by this invocation has reached its terminal journal write.
+    await c.drainPending({exclude:pendingBefore});
+    let ready=false;try{ready=await c.waitReady();}catch{/* GPT errors are candidate-scoped. */}
+    if(!ready){
+      const outcomes=c.waitOutcomes??[];
+      return outcomes.length?{...first,entry:{...first.entry,reason:outcomes.at(-1).reason},
+        gptFinalReview:{mode:c.config.mode,rechecked:false,resolved:outcomes}}:first;
+    }
+    const second=await runWithLease(db);
+    const out={...second,gptFinalReview:{mode:c.config.mode,rechecked:true,firstCycleEntry:first.entry??null}};
+    return second?.entry?.entered||second?.entry?.followUpArmed?await followUp(out,[]):out;
+  }finally{
+    // Never let a return path orphan a paid provider response. This runs only after
+    // the trading lease has been released and waits only for tasks started by this
+    // invocation, so it cannot hold or delay another executor's order authority.
+    await c.drainPending({exclude:pendingBefore});
   }
-  const second=await runWithLease(db);
-  const out={...second,gptFinalReview:{mode:c.config.mode,rechecked:true,firstCycleEntry:first.entry??null}};
-  return second?.entry?.entered||second?.entry?.followUpArmed?await followUp(out,[]):out;
 }
 // Dependency injection for isolated tests only; not exposed as an HTTP operation.
 export function setTestCoordinator(db,c){c.injected=true;contexts.set(db,c);}
