@@ -10,14 +10,17 @@ import {finalRecheckStep,setRecheckTestHooks,executionCapture,executionDynamicSa
 import {gptFinalCheck,gptBeginExecution} from '../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {entryCapacity} from '../supabase/functions/v10-lane-executor/entry-capacity.mjs';
 import {requireEntryAuthority} from '../supabase/functions/_shared/leader20/runtime.mjs';
+import {depthQuote,rollingCapture} from '../test-support/pre-execution-fixtures.mjs';
 
 const capacity=available=>entryCapacity({maxSlots:10,slotCost:152.121375,cashBufferUsdt:.1,liveAvailableUsdt:available});
-function forbidRecheck(){let reads=0,ai=0;setRecheckTestHooks({capture:async()=>{reads++;throw Error('NO_NEW_CAPTURE');},
+function validityHooks(f){let reads=0,ai=0;setRecheckTestHooks({capture:async()=>{reads++;return rollingCapture(
+ f.ticket.initial.capture_context,f.now(),{mid:f.ticket.initial.executionRef.mid,hash:`rolling-${f.now()}`});},
  fetchFn:async()=>{ai++;throw Error('NO_AI_RECHECK');},readFresh:async()=>{reads++;throw Error('NO_NEW_MARKET');},
  store:{claim:async()=>{throw Error('NO_RECHECK_ROW');}},log:[]});return {reads:()=>reads,ai:()=>ai};}
+const marketQuote=(f,ratio=1)=>depthQuote(f.quote(ratio),{receivedAt:f.now()});
 
 test('NMR original 22:10 BUY -> actual coordinator -> safety -> real IOC dispatcher with mock exchange',async()=>{
- const f=await nmrClockFinal(),guard=forbidRecheck();
+ const f=await nmrClockFinal(),guard=validityHooks(f);
  assert.equal(capacity(f.original.source.available_quote).capacity,2);
  assert.equal(await hash({...f.packet,snapshot_hash:''}),f.packet.snapshot_hash);
  assert.equal(f.reviewed.allowed,true,JSON.stringify(f.reviewed));assert.equal(f.calls(),1);
@@ -30,10 +33,10 @@ test('NMR original 22:10 BUY -> actual coordinator -> safety -> real IOC dispatc
  assert.equal(input.deepseek_prior_review.version,f.packet.leader20.batch_advice.version);
  // Reproduce the original 17-second delay beyond the old 15-second answer limit.
  f.setNow(f.now()+17000);assert.equal(f.c.check(f.s).allowed,true);
- const step=await finalRecheckStep(f.db,f.s,{ticket:f.ticket,rawQuote:f.quote(),e1:{observations:[{return:-.01,buyShare:.1}]},now:f.now});
+ const step=await finalRecheckStep(f.db,f.s,{ticket:f.ticket,rawQuote:marketQuote(f),e1:{observations:[{return:-.01,buyShare:.1}]},now:f.now});
  assert.equal(step.proceed,true,step.reason);assert.equal(step.record.recheck_triggered,false);
- assert.equal(step.reason,'CLOCK_FINAL_BUY_TO_EXECUTION');
- step.record.dispatch_capture=await executionCapture(f.ticket,f.s.symbol,f.now());step.record.dispatch_quote=f.quote();
+ assert.equal(step.reason,'PRE_EXECUTION_VALID');
+ step.record.dispatch_capture=await executionCapture(f.ticket,f.s.symbol,f.now());step.record.dispatch_quote=marketQuote(f);
  assert.equal(executionDynamicSafety(f.s,f.ticket,step.record,f.now()).ok,true);
  assert.equal(gptFinalCheck(f.db,f.s,step.record).allowed,true);assert.ok(gptBeginExecution(f.db,f.s,step.record));
  assert.equal(gptBeginExecution(f.db,f.s,step.record),null);
@@ -53,7 +56,7 @@ test('NMR original 22:10 BUY -> actual coordinator -> safety -> real IOC dispatc
   orders.push(request);return {quantity:40,status:'FILLED',price:request.order.price,exchangeOrderId:'mock'};};
  const placed=await ctx.dispatch(f.db,f.s,exchange,options);assert.equal(placed.receipt.quantity,40);assert.equal(orders.length,1);
  await assert.rejects(ctx.dispatch(f.db,f.s,exchange,options),/duplicate client order id/);assert.equal(orders.length,1);
- assert.equal(guard.reads(),0);assert.equal(guard.ai(),0);assert.equal(f.store.rows.size,1);
+ assert.equal(guard.reads(),2);assert.equal(guard.ai(),0);assert.equal(f.store.rows.size,1);
  assert.ok(!JSON.stringify(step.record).includes('RC_BATCH_CAPTURE_NOT_ADVANCED'));
 });
 
@@ -66,13 +69,13 @@ test('clock expiry is absolute, including retry/superseding parameters and a fre
  assert.equal(r.proceed,false);assert.equal(r.reason,'CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION');
 });
 
-test('ordinary quote changes keep BUY; stale, missing, catastrophic spread/gap abort without AI',async()=>{
- const f=await nmrClockFinal(),guard=forbidRecheck(),id=f.c.identity(f.s);
+test('hard quote failures abort with a fresh rolling capture and without delta GPT',async()=>{
+ const f=await nmrClockFinal(),guard=validityHooks(f),id=f.c.identity(f.s);
  for(const ratio of [.995,1,1.005])assert.equal(clockExecutionSafety(f.ticket,id,f.quote(ratio),f.now()).ok,true);
- const cases=[[null,'CLOCK_EXECUTION_QUOTE_INVALID'],[{...f.quote(),timing:{received_at_ms:f.now()-1001}},'CLOCK_EXECUTION_QUOTE_STALE'],
-  [{...f.quote(),best_ask:f.quote().best_bid*1.01},'EXECUTION_ABORTED_MARKET_DISCONTINUITY'],[f.quote(.97),'EXECUTION_ABORTED_MARKET_DISCONTINUITY']];
+ const cases=[[null,'CLOCK_EXECUTION_QUOTE_INVALID'],[{...marketQuote(f),timing:{received_at_ms:f.now()-1001}},'CLOCK_EXECUTION_QUOTE_STALE'],
+  [{...marketQuote(f),best_ask:f.quote().best_bid*1.01},'EXECUTION_ABORTED_MARKET_DISCONTINUITY'],[marketQuote(f,.97),'EXECUTION_ABORTED_MARKET_DISCONTINUITY']];
  for(const [quote,reason]of cases){const r=await finalRecheckStep(f.db,f.s,{ticket:f.ticket,rawQuote:quote,now:f.now});assert.equal(r.proceed,false);assert.equal(r.reason,reason);}
- assert.equal(guard.reads(),0);assert.equal(guard.ai(),0);
+ assert.equal(guard.reads(),cases.length);assert.equal(guard.ai(),0);
 });
 
 test('changed slot, generation, snapshot, invalid result and superseding identity cannot inherit BUY',async()=>{

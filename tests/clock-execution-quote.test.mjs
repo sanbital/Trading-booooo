@@ -6,21 +6,24 @@ import {nmrClockFinal} from '../test-support/nmr-clock-final.mjs';
 import {clockExecutionStep,authorizeClockExecution,setRecheckTestHooks,clockExecutionTrace} from '../supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs';
 import {gptFinalCheck,gptBeginExecution} from '../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {requireEntryAuthority} from '../supabase/functions/_shared/leader20/runtime.mjs';
+import {depthQuote,rollingCapture} from '../test-support/pre-execution-fixtures.mjs';
 
 const source=readFileSync(new URL('../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
 const start=source.indexOf('async function dispatchEntryIocAttempt('),code=source.slice(start,source.indexOf('\n// ---',start));
 const production=JSON.parse(readFileSync(new URL('./fixtures/nmr-clock-quote-20260928-2320.json',import.meta.url)));
 async function fixture(){
- const f=await nmrClockFinal({fixture:production}),events=[],orders=[],writes=[],intents=new Set();
- setRecheckTestHooks({capture:async()=>{throw Error('NO_NEW_CAPTURE');},fetchFn:async()=>{throw Error('NO_AI_RECHECK');},
+ const f=await nmrClockFinal({fixture:production}),events=[],orders=[],writes=[],intents=new Set();let captureReads=0,aiCalls=0;
+ const marketQuote=(ratio=1)=>depthQuote(f.quote(ratio),{receivedAt:f.now()}),latestCapture=()=>rollingCapture(
+  f.ticket.initial.capture_context,f.now(),{mid:f.ticket.initial.executionRef.mid,hash:`rolling-${f.now()}`});
+ setRecheckTestHooks({capture:async()=>{captureReads++;return latestCapture();},fetchFn:async()=>{aiCalls++;throw Error('NO_AI_RECHECK');},
   readFresh:async()=>{throw Error('NO_NEW_MARKET');},store:{claim:async()=>{throw Error('NO_RECHECK_ROW');}},log:[]});
  const oldQuote=f.original.source.old_quote;assert.ok(oldQuote.timing.received_at_ms>f.now());
  // Reproduce the real guard instant: the admission quote is now 2193ms old.
  f.setNow(oldQuote.timing.received_at_ms+2193);
  let firstQuotes=0;
- const initial=await clockExecutionStep(f.s,f.ticket,async()=>{firstQuotes++;return f.quote();},{now:f.now});
+ const initial=await clockExecutionStep(f.db,f.s,f.ticket,async()=>{firstQuotes++;return marketQuote();},{now:f.now});
  assert.equal(firstQuotes,1);assert.notEqual(initial.record.dispatch_quote,oldQuote);
- assert.equal(initial.proceed,true);const record={...initial.record,dispatch_capture:f.ticket.initial.capture_context,dispatch_quote:f.quote()};
+ assert.equal(initial.proceed,true);const record={...initial.record};
  assert.ok(gptBeginExecution(f.db,f.s,record));
  f.db.rpc=async()=>({data:{allowed:true}});
  f.db.from=table=>table==='leader20_control'?{select(){return this;},eq(){return this;},async maybeSingle(){
@@ -32,30 +35,32 @@ async function fixture(){
   Date:class extends Date{static now(){return f.now();}},verifyExecutionLease:async()=>{events.push('lease');f.setNow(f.now()+1000);},
   fill:r=>r,entryReceipt:r=>r,classifyFailure:()=>({fatal:true})};
  vm.createContext(ctx);vm.runInContext(code+'\nthis.dispatch=dispatchEntryIocAttempt;',ctx);
- const run=(readQuote=async()=>f.quote())=>ctx.dispatch(f.db,f.s,async request=>{
-  if(request.action==='get_order'){events.push('order-query');return {quantity:40,status:'FILLED',price:f.quote().best_ask};}
+ const run=(readQuote=async()=>marketQuote())=>ctx.dispatch(f.db,f.s,async request=>{
+  if(request.action==='get_order'){events.push('order-query');return {quantity:40,status:'FILLED',price:marketQuote().best_ask};}
   events.push('send');orders.push(request);return {quantity:40,status:'FILLED',price:request.order.price,exchangeOrderId:'mock'};
- },{attemptNo:1,quantity:40,limitPrice:f.quote().best_ask,step:.1,payload:{entry_clock_execution:clockExecutionTrace(f.ticket)},
-  authorize:()=>authorizeClockExecution(f.s,f.ticket,record,async()=>{events.push('quote');return readQuote();},
+ },{attemptNo:1,quantity:40,limitPrice:marketQuote().best_ask,step:.1,payload:{entry_clock_execution:clockExecutionTrace(f.ticket)},
+  authorize:()=>authorizeClockExecution(f.db,f.s,f.ticket,record,async()=>{events.push('quote');return readQuote();},
    ()=>gptFinalCheck(f.db,f.s,record),{now:f.now})});
- return {...f,run,record,events,orders,writes};
+ return {...f,run,record,events,orders,writes,marketQuote,captureReads:()=>captureReads,aiCalls:()=>aiCalls};
 }
 
-test('clock IOC acquires a new quote after slow durable intent, lease and generation reads, then sends without AI',async()=>{
+test('clock IOC acquires a new quote and rolling capture after slow durable I/O, then sends without delta GPT',async()=>{
  const f=await fixture(),old=f.record.dispatch_quote.timing.received_at_ms,r=await f.run();
  assert.equal(r.receipt.quantity,40);assert.equal(f.orders.length,1);assert.ok(f.now()-old>1000);
  assert.deepEqual(f.events.slice(-6),['lease','authority','quote','send','lease','order-query']);
  assert.equal(r.evidence.clockExecutionSafety.received_at_ms,r.evidence.sentAt);
  assert.equal(r.evidence.clockExecutionSafety.checked_at_ms,r.evidence.sentAt);
  assert.equal(f.record.recheck_triggered,false);assert.equal(f.calls(),1);assert.equal(f.store.rows.size,1);
+ assert.equal(f.captureReads(),2);assert.equal(f.aiCalls(),0);
  assert.equal(clockExecutionTrace(f.ticket).old_quote_used,false);
  await assert.rejects(f.run(),/duplicate/);assert.equal(f.orders.length,1);
 });
 
-test('one stale gateway response refreshes once before the one IOC, without new AI/capture',async()=>{
+test('one stale gateway response refreshes once before the one IOC, without delta GPT',async()=>{
  const f=await fixture();let reads=0;
- const r=await f.run(async()=>++reads===1?{...f.quote(),timing:{received_at_ms:f.now()-1001}}:f.quote());
+ const r=await f.run(async()=>++reads===1?{...f.marketQuote(),timing:{received_at_ms:f.now()-1001}}:f.marketQuote());
  assert.equal(r.receipt.quantity,40);assert.equal(reads,2);assert.equal(f.orders.length,1);assert.equal(f.calls(),1);
+ assert.equal(f.aiCalls(),0);
  assert.equal(clockExecutionTrace(f.ticket).quote_refresh_attempts,1);
  assert.equal(clockExecutionTrace(f.ticket).execution_failure_reason,undefined);
 });
@@ -67,14 +72,14 @@ test('fresh venue quote preserves every hard safety refusal and never restamps s
   [f=>({...f.quote(),best_ask:f.quote().best_bid*1.01}),'EXECUTION_ABORTED_MARKET_DISCONTINUITY'],
   [f=>f.quote(.97),'EXECUTION_ABORTED_MARKET_DISCONTINUITY'],
   [()=>{throw Error('gateway unavailable');},'CLOCK_EXECUTION_QUOTE_UNAVAILABLE']]){
-  const f=await fixture(),r=await f.run(async()=>make(f));
+  const f=await fixture(),r=await f.run(async()=>make({...f,quote:f.marketQuote}));
   assert.equal(r.blocked,true);assert.equal(r.reason,reason);assert.equal(f.orders.length,0);
   assert.equal(f.writes.at(-1).state,'REJECTED');assert.equal(f.calls(),1);
  }
 });
 
 test('clock expiry while obtaining final quote prevents a late IOC',async()=>{
- const f=await fixture(),r=await f.run(async()=>{f.setNow(f.ticket.expires);return f.quote();});
+ const f=await fixture(),r=await f.run(async()=>{f.setNow(f.ticket.expires);return f.marketQuote();});
  assert.equal(r.reason,'CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION');assert.equal(f.orders.length,0);
  assert.equal(f.calls(),1);
 });
@@ -85,8 +90,7 @@ test('expired clock BUY does not even request a quote after durable I/O',async()
  assert.equal(f.orders.length,0);
 });
 
-test('final clock quote does not bypass changed frozen snapshot or final authority refusal',async()=>{
- const f=await fixture();f.record.dispatch_capture=structuredClone(f.record.dispatch_capture);
- f.record.dispatch_capture.trajectory[0].aggressive_buy++;
- const r=await f.run();assert.equal(r.reason,'CLOCK_FINAL_SNAPSHOT_MISMATCH');assert.equal(f.orders.length,0);
+test('final clock quote does not bypass changed original snapshot or final authority refusal',async()=>{
+ const f=await fixture();f.s.features.leader20.generation++;
+ const r=await f.run();assert.equal(r.reason,'CLOCK_FINAL_AUTHORITY_INVALID');assert.equal(f.orders.length,0);
 });

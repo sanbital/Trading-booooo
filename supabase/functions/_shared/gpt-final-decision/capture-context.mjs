@@ -43,16 +43,20 @@ export async function readCapture(symbol,asOf,{fetchFn=fetch,timeoutMs=350,posit
 }
 
 /** Retry once, then reconstruct through the raw-bucket RPC. Never fills a gap synthetically. */
-export async function readCaptureWithRecovery(symbol,asOf,{now=Date.now,read=readCapture,...options}={}){
+export async function readCaptureWithRecovery(symbol,asOf,{now=Date.now,read=readCapture,requireRollingFresh=false,...options}={}){
  const attempts=[];
  let capture;
  for(const [method,timeoutMs] of [['ROLE',350],['REFRESH',550],['RAW_RECONSTRUCTION',550]]){
   const at=method==='ROLE'?asOf:now();
   capture=await read(symbol,at,{...options,timeoutMs,rpc:method==='RAW_RECONSTRUCTION'?'doa_gpt_capture_context_v3':'doa_context_for_role_v1'});
   const safety=entryCaptureSafety(capture,now());
-  attempts.push({method,at_ms:at,received_at_ms:now(),status:capture?.status??'UNAVAILABLE',reason:safety.reason});
-  if(capture?.reason?.startsWith('CLOCK_'))return {...capture,recovery_attempts:attempts};
-  if(safety.ok&&(!safety.refresh_recommended||method!=='ROLE'))return {...capture,recovery_attempts:attempts};
+  const rollingFresh=safety.ok&&Number.isSafeInteger(capture?.end_ms)&&now()-capture.end_ms>=0&&
+    now()-capture.end_ms<DYNAMIC_POLICY.absoluteAgeMs;
+  attempts.push({method,at_ms:at,received_at_ms:now(),status:capture?.status??'UNAVAILABLE',reason:safety.reason,
+    rolling_fresh:rollingFresh});
+  if(capture?.reason?.startsWith('CLOCK_')&&!requireRollingFresh)return {...capture,recovery_attempts:attempts};
+  if(safety.ok&&(!requireRollingFresh||rollingFresh)&&(!safety.refresh_recommended||method!=='ROLE'))
+    return {...capture,recovery_attempts:attempts};
  }
  return {...(capture??unavailable('READ_FAILED')),recovery_attempts:attempts};
 }

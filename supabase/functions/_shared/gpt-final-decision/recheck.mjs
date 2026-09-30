@@ -91,6 +91,9 @@ export function initialContext(record,answer){
   return {version:RECHECK_VERSION,snapshotAt:num(record?.snapshot_at_ms),completedAt:num(record?.result?.completed_at_ms),
     facts:Object.fromEntries(INITIAL_KEYS.map(k=>[k,num(v[k])])),lastClose:num(record?.packet?.facts?.quality?.last_close),
     executionRef:record?.packet?.execution_ref??null,support:(answer?.support??[]).map(e=>e.key),summary:answer?.summary??null,
+    decision_reason:answer?.decision_reason??null,pressure_state:answer?.pressure_state??null,
+    counter_evidence:Array.isArray(answer?.counter_evidence)?[...answer.counter_evidence]:[],
+    thesis_invalidation:answer?.thesis_invalidation??null,next_review_conditions:answer?.next_review_conditions??null,
     capture_context:record?.packet?.facts?.capture_context??null,dynamic_policy:record?.packet?.dynamic_policy??null,
     ...(record?.packet?.leader20?{leader20:record.packet.leader20}:{})};
 }

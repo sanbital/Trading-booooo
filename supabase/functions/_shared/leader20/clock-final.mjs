@@ -43,8 +43,8 @@ export function clockTicketCheck(ticket,identity,at){
  if(at<a.completed_at_ms||!entryCaptureSafety(c,at).ok)return {ok:false,reason:'CLOCK_FINAL_SNAPSHOT_INVALID'};
  return {ok:true,reason:null};
 }
-/** No directional opinion, new capture, provider call or strategy retry after FINAL BUY.
- * The extreme displacement bound uses the existing native-stop distance, unchanged. */
+/** Hard quote/identity safety at the order boundary. Directional freshness is handled
+ * separately by PRE_EXECUTION_VALIDITY_CHECK against a newly acquired rolling capture. */
 export function clockExecutionSafety(ticket,identity,quote,at){
  const authority=clockTicketCheck(ticket,identity,at);if(!authority.ok)return authority;
  const bid=Number(quote?.best_bid),ask=Number(quote?.best_ask),received=quote?.timing?.received_at_ms;

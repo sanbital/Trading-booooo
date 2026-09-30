@@ -56,7 +56,10 @@ test('malformed retry book gets one bounded fresh quote and must pass all safety
   const marker='A one-shot malformed REST depth must not consume an otherwise valid second slot.';
   assert.equal(src.split(marker).length-1,1,'one recovery site only');
   assert.ok(src.includes('const freshQuote=await gateway({action:"quote",market:s.symbol},refreshTimeout)'));
-  assert.ok(src.includes('retryDynamic=executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,retryNow)'));
+  assert.ok(src.includes('{ok:false,reason:"PRE_EXECUTION_REFRESH_REQUIRES_FULL_VALIDITY_CHECK"}'),
+    'a clock retry cannot attach a refreshed quote to an older rolling-capture proof');
+  assert.ok(src.includes('executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,retryNow)'),
+    'the legacy retry still reruns its existing dynamic safety');
   assert.ok(src.includes('if(!retryBook.health.bookHealthy)'));
   assert.ok(src.includes('EXECUTION_SAFETY_REJECT:INVALID_BOOK'));
 });

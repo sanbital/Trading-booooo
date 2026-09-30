@@ -9,7 +9,6 @@ import {lifecycleNote,mergeLifecycleNote} from './entry-lifecycle.mjs';
 import {isLeader20,validEvent,eventExpiry,clockAuthorityDeadline} from '../_shared/leader20/campaign.mjs';
 import {requireEntryAuthority} from '../_shared/leader20/runtime.mjs';
 import {triggerExpiry} from '../_shared/gpt-final-review/contract.mjs';
-import {sameClockCapture} from '../_shared/leader20/clock.mjs';
 import {CLOCK_FINAL_MIN_BUDGET_MS} from '../_shared/leader20/final.mjs';
 const contexts=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
@@ -154,10 +153,15 @@ export function gptFinalCheck(db,s,finalRecheck=null,retryAuthority=null,{allowA
   if(c.config.mode!=='ENFORCE')return {allowed:false,reason:'GPT_NOT_ENFORCING_NO_NEW_ENTRY'};
   const clockTicket=c.tickets.get(String(s?.id));
   if(clockTicket?.clockFinalAuthority&&finalRecheck){
-    // This is an authority check, including during intent/lease I/O. Quote safety
-    // runs on a freshly acquired quote at the execution boundary before the send.
-    if(finalRecheck.recheck_triggered||!sameClockCapture(clockTicket.initial.capture_context,finalRecheck.dispatch_capture,c.now()))
-      return {allowed:false,reason:'CLOCK_FINAL_SNAPSHOT_MISMATCH'};
+    const validity=finalRecheck.pre_execution_validity;
+    if(!validity||validity.latest_capture_hash!==finalRecheck.dispatch_capture?.trajectory_hash)
+      return {allowed:false,reason:'PRE_EXECUTION_CAPTURE_MISMATCH'};
+    if(validity.result==='INVALID')return {allowed:false,reason:'PRE_EXECUTION_INVALID'};
+    if(validity.result==='UNCERTAIN'&&!(finalRecheck.final?.valid===true&&
+      finalRecheck.final?.decision==='KEEP_BUY'&&c.now()<finalRecheck.final?.valid_until_ms))
+      return {allowed:false,reason:'PRE_EXECUTION_GPT_CONFIRMATION_MISSING'};
+    if(!['VALID','UNCERTAIN'].includes(validity.result))
+      return {allowed:false,reason:'PRE_EXECUTION_VALIDITY_MISSING'};
   }
   const triggered=finalRecheck?.recheck_triggered===true;
   if(!clockTicket?.clockFinalAuthority&&finalRecheck?.dynamic_policy===DYNAMIC_VERSION&&!allowAged){
@@ -169,7 +173,8 @@ export function gptFinalCheck(db,s,finalRecheck=null,retryAuthority=null,{allowA
     !Number.isFinite(finalRecheck.pre_dispatch_at)||c.now()<finalRecheck.pre_dispatch_at||
     c.now()-finalRecheck.pre_dispatch_at>10000||typeof finalRecheck.recheck_triggered!=='boolean'))
     return {allowed:false,reason:'IOC_RETRY_FRESH_RECHECK_REQUIRED'};
-  if(triggered&&!recheckAllows(finalRecheck.final,c.now()))return {allowed:false,reason:'GPT_FINAL_RECHECK_NOT_BUY_OR_EXPIRED'};
+  if(!clockTicket?.clockFinalAuthority&&triggered&&!recheckAllows(finalRecheck.final,c.now()))
+    return {allowed:false,reason:'GPT_FINAL_RECHECK_NOT_BUY_OR_EXPIRED'};
   const r=c.check(s,{supersededBy:triggered?finalRecheck.final.job_key:null,retryAuthority,allowAged:allowAged===true&&!finalRecheck&&!retryAuthority});
   return r.allowed===true&&r.review?.decision===c.allowDecision()?r:{...r,allowed:false};
 }

@@ -12,7 +12,7 @@ import {fd1HoldTick,fd1Probe,fd1ExitProbe,HOLD_RELEASE,holdShadowEnabled,FD1_HOL
 import {readCaptureWithRecovery} from "../_shared/gpt-final-decision/capture-context.mjs";
 import {DYNAMIC_VERSION,dispatchDynamicSafety} from "../_shared/gpt-final-decision/dynamic-flow.mjs";
 import {FD1_ENTRY_ENGINE} from "../_shared/gpt-final-decision/engine.mjs";
-import {finalRecheckStep,finalRecheckProbe,postRecheckSafety,markRecheckOutcome,withOrderTiming,executionCapture,executionDynamicSafety,authorizeClockExecution,clockExecutionStep,readClockExecutionQuote,clockExecutionTrace} from "./gpt-final-recheck-adapter.mjs";
+import {finalRecheckStep,finalRecheckProbe,postRecheckSafety,markRecheckOutcome,withOrderTiming,executionCapture,executionDynamicSafety,authorizeClockExecution,clockExecutionStep,clockExecutionTrace,readClockExecutionQuote} from "./gpt-final-recheck-adapter.mjs";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 import {POLICY, STRATEGY, ENTRY_EXECUTION_POLICY_VERSION, entryFresh, postFillEntryGuard, nextExit, portfolioMatches as leaderPortfolioMatches} from "../_shared/leader-momentum-v17.mjs";
 import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5, exitAttemptId, classifyExitResponse} from "../_shared/leader-exit-review.mjs";
@@ -298,7 +298,8 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
     if(authority?.allowed!==true){
       const reason=authority?.reason??"IOC_DISPATCH_AUTHORITY_MISSING";
       const wr=await db.from("v11_long_regime_orders").update({state:"REJECTED",reject_reason:reason,
-        response_payload:{notDispatched:true},updated_at:new Date().toISOString()}).eq("id",oi.data.id);
+        response_payload:{notDispatched:true,clockExecutionTelemetry:clockTrace?{...clockTrace}:null,
+          dispatchAuthority:{allowed:false,reason}},updated_at:new Date().toISOString()}).eq("id",oi.data.id);
       if(wr.error)throw Error("IOC_NO_DISPATCH_WRITE");
       return {blocked:true,reason,oi:oi.data};
     }
@@ -1275,17 +1276,13 @@ if(E1_ENABLED&&!isLeader20(s)){
     }
   }
 }
-// Clock GPT BUY is final strategy authority. This step performs quote safety only for
-// its frozen slot, without reading another capture or invoking either AI. Legacy
-// non-clock entries retain the original change detector and FINAL RECHECK contract.
-{
-  const recheck=attempt.gptFinalReview?.clockFinalAuthority?
-    await clockExecutionStep(s,attempt.gptFinalReview,ms=>gateway({action:"quote",market:s.symbol},ms)):
-    await finalRecheckStep(db,s,{ticket:attempt.gptFinalReview,e1:E1_ENABLED?e1Decision:null,rawQuote:q});
+// Legacy entries keep their existing GPT FINAL RECHECK here. Clock BUY is only a
+// conditional approval: its latest quote + rolling-24 validity check is deliberately
+// deferred to the already-parallel pre-dispatch reads below, then repeated at the venue
+// boundary after durable intent/lease I/O. This avoids a redundant third capture read.
+if(!attempt.gptFinalReview?.clockFinalAuthority){
+  const recheck=await finalRecheckStep(db,s,{ticket:attempt.gptFinalReview,e1:E1_ENABLED?e1Decision:null,rawQuote:q});
   attempt.finalRecheck=recheck.record;
-  if(recheck.record.clock_final_authority)
-    await audit(db,null,"BULL","BULL",recheck.proceed?"ENTRY_ALLOW":"ENTRY_DEFER",recheck.reason,
-      {signalId:s.id,symbol:s.symbol,stage:"CLOCK_EXECUTION_SAFETY",authority:recheck.record.clock_final_authority,safety:recheck.record.execution_safety});
   if(!recheck.proceed){
     if(recheck.decision==="WAIT"){
       await audit(db,null,"BULL","BULL","ENTRY_DEFER",recheck.reason,{signalId:s.id,symbol:s.symbol,decision:"WAIT",finalRecheck:recheck.record});
@@ -1309,14 +1306,13 @@ if(E1_ENABLED&&!isLeader20(s)){
 // -----------------------------------------
 // The order is priced from a quote, and the last thing this function does before
 // writing the intent is re-assert that that quote is younger than
-// E1_POLICY.maxQuoteAgeMs (1000ms). Everything that sits BETWEEN the quote and that
-// assertion is charged against the 1000ms, so this block is arranged so that nothing
-// between them performs I/O: the ownership/orders/snapshot reads, the account
+// E1_POLICY.maxQuoteAgeMs (1000ms). The ownership/orders/snapshot reads, the account
 // snapshot and BOO's four reads all happen BEFORE or ALONGSIDE the quote, and the
 // decisions taken after it -- sizing, the entry-control verdict, the BOO verdict,
 // the drift and trigger-window checks -- are pure arithmetic over state already in
-// hand. Re-introducing an await between the quote read and the dispatch check is
-// exactly the defect this fixes; see booGateInputs for the production evidence.
+// hand. Clock BUY has one intentional exception: PRE_EXECUTION_VALIDITY_CHECK consumes
+// the capture read made alongside this quote; VALID is local-only, while UNCERTAIN may
+// await GPT and therefore explicitly refreshes its pricing quote before the 1s guard.
 await requireLeaderEntryControls(db);
 const dispatchFlowEnd=Date.now();
 const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuoteRead,dispatchCapture,dispatchTape]=await Promise.all([
@@ -1324,14 +1320,35 @@ const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuoteRead,dispatc
   gateway({action:"v18_open_orders"},5000),
   E1_ENABLED?snap(db):Promise.resolve(sn),
   booGateInputs(db,s),
-  attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q),
+  attempt.gptFinalReview?.clockFinalAuthority||E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q),
   executionCapture(attempt.gptFinalReview,s.symbol,Date.now()),
   attempt.gptFinalReview?.clockFinalAuthority?fetchE1AggTrades(s.symbol,dispatchFlowEnd-10000,dispatchFlowEnd):Promise.resolve(null)]),finalCheck=rawFinalCheck;
-const clockQuote=attempt.gptFinalReview?.clockFinalAuthority?await readClockExecutionQuote(s,attempt.gptFinalReview,ms=>gateway({action:"quote",market:s.symbol},ms)):null;
-const dispatchQuote=clockQuote?clockQuote.quote:dispatchQuoteRead;
-attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:dispatchCapture,
+let dispatchQuote=dispatchQuoteRead;
+if(attempt.gptFinalReview?.clockFinalAuthority){
+  const boundary=await clockExecutionStep(db,s,attempt.gptFinalReview,async()=>dispatchQuoteRead,
+    {quote:dispatchQuoteRead,capture:dispatchCapture,priorRecord:attempt.finalRecheck,
+      sequence:attempt.finalRecheck?.gpt_recheck_attempted?2:1});
+  attempt.finalRecheck=boundary.record;
+  if(!boundary.proceed){
+    await audit(db,null,"BULL","BULL","ENTRY_DEFER",boundary.reason,{signalId:s.id,symbol:s.symbol,
+      stage:"PRE_EXECUTION_VALIDITY_CHECK",validity:boundary.record.pre_execution_validity,
+      gptRecheckAttempted:boundary.record.gpt_recheck_attempted,gptRecheckResult:boundary.record.gpt_recheck_result});
+    return{entered:false,decision:"WAIT",reason:boundary.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,
+      finalRecheck:boundary.record};
+  }
+  dispatchQuote=boundary.record.dispatch_quote;
+  // UNCERTAIN may spend up to twelve seconds in the compact GPT delta recheck. Re-price
+  // after KEEP_BUY so the existing 1s E1 quote-age guard does not reject a sound answer.
+  // The final order authorizer will still re-read both quote and rolling capture again.
+  if(boundary.record.gpt_recheck_attempted){
+    const refreshed=await readClockExecutionQuote(s,attempt.gptFinalReview,
+      ms=>gateway({action:"quote",market:s.symbol},ms));
+    dispatchQuote=refreshed.quote;attempt.finalRecheck.dispatch_quote=dispatchQuote;
+  }
+}else attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:dispatchCapture,
   dispatch_tape:dispatchTape,dispatch_quote:dispatchQuote};
-const dispatchDynamic=clockQuote&&!clockQuote.safety.ok?clockQuote.safety:executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
+attempt.finalRecheck.dispatch_tape=dispatchTape;
+const dispatchDynamic=executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
 attempt.finalRecheck.dispatch_dynamic=dispatchDynamic;
 if(!dispatchDynamic.ok){
   markRecheckOutcome(db,s,attempt.finalRecheck,"NO_ORDER_WAIT:"+dispatchDynamic.reason);
@@ -1367,7 +1384,7 @@ if(E1_ENABLED){
 // GPT FINAL RECHECK, deterministic part (pure, no I/O on the admit path): after a FINAL BUY the
 // dispatch quote must be newer than that answer, not catastrophically wide, and not moved
 // materially from the snapshot GPT answered on. Otherwise the answer is stale: no order.
-if(attempt.finalRecheck?.recheck_triggered===true){
+if(!attempt.gptFinalReview?.clockFinalAuthority&&attempt.finalRecheck?.recheck_triggered===true){
   const safety=postRecheckSafety({recheck:attempt.finalRecheck.final,quote:q,at:Date.now()});
   attempt.finalRecheck={...attempt.finalRecheck,postSafety:safety};
   if(!safety.ok){
@@ -1467,7 +1484,7 @@ attempt.dispatched=true;
 const first=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:1,quantity:sized.amount,limitPrice,step,
   payload:{...baseIntentPayload,ioc_attempt_evidence:firstEvidence},
   authorize:()=>attempt.gptFinalReview?.clockFinalAuthority?
-    authorizeClockExecution(s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),
+    authorizeClockExecution(db,s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),
       ()=>gptFinalCheck(db,s,attempt.finalRecheck),{readTape:(startAt,endAt)=>fetchE1AggTrades(s.symbol,startAt,endAt)}):
     gptFinalCheck(db,s,attempt.finalRecheck)});
 if(first.blocked)return await finishPartialOrAbort(first.reason,{executionAttempts:0});
@@ -1514,7 +1531,8 @@ if(!attempt.gptFinalReview?.clockFinalAuthority&&(retryTape?.available!==true||r
   return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:FRESH_TAPE_UNAVAILABLE",{executionAttempts:1});
 let retryE1=attempt.gptFinalReview?.clockFinalAuthority?null:retryE1Evidence(retryTape,retryQuote0,currentPosition?N(currentPosition.original_quantity):sized.amount,retryAt);
 const retryRecheck=attempt.gptFinalReview?.clockFinalAuthority?
-  await clockExecutionStep(s,attempt.gptFinalReview,ms=>gateway({action:"quote",market:s.symbol},ms),{sequence:2}):
+  await clockExecutionStep(db,s,attempt.gptFinalReview,ms=>gateway({action:"quote",market:s.symbol},ms),
+    {sequence:2,priorRecord:attempt.finalRecheck}):
   await finalRecheckStep(db,s,{ticket:attempt.gptFinalReview,e1:retryE1,rawQuote:retryQuote0,sequence:2});
 attempt.finalRecheck=retryRecheck.record;
 if(!retryRecheck.proceed)return await finishPartialOrAbort(retryRecheck.reason,{executionAttempts:1,finalRecheck:retryRecheck.record});
@@ -1524,14 +1542,21 @@ await requireLeaderEntryControls(db);
 const retryFlowEnd=Date.now();
 const[retryPair,retryOrders,retrySnap,retryQuoteRead,retryInfo,retryCapture,retryDispatchTape]=await Promise.all([
   readOpsPair(db,undefined,s.symbol),gateway({action:"v18_open_orders"},5000),snap(db),
-  attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):gateway({action:"quote",market:s.symbol},3000),
+  gateway({action:"quote",market:s.symbol},3000),
   gateway({action:"symbol_info",market:s.symbol},3000),executionCapture(attempt.gptFinalReview,s.symbol,Date.now()),
   attempt.gptFinalReview?.clockFinalAuthority?fetchE1AggTrades(s.symbol,retryFlowEnd-10000,retryFlowEnd):Promise.resolve(null)]);
-const retryClockQuote=attempt.gptFinalReview?.clockFinalAuthority?await readClockExecutionQuote(s,attempt.gptFinalReview,ms=>gateway({action:"quote",market:s.symbol},ms)):null;
-let retryQuote=retryClockQuote?retryClockQuote.quote:retryQuoteRead;
-attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:retryCapture,
+let retryQuote=retryQuoteRead;
+if(attempt.gptFinalReview?.clockFinalAuthority){
+  const retryBoundary=await clockExecutionStep(db,s,attempt.gptFinalReview,async()=>retryQuoteRead,
+    {sequence:2,priorRecord:attempt.finalRecheck,quote:retryQuoteRead,capture:retryCapture});
+  attempt.finalRecheck=retryBoundary.record;
+  if(!retryBoundary.proceed)return await finishPartialOrAbort(retryBoundary.reason,
+    {executionAttempts:1,finalRecheck:retryBoundary.record});
+  retryQuote=retryBoundary.record.dispatch_quote;
+}else attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:retryCapture,
   dispatch_tape:retryDispatchTape,dispatch_quote:retryQuote};
-let retryDynamic=retryClockQuote&&!retryClockQuote.safety.ok?retryClockQuote.safety:executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
+attempt.finalRecheck.dispatch_tape=retryDispatchTape;
+let retryDynamic=executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
 attempt.finalRecheck.dispatch_dynamic=retryDynamic;
 if(!retryDynamic.ok)return await finishPartialOrAbort(retryDynamic.reason,{executionAttempts:1,decision:"WAIT",dynamic:retryDynamic});
 await recordMismatch(db,retryPair.match);
@@ -1561,7 +1586,9 @@ if(structuralBookInvalid()){
         retryQuote=freshQuote;retryNow=freshNow;retryBid=freshBid;retryAsk=freshAsk;
         retryQuoteAge=freshAge;retryBook=freshBook;
         attempt.finalRecheck.dispatch_quote=retryQuote;
-        retryDynamic=executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,retryNow);
+        if(attempt.gptFinalReview?.clockFinalAuthority)
+          retryDynamic={ok:false,reason:"PRE_EXECUTION_REFRESH_REQUIRES_FULL_VALIDITY_CHECK"};
+        else retryDynamic=executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,retryNow);
         attempt.finalRecheck.dispatch_dynamic=retryDynamic;
         if(!retryDynamic.ok)return await finishPartialOrAbort(retryDynamic.reason,
           {executionAttempts:1,decision:"WAIT",dynamic:retryDynamic});
@@ -1579,7 +1606,7 @@ if(!Number.isFinite(retryQuoteAge)||retryQuoteAge<0||retryQuoteAge>E1_POLICY.max
 if(!retryBook.health.bookHealthy)
   return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:INVALID_BOOK",
     {executionAttempts:1,bookReasons:retryBook.health.reasons,bookRefresh:attempt.finalRecheck.book_refresh??null});
-if(attempt.finalRecheck?.recheck_triggered===true){
+if(!attempt.gptFinalReview?.clockFinalAuthority&&attempt.finalRecheck?.recheck_triggered===true){
   const safety=postRecheckSafety({recheck:attempt.finalRecheck.final,quote:retryQuote,at:retryNow});
   attempt.finalRecheck={...attempt.finalRecheck,postSafety:safety};
   if(!safety.ok)return await finishPartialOrAbort(`EXECUTION_SAFETY_REJECT:${safety.reason}`,{executionAttempts:1});
@@ -1625,7 +1652,7 @@ if(!retryDispatchCheck.allowed)
 const second=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:2,quantity:retryPlan.remainingQuantity,
   limitPrice:retryPlan.limitPrice,step,payload:retryPayload,authorize:()=>{
     if(attempt.gptFinalReview?.clockFinalAuthority)
-      return authorizeClockExecution(s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),()=>{
+      return authorizeClockExecution(db,s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),()=>{
         const check=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority);
         return check.allowed&&gptConsumeRetry(db,retryAuthority)?check:{allowed:false,reason:check.reason??"IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID"};
       },{readTape:(startAt,endAt)=>fetchE1AggTrades(s.symbol,startAt,endAt)});

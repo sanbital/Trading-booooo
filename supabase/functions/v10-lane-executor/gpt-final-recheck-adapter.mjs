@@ -19,8 +19,16 @@ import {resumeReviewTimeouts} from '../_shared/gpt-final-decision/timeout-recove
 import {isLeader20,leaderIdentity} from '../_shared/leader20/campaign.mjs';
 import {CLOCK_FINAL,clockExecutionSafety,clockTicketCheck} from '../_shared/leader20/clock-final.mjs';
 import {sameClockCapture} from '../_shared/leader20/clock.mjs';
+import {hash} from '../_shared/gpt-final-decision/api.mjs';
+import {PRE_EXECUTION_VALIDITY_VERSION,VALIDITY_RESULT,classifyPreExecutionValidity,preExecutionDeltaPacket,
+  callPreExecutionDelta} from '../_shared/gpt-final-decision/pre-execution-validity.mjs';
 export {RECHECK_VERSION,postRecheckSafety};
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
+// The compact clock delta request is intentionally independent of the legacy 4 s
+// final-recheck timeout. Production GPT latency commonly exceeds 4 s; starting a
+// request without this full budget only manufactures timeouts and burns authority.
+const CLOCK_DELTA_TIMEOUT_MS=12000;
+const CLOCK_DELTA_EXECUTION_RESERVE_MS=5000;
 const clockTraces=new WeakMap();
 export function clockExecutionTrace(ticket){
  if(!clockTraces.has(ticket))clockTraces.set(ticket,{gpt_completed_at:ticket.clockFinalAuthority?.completed_at_ms,
@@ -56,30 +64,36 @@ export function markRecheckOutcome(db,s,record,outcome){
     .eq('initial_snapshot_hash',record.initial_snapshot_hash??'').eq('recheck_sequence',record.recheck_sequence??1);
     if(r.error)throw Error(r.error.message);})());
 }
-/** Clock BUY reuses its exact frozen path; only legacy execution acquires a new path. */
+/** Clock BUY must acquire a latest rolling path; legacy execution keeps its existing read. */
 export function executionCapture(ticket,symbol,at,options={}){
-  return ticket?.clockFinalAuthority?Promise.resolve(ticket.initial.capture_context):
-    (testHooks?.capture??readCaptureWithRecovery)(symbol,at,options);
+  return (testHooks?.capture??readCaptureWithRecovery)(symbol,at,
+    {...options,...(ticket?.clockFinalAuthority?{requireRollingFresh:true}:{})});
 }
 export function executionDynamicSafety(s,ticket,record,at){
   if(!ticket?.clockFinalAuthority)return dispatchDynamicSafety({reviewed:record?.final?.capture_context??ticket?.initial?.capture_context,
     latest:record?.dispatch_capture,at});
-  const safety=clockExecutionSafety(ticket,leaderIdentity(s),record?.dispatch_quote,at);
-  if(!safety.ok)return safety;
-  if(!sameClockCapture(ticket.initial.capture_context,record?.dispatch_capture,at))
-    return {ok:false,reason:'CLOCK_FINAL_SNAPSHOT_MISMATCH'};
-  return safety;
+  const safety=clockExecutionSafety(ticket,leaderIdentity(s),record?.dispatch_quote,at);if(!safety.ok)return safety;
+  const v=record?.pre_execution_validity;
+  if(!v||v.result===VALIDITY_RESULT.INVALID)return {ok:false,reason:'PRE_EXECUTION_VALIDITY_MISSING_OR_INVALID'};
+  if(v.result===VALIDITY_RESULT.UNCERTAIN&&record?.gpt_recheck_result!=='KEEP_BUY')
+    return {ok:false,reason:'PRE_EXECUTION_GPT_CONFIRMATION_MISSING'};
+  if(v.latest_capture_hash!==record?.dispatch_capture?.trajectory_hash)
+    return {ok:false,reason:'PRE_EXECUTION_CAPTURE_MISMATCH'};
+  return {...safety,validity_result:v.result,validity_reasons:v.reasons};
 }
-/** Final venue boundary: intent/lease I/O is already complete. Never restamp an
- * old quote or widen its 1000ms limit. Reuse the frozen strategy authority only. */
-export async function authorizeClockExecution(s,ticket,record,readQuote,authorize,{now=Date.now}={}){
-  const {quote,safety,at}=await readClockExecutionQuote(s,ticket,readQuote,{now});
-  record.dispatch_quote=quote;record.execution_safety=safety;
-  if(!safety.ok)return {allowed:false,reason:safety.reason};
+/** Final venue boundary: intent/lease I/O is already complete. Re-read both the quote and
+ * rolling 24-bucket trajectory. An old BUY or earlier local check is never inherited. */
+export async function authorizeClockExecution(db,s,ticket,record,readQuote,authorize,{now=Date.now}={}){
+  const sequence=Math.min(2,record?.gpt_recheck_attempted===true?2:record?.recheck_sequence??1),
+    step=await clockExecutionStep(db,s,ticket,readQuote,{now,sequence,priorRecord:record});
+  Object.assign(record,step.record);
+  if(!step.proceed)return {allowed:false,reason:step.reason};
   const checked=authorize();
+  const safety=record.execution_safety,quote=record.dispatch_quote,at=record.pre_execution_check_at;
   return {...checked,clock_execution_safety:{...safety,checked_at_ms:at,received_at_ms:quote.timing.received_at_ms,
     bid:quote.best_bid,ask:quote.best_ask,slot_ms:ticket.clockFinalAuthority.slot_ms,
-    expires_at_ms:ticket.clockFinalAuthority.expires_at_ms,telemetry:{...clockExecutionTrace(ticket)}}};
+    expires_at_ms:ticket.clockFinalAuthority.expires_at_ms,validity_result:record.validity_result,
+    validity_reasons:record.validity_reasons,telemetry:{...clockExecutionTrace(ticket)}}};
 }
 /** Quote refresh is not an order retry: no provider/capture/order call occurs here.
  * Only an actually stale gateway response is refreshed, at most once per boundary. */
@@ -105,20 +119,97 @@ export async function readClockExecutionQuote(s,ticket,readQuote,{now=Date.now}=
  if(!safety.ok)t.execution_failure_reason??=safety.reason;
  return {quote,safety,at};
 }
-/** Named clock path: fresh quote safety only, with the original immutable BUY. */
-export async function clockExecutionStep(s,ticket,readQuote,{now=Date.now,sequence=1}={}){
- const {quote,safety,at}=await readClockExecutionQuote(s,ticket,readQuote,{now});
- const record=clockExecutionRecord(ticket,quote,safety,at,sequence);
- return {proceed:safety.ok,decision:safety.ok?'BUY_NOW':'WAIT',reason:safety.ok?'CLOCK_FINAL_BUY_TO_EXECUTION':safety.reason,record};
+function clockDeltaAuthorized(config,apiKey){return config?.mode==='ENFORCE'&&config.modeValid!==false&&
+ config.enforceApproved===true&&String(config.approvalRef??'').length>0&&config.apiBudgetUsd>=.1&&
+ Number.isInteger(config.maxCalls)&&config.maxCalls>0&&!!apiKey;}
+async function runClockDeltaRecheck(db,s,ticket,validity,{now=Date.now,sequence=1,purpose='PRODUCTION'}={}){
+ const apiKey=testHooks?.apiKey??getenv('OPENAI_API_KEY'),config=testHooks?.config??gptRecheckConfig(db),
+  store=testHooks?.store??new SupabaseReviewStore(db),deadline=ticket.expires-CLOCK_DELTA_EXECUTION_RESERVE_MS,
+  base={decision:'CANCEL_BUY',valid:false,error:null,attempted:false,latency_ms:null,job_key:null,
+   completed_at_ms:now(),valid_until_ms:null,capture_context:validity.latest_capture,current_ref:{mid:validity.current?.mid??null,at:validity.checked_at_ms}};
+ if(!clockDeltaAuthorized(config,apiKey))return {...base,error:'RC_NOT_AUTHORIZED'};
+ if(!Number.isInteger(sequence)||sequence<1||sequence>RECHECK_POLICY.maxRechecksPerCandidate)
+  return {...base,error:'RC_LIMIT_REACHED'};
+ const available=deadline-now();
+ if(available<CLOCK_DELTA_TIMEOUT_MS)return {...base,error:'EXECUTION_WINDOW_INSUFFICIENT'};
+ const identity={signal_id:String(s.id),symbol:String(s.symbol).toUpperCase(),kind:'FD1_FINAL_RECHECK',
+  recheck_sequence:sequence,initial_snapshot_hash:String(ticket.snapshotHash),latest_capture_hash:validity.latest_capture_hash,
+  trigger_at_ms:Number(s.features?.v17Setup?.triggerAt??s.features?.leader20?.entry_window?.slot_ms)};
+ const key=await hash({version:PRE_EXECUTION_VALIDITY_VERSION,identity,purpose}),packet=preExecutionDeltaPacket(validity,
+  {signalId:s.id,symbol:s.symbol,sequence}),record={version:PRE_EXECUTION_VALIDITY_VERSION,kind:'FD1_FINAL_RECHECK',purpose,
+   recheck_sequence:sequence,api_approval_ref:config.approvalRef,reserved_usd:.1,expires_at_ms:deadline,
+   source_commit:PRE_EXECUTION_VALIDITY_VERSION,identity,packet,result:null};
+ let claimed,owner;
+ try{claimed=await store.claim(key,record,config);if(!claimed.created){const prior=claimed.row?.record?.result;
+   if(claimed.row?.state==='DONE'&&prior?.valid===true&&prior?.decision==='KEEP_BUY')return {...base,...prior,
+    job_key:key,capture_context:validity.latest_capture,current_ref:base.current_ref};
+   return {...base,error:'RC_LIMIT_REACHED',job_key:key};}owner=claimed.row.owner;
+   if(store.snapshot)await store.snapshot(key,owner,record);
+ }catch(error){return {...base,error:/API_BUDGET_EXHAUSTED/.test(String(error?.message??error))?
+   'RC_BUDGET_EXHAUSTED':'RC_CLAIM_FAILED',job_key:key};}
+ let result;
+ try{const paidFetch=store.transport?await store.transport(key,record,testHooks?.fetchFn??fetch):testHooks?.fetchFn??fetch,
+   remaining=Math.min(CLOCK_DELTA_TIMEOUT_MS,deadline-now());
+  result=await callPreExecutionDelta(packet,{apiKey,fetchFn:paidFetch,now,timeoutMs:remaining});
+ }catch{result={valid:false,decision:'CANCEL_BUY',error:'RC_ADAPTER_ERROR',attempted:false,api_cost_usd:0,
+   completed_at_ms:now(),latency_ms:0};}
+ const completed=result.completed_at_ms??now(),valid=result.valid===true&&result.decision==='KEEP_BUY'&&completed<deadline,
+  stored={...result,decision:result.valid===true?result.decision:'CANCEL_BUY',valid,valid_until_ms:valid?
+   Math.min(deadline,completed+RECHECK_POLICY.answerMaxAgeMs):null,job_key:key};record.result=stored;
+ try{await store.complete(key,owner,record);}catch{return {...base,...stored,valid:false,decision:'CANCEL_BUY',error:'RC_RECORD_FAILED'};}
+ return {...base,...stored,capture_context:validity.latest_capture,current_ref:base.current_ref};
 }
-function clockExecutionRecord(ticket,rawQuote,safety,at,sequence){
+/** Latest quote + rolling 24-bucket validity check. GPT is called only for UNCERTAIN
+ * market change, never for VALID and never to rescue incomplete/non-causal data. */
+export async function clockExecutionStep(db,s,ticket,readQuote,{now=Date.now,sequence=1,priorRecord=null,
+  quote:providedQuote=null,capture:providedCapture=null,purpose='PRODUCTION'}={}){
+ const checkedAt=now(),identity=leaderIdentity(s),ticketSafety=clockTicketCheck(ticket,identity,checkedAt);
+ if(!ticketSafety.ok){const record=clockExecutionRecord(ticket,null,ticketSafety,checkedAt,sequence,null,null);
+  return {proceed:false,decision:'WAIT',reason:ticketSafety.reason,record};}
+ let quote,capture,quoteSafety=null;
+ try{const [quoteResult,latest]=await Promise.all([providedQuote?Promise.resolve({quote:providedQuote,safety:null,at:checkedAt}):
+   readClockExecutionQuote(s,ticket,readQuote,{now}),
+   providedCapture?Promise.resolve(providedCapture):executionCapture(ticket,s.symbol,checkedAt,{now})]);
+  quote=quoteResult.quote;quoteSafety=quoteResult.safety;capture=latest;}
+ catch(error){const failed={ok:false,reason:'PRE_EXECUTION_DATA_READ_FAILED',error:String(error?.message??error).slice(0,120)},
+   record=clockExecutionRecord(ticket,quote??null,failed,now(),sequence,null,null);
+  return {proceed:false,decision:'WAIT',reason:failed.reason,record};}
+ const at=now(),safety=quoteSafety??clockExecutionSafety(ticket,identity,quote,at),reference=priorRecord?.gpt_recheck_result==='KEEP_BUY'?
+  priorRecord?.final?.capture_context:null,validity=classifyPreExecutionValidity({ticket,latestCapture:capture,quote,at,
+   referenceCapture:reference,executionSafety:safety});
+ let final=null,gptResult='NOT_ATTEMPTED',proceed=false,reason;
+ const dataUnsafe=!validity.data_safety.latest.ok||validity.reasons.some(x=>['LATEST_TRAJECTORY_NOT_FRESH',
+  'CURRENT_PRICE_MISSING','CURRENT_BOOK_METRICS_INCOMPLETE'].includes(x));
+ if(validity.result===VALIDITY_RESULT.VALID){proceed=true;reason='PRE_EXECUTION_VALID';}
+ else if(validity.result===VALIDITY_RESULT.INVALID){reason=safety?.ok===false?safety.reason:
+   'PRE_EXECUTION_INVALID:'+validity.reasons.join(',');}
+ else if(dataUnsafe){reason='PRE_EXECUTION_UNCERTAIN_DATA_UNSAFE';gptResult='NOT_ATTEMPTED_DATA_UNSAFE';}
+ else{final=await runClockDeltaRecheck(db,s,ticket,validity,{now,sequence,purpose});
+  gptResult=final.valid===true&&final.decision==='KEEP_BUY'?'KEEP_BUY':final.error??final.decision??'CANCEL_BUY';
+  proceed=final.valid===true&&final.decision==='KEEP_BUY'&&now()<final.valid_until_ms;
+  reason=proceed?'PRE_EXECUTION_GPT_KEEP_BUY':'PRE_EXECUTION_GPT_CANCEL_OR_ERROR:'+gptResult;}
+ const record=clockExecutionRecord(ticket,quote,safety,at,sequence,validity,final),trace=clockExecutionTrace(ticket);
+ Object.assign(trace,{pre_execution_check_at:at,decision_age_ms:validity.decision_age_ms,
+  original_snapshot_at:validity.original_snapshot_at,latest_snapshot_at:validity.latest_snapshot_at,
+  new_buckets_since_buy:validity.new_buckets_since_buy,price_drift_bps:validity.price_drift_bps,
+  spread_delta_bps:validity.spread_delta_bps,slippage_delta_bps:validity.slippage_delta_bps,
+  validity_result:validity.result,validity_reasons:validity.reasons,gpt_recheck_attempted:final?.attempted===true,
+  gpt_recheck_result:gptResult,gpt_recheck_latency_ms:final?.latency_ms??null});
+ record.clock_execution_telemetry={...trace};record.gpt_recheck_result=gptResult;
+ return {proceed,decision:proceed?'BUY_NOW':'WAIT',reason,record};
+}
+function clockExecutionRecord(ticket,rawQuote,safety,at,sequence,validity=null,final=null){
  return {version:CLOCK_FINAL,clock_final_authority:ticket.clockFinalAuthority,recheck_sequence:sequence,
   initial_gpt_decision:'BUY',initial_gpt_at:ticket.initial.completedAt,initial_snapshot_at:ticket.initial.snapshotAt,
   initial_snapshot_hash:ticket.snapshotHash,initial_context:ticket.initial,pre_dispatch_at:at,
   pre_dispatch_snapshot:preDispatchSnapshot({at,rawQuote}),dispatch_quote:rawQuote,
-  dispatch_capture:ticket.initial.capture_context,dynamic_policy:DYNAMIC_VERSION,
-  recheck_triggered:false,recheck_reasons:[],deltas:{},final:null,final_gpt_decision:'BUY',
-  final_gpt_at:ticket.initial.completedAt,max_rechecks:0,execution_safety:safety,
+  dispatch_capture:validity?.latest_capture??null,dynamic_policy:DYNAMIC_VERSION,
+  pre_execution_check_at:at,pre_execution_validity:validity,validity_result:validity?.result??null,
+  validity_reasons:validity?.reasons??[],recheck_triggered:validity?.result===VALIDITY_RESULT.UNCERTAIN,
+  recheck_reasons:validity?.reasons??[],deltas:validity??{},final,
+  final_gpt_decision:final?.decision==='KEEP_BUY'?'BUY':final?'ABSTAIN':'BUY',
+  final_gpt_at:final?.completed_at_ms??ticket.initial.completedAt,max_rechecks:RECHECK_POLICY.maxRechecksPerCandidate,
+  gpt_recheck_attempted:final?.attempted===true,gpt_recheck_latency_ms:final?.latency_ms??null,execution_safety:safety,
   clock_execution_telemetry:clockTraces.get(ticket)??null};
 }
 /**
@@ -129,10 +220,7 @@ function clockExecutionRecord(ticket,rawQuote,safety,at,sequence){
 export async function finalRecheckStep(db,s,{ticket,e1,rawQuote,now=Date.now,purpose='PRODUCTION',config=null,apiKey=null,
   dataMode='LIVE',asOf=null,sequence=1,fetchFn=null}){
   if(ticket?.clockFinalAuthority){
-    const at=asOf??now(),safety=clockExecutionSafety(ticket,leaderIdentity(s),rawQuote,at);
-    const record=clockExecutionRecord(ticket,rawQuote,safety,at,sequence);
-    return {proceed:safety.ok,decision:safety.ok?'BUY_NOW':'WAIT',
-      reason:safety.ok?'CLOCK_FINAL_BUY_TO_EXECUTION':safety.reason,record};
+    return clockExecutionStep(db,s,ticket,async()=>rawQuote,{now,sequence,quote:rawQuote,purpose});
   }
   // A clock signal without a validated FINAL capability may not fall back to the legacy AI route.
   if(s?.features?.leader20?.entry_window)return {proceed:false,decision:'WAIT',reason:'CLOCK_FINAL_AUTHORITY_INVALID',record:{recheck_triggered:false}};
