@@ -57,6 +57,18 @@ test('TEST 6B: execute-ready-any is a short outbox-only path with no GPT fallbac
   assert.ok(start>=0&&end>start);
   assert.doesNotMatch(executor.slice(start,end),/runWithGptReview/);
 });
+test('TEST 6C: durable clock BUY has an in-process execution wake before pg_net fallback',async()=>{
+  const [executor,adapter,coordinator]=await Promise.all([
+    read('supabase/functions/v10-lane-executor/index.ts'),
+    read('supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs'),
+    read('supabase/functions/_shared/gpt-final-review/coordinator.mjs')]);
+  assert.match(executor,/setImmediateExecutionWake\(db,\(signalId\)=>queueDurableExecutionWake\(db,signalId\)\)/);
+  assert.match(executor,/function queueDurableExecutionWake\(db,signalId\)/);
+  assert.match(adapter,/onDurableAllowed:\(s,review\)=>executionWakes\.get\(db\)/);
+  assert.match(coordinator,/onDurableAllowed=async\(\)=>\{\}/);
+  assert.match(coordinator,/this\.schedule\(this\.onDurableAllowed/);
+  assert.match(coordinator,/this\.tickets\.set\(String\(record\.identity\.signal_id\),checked\.ticket\)/);
+});
 test('TEST 7, 10, 11: atomic signal claim, expired refusal, and live 30-second authority',async t=>{
   assert.ok(process.env.PGLITE_MODULE,'PGLITE_MODULE is required');
   const {PGlite}=await import(pathToFileURL(process.env.PGLITE_MODULE).href),db=new PGlite();t.after(()=>db.close());
