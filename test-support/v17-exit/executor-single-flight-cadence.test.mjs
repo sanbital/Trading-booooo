@@ -78,8 +78,7 @@ test('lease SQL is crash-safe, owner-refreshable and bounded to 150s',()=>{
   assert.match(leaseSql,/interval '150 seconds'/);
   assert.match(leaseSql,/expires_at < clock_timestamp\(\) or owner = p_owner/);
   assert.match(leaseSql,/interval '30 seconds'/);
-  assert.match(source,/EXECUTION_LEASE_TTL_SECONDS=150,EXECUTION_LEASE_HEARTBEAT_MS=30000/);
-  assert.match(source,/setInterval\(async\(\)=>/);
-  assert.match(source,/clearInterval\(heartbeat\)/);
-  assert.match(source,/EXECUTOR_LEASE_HEARTBEAT_FAILED/);
+  assert.match(source,/EXECUTION_LEASE_TTL_SECONDS=150/);
+  assert.equal(source.includes('EXECUTION_LEASE_HEARTBEAT_MS'),false,
+    '110s lifecycle does not need a timer heartbeat under the 150s crash-safe TTL');
 });
