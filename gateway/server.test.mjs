@@ -44,6 +44,20 @@ test("monitor cadence waits only for the unspent interval", () => {
   assert.equal(module.monitorCadenceDelayMs(1_000, 3_350, 2_000), 0);
 });
 
+test("DB-degraded scheduler backoff grows 30s -> 60s and stays bounded", () => {
+  assert.equal(module.autotraderDbBackoffMs(0), 0);
+  assert.equal(module.autotraderDbBackoffMs(1), 30_000);
+  assert.equal(module.autotraderDbBackoffMs(2), 60_000);
+  assert.equal(module.autotraderDbBackoffMs(20), 60_000);
+});
+
+test("DB circuit suppresses cadence calls only during degraded cooldown/probe", () => {
+  assert.equal(module.autotraderDbCircuitSuppresses(10_000, 40_000, 1, false), true);
+  assert.equal(module.autotraderDbCircuitSuppresses(40_000, 40_000, 1, false), false);
+  assert.equal(module.autotraderDbCircuitSuppresses(40_000, 0, 1, true), true);
+  assert.equal(module.autotraderDbCircuitSuppresses(40_000, 0, 0, false), false);
+});
+
 test("valid one-character Binance bases reach the exchange without allowing query delimiters", () => {
   for (const symbol of ["4USDT", "XUSDT", "牛USDT", "BTCUSDT", "哈基米USDT"])
     assert.equal(module.validateBinanceSymbol(symbol), symbol);
