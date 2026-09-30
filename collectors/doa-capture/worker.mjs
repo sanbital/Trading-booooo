@@ -8,7 +8,7 @@ const token=process.env.CAPTURE_TOKEN;
 const expected=process.env.PROTOCOL_SHA256;
 if(endpoint!=='https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/doa-capture-ingest' || !/^[a-f0-9]{64}$/.test(token||'') || !/^[a-f0-9]{64}$/.test(expected||'')) throw Error('INVALID_CONFIG');
 const worker_id=randomUUID(), states=new Map(), budget=new WeightBudget(), queue=new Map(), seen=new Map();
-let windows=[],deadline=0,lastControl=0,lastWatch=0,lastFlush=0,busyRest=false,stop=false,restFailures=0,wsGaps=0,coverageRefreshes=0,backoffUntil=0;
+let windows=[],deadline=0,lastControl=0,lastWatch=0,lastFlush=0,busyRest=false,stop=false,restFailures=0,wsGaps=0,coverageRefreshes=0,backoffUntil=0,bufferDrops=0;
 // A transport failure is never fatal (see controlDisposition). `signalled` and `crashed` are the
 // only states that end the process; `disabled` idles and keeps polling so a re-enable recovers.
 let controlFailures=0,controlRetryAt=0,signalled=false,crashed=false,disabled=false,idleSince=0;
@@ -46,7 +46,19 @@ async function publicGet(path,weight){
   if(!r.ok)throw Error('PUBLIC_HTTP_'+r.status);
   return await r.json();
 }
-function enqueue(row){const key=row.kind+':'+row.symbol+':'+row.at;if(seen.has(key))return;seen.set(key,Date.now());queue.set(key,row);if(queue.size>1200)throw Error('PERSIST_QUEUE_CAP');}
+const PERSIST_QUEUE_CAP=1200;
+function enqueue(row){
+  const key=row.kind+':'+row.symbol+':'+row.at;if(seen.has(key))return;seen.set(key,Date.now());
+  if(queue.size>=PERSIST_QUEUE_CAP){
+    let evict=null;
+    for(const [oldKey,oldRow] of queue){
+      if(!states.get(oldRow.symbol)?.roles?.includes('OPEN_POSITION')){evict=oldKey;break;}
+    }
+    evict??=queue.keys().next().value??null;
+    if(evict!==null){queue.delete(evict);bufferDrops++;log('PERSIST_QUEUE_EVICT',{buffer_dropped_rows:bufferDrops,queue_cap:PERSIST_QUEUE_CAP});}
+  }
+  queue.set(key,row);
+}
 function connect(symbol,candles){
   const now=Date.now();
   // Only the first timer anchor uses the grid. Actual connection/sync times still
@@ -157,11 +169,14 @@ async function flush(){
   if(!pending){
     const selected=[];let size=0;
     for(const [k,row] of [...queue].sort((a,b)=>Number(!states.get(a[1].symbol)?.roles?.includes('OPEN_POSITION'))-Number(!states.get(b[1].symbol)?.roles?.includes('OPEN_POSITION')))){const bytes=Buffer.byteLength(JSON.stringify(row));if(selected.length>=300||size+bytes>350000)break;selected.push([k,row]);size+=bytes;}
-    pending={batch_id:randomUUID(),rows:selected.map(x=>x[1]),metrics:{version:VERSION,source_commit:process.env.SOURCE_COMMIT??null,watched:states.size,synced:[...states.values()].filter(s=>s.book.ready).length,trade_streams_seen:[...states.values()].filter(s=>s.lastTradeAt>0).length,candle_streams_seen:[...states.values()].filter(s=>s.lastCandle!==null).length,queue:queue.size,ws_gaps:wsGaps,coverage_refreshes:coverageRefreshes,rest_failures:restFailures,rss_bytes:process.memoryUsage().rss,last_bucket_at:iso(Date.now()),order_calls:0,llm_calls:0}};
+    pending={batch_id:randomUUID(),rows:selected.map(x=>x[1]),metrics:{version:VERSION,source_commit:process.env.SOURCE_COMMIT??null,watched:states.size,synced:[...states.values()].filter(s=>s.book.ready).length,trade_streams_seen:[...states.values()].filter(s=>s.lastTradeAt>0).length,candle_streams_seen:[...states.values()].filter(s=>s.lastCandle!==null).length,queue:queue.size,buffer_dropped_rows:bufferDrops,queue_cap:PERSIST_QUEUE_CAP,ws_gaps:wsGaps,coverage_refreshes:coverageRefreshes,rest_failures:restFailures,rss_bytes:process.memoryUsage().rss,last_bucket_at:iso(Date.now()),order_calls:0,llm_calls:0}};
     pending.metrics.live_contexts=Object.fromEntries([...states].map(([symbol,s])=>[symbol,summarizeCapture(s.ring,Date.now())]));
     pending.metrics.watch_roles=Object.fromEntries([...states].map(([symbol,s])=>[symbol,s.roles??[]]));
     pending.metrics.unavailable_symbols=unavailableSymbols;
-    pending.metrics.production_continuous=production&&!clockWindow;
+    // Persistence is continuous whenever production_enabled is true, even while a clock
+    // window is present. The previous telemetry incorrectly reported false in that case.
+    pending.metrics.production_continuous=production;
+    pending.metrics.clock_window_active=!!clockWindow;
     pending.metrics.entry_window=clockWindow;
     pending.metrics.rest_weight_limit=currentRestLimit();
     pending.metrics.exchange_weight_limit=exchangeWeightLimit;

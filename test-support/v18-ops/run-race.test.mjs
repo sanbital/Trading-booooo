@@ -140,9 +140,9 @@ test('04 ACTIVE stop is allowed, missing or unrelated algo order blocks recovery
   assert.equal(h.state.tables.v11_long_regime_runtime[0].circuit_open,true);
  }
 });
-test('17 a slow dependency exhausts time budget, retains heartbeat and sends no new exposure',async()=>{
+test('17 a slow dependency exhausts the current 90s cycle budget, retains heartbeat and sends no new exposure',async()=>{
  const h=harness({positions:[saga()],signal:false,hook:({type,cmd,state})=>{
-  if(type==='gateway'&&cmd.action==='p10_quotes')state.now+=56000;
+  if(type==='gateway'&&cmd.action==='p10_quotes')state.now+=91000;
  }});
  await assert.rejects(()=>h.ctx.runCycle(),/BUDGET/);
  assert.ok(h.state.tables.v11_long_regime_runtime[0].last_cycle_completed_at);

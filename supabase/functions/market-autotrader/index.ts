@@ -547,10 +547,22 @@ function dbHeaders(extra: Record<string, string> = {}): HeadersInit {
     ...extra,
   };
 }
-async function db(path: string, init: RequestInit = {}): Promise<any> {
+const DB_LIGHT_TIMEOUT_MS = 3_000;
+const AUTOTRADER_CYCLE_LEASE_TTL_SECONDS = 150;
+const AUTOTRADER_CYCLE_LEASE_RENEW_MS = 30_000;
+
+async function db(
+  path: string,
+  init: RequestInit = {},
+  timeoutMs: number | null = null,
+): Promise<any> {
+  const boundedSignal = Number.isFinite(timeoutMs) && Number(timeoutMs) > 0
+    ? AbortSignal.timeout(Number(timeoutMs))
+    : undefined;
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...init,
     headers: { ...dbHeaders(), ...(init.headers || {}) },
+    signal: init.signal ?? boundedSignal,
   });
   const text = await res.text();
   let data: any;
@@ -566,8 +578,8 @@ async function db(path: string, init: RequestInit = {}): Promise<any> {
   }
   return data;
 }
-async function rpc(name: string, body: JsonRecord): Promise<any> {
-  return db(`rpc/${name}`, { method: "POST", body: JSON.stringify(body) });
+async function rpc(name: string, body: JsonRecord, timeoutMs: number | null = null): Promise<any> {
+  return db(`rpc/${name}`, { method: "POST", body: JSON.stringify(body) }, timeoutMs);
 }
 async function tryAcquireExecutionGate(
   gateKey: string,
@@ -929,7 +941,24 @@ function hasMalformedLegacyScalpSettings(settings: TradingSettings & JsonRecord)
 }
 
 async function loadSettings(): Promise<TradingSettings & JsonRecord> {
-  const rows = await db("trading_settings?id=eq.1&select=*");
+  const startedAt = performance.now();
+  let rows: any;
+  try {
+    rows = await db("trading_settings?id=eq.1&select=*", {}, DB_LIGHT_TIMEOUT_MS);
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "DB_STAGE_FAILED",
+      db_stage: "loadSettings",
+      db_latency_ms: Math.round(performance.now() - startedAt),
+      error: error instanceof Error ? error.message : String(error),
+    }));
+    throw new Error(`LOAD_SETTINGS_DB:${error instanceof Error ? error.message : String(error)}`);
+  }
+  console.log(JSON.stringify({
+    event: "DB_STAGE_OK",
+    db_stage: "loadSettings",
+    db_latency_ms: Math.round(performance.now() - startedAt),
+  }));
   if (rows?.[0]) {
     const merged = { ...defaultSettings(), ...rows[0] } as TradingSettings & JsonRecord;
     // Database values from older releases must not lower the operator's live Binance floor.
@@ -12750,11 +12779,108 @@ Deno.serve(async (request: Request) => {
   }
   if (request.method !== "POST") return response({ error: "POST only" }, 405);
   if (!authorized(request)) return response({ error: "unauthorized" }, 401);
+  const invocationId = crypto.randomUUID();
+  const invocationStartedAt = Date.now();
+  const cronScheduledAt = request.headers.get("x-cron-scheduled-at");
+  let action = "unknown";
   let cycleId = "";
+  let cycleLease: {
+    name: string;
+    owner: string;
+    renew: number;
+    acquiredAt: number;
+    expiresAt: number;
+  } | null = null;
   try {
     requiredConfiguration();
     const body = await request.json().catch(() => ({})) as JsonRecord;
-    const action = String(body.action || "status").toLowerCase();
+    action = String(body.action || "status").toLowerCase();
+
+    // Acquire the existing per-cycle lease BEFORE the first settings read. The old ordering
+    // allowed every overlapping cron invocation to hit trading_settings before discovering
+    // that another copy was already running. Fail fast: never queue behind the active owner.
+    if (action === "scan" || action === "monitor") {
+      const leaseName = `autotrader-${action}`;
+      const owner = crypto.randomUUID();
+      const leaseStartedAt = performance.now();
+      let acquired = false;
+      try {
+        acquired = await rpc("acquire_trading_lease", {
+          p_name: leaseName,
+          p_owner: owner,
+          p_seconds: AUTOTRADER_CYCLE_LEASE_TTL_SECONDS,
+        }, DB_LIGHT_TIMEOUT_MS) === true;
+      } catch (error) {
+        console.warn(JSON.stringify({
+          event: "DB_DEGRADED",
+          invocation_id: invocationId,
+          cron_scheduled_at: cronScheduledAt,
+          started_at: new Date(invocationStartedAt).toISOString(),
+          action,
+          db_stage: "cycle_lease_acquire",
+          db_latency_ms: Math.round(performance.now() - leaseStartedAt),
+          db_error: error instanceof Error ? error.message : String(error),
+        }));
+        return response({ ok: true, status: "DB_DEGRADED", action, invocation_id: invocationId });
+      }
+      if (!acquired) {
+        console.log(JSON.stringify({
+          event: "SKIPPED_ALREADY_RUNNING",
+          invocation_id: invocationId,
+          cron_scheduled_at: cronScheduledAt,
+          started_at: new Date(invocationStartedAt).toISOString(),
+          action,
+          lease_owner: owner,
+          skipped_already_running: true,
+          db_stage: "cycle_lease_acquire",
+          db_latency_ms: Math.round(performance.now() - leaseStartedAt),
+          total_runtime_ms: Date.now() - invocationStartedAt,
+        }));
+        return response({
+          ok: true,
+          status: "SKIPPED",
+          action,
+          reason: "SKIPPED_ALREADY_RUNNING",
+          invocation_id: invocationId,
+        });
+      }
+      const acquiredAt = Date.now();
+      const renew = setInterval(() => {
+        rpc("acquire_trading_lease", {
+          p_name: leaseName,
+          p_owner: owner,
+          p_seconds: AUTOTRADER_CYCLE_LEASE_TTL_SECONDS,
+        }, DB_LIGHT_TIMEOUT_MS).catch((error) =>
+          console.warn(JSON.stringify({
+            event: "LEASE_HEARTBEAT_FAILED",
+            invocation_id: invocationId,
+            action,
+            lease_owner: owner,
+            db_error: error instanceof Error ? error.message : String(error),
+          }))
+        );
+      }, AUTOTRADER_CYCLE_LEASE_RENEW_MS);
+      cycleLease = {
+        name: leaseName,
+        owner,
+        renew: Number(renew),
+        acquiredAt,
+        expiresAt: acquiredAt + AUTOTRADER_CYCLE_LEASE_TTL_SECONDS * 1000,
+      };
+      console.log(JSON.stringify({
+        event: "EXECUTOR_LEASE_ACQUIRED",
+        invocation_id: invocationId,
+        cron_scheduled_at: cronScheduledAt,
+        started_at: new Date(invocationStartedAt).toISOString(),
+        lease_acquired_at: new Date(acquiredAt).toISOString(),
+        lease_owner: owner,
+        lease_expires_at: new Date(cycleLease.expiresAt).toISOString(),
+        action,
+        db_stage: "cycle_lease_acquire",
+        db_latency_ms: Math.round(performance.now() - leaseStartedAt),
+      }));
+    }
+
     let settings = await loadSettings();
     if (!settings.configured) settings = await ensureConfigured(settings);
     if (action === "status") return response({ ok: true, ...(await status(settings)) });
@@ -13073,36 +13199,13 @@ Deno.serve(async (request: Request) => {
       return response({ ok: true, cycle_id: cycleId, settings, reconciliation, scan_now: true });
     }
     if (action === "monitor") {
-      const result = await withLease(
-        "autotrader-monitor",
-        90,
-        () => monitorCycle(cycleId, settings),
-      );
-      if (result == null) {
-        await finishCycle(cycleId, "SKIPPED", { reason: "monitor lease busy" });
-        return response({ ok: true, status: "SKIPPED", reason: "monitor lease busy" });
-      }
+      const result = await monitorCycle(cycleId, settings);
       await finishCycle(cycleId, "SUCCESS", result);
       return response({ ok: true, status: "SUCCESS", cycle_id: cycleId, result });
     }
     if (action === "scan") {
       settings = await tryAutoResume(settings, cycleId);
-      const result = await runWithContendedLease(
-        LEASE_GATEWAY,
-        "autotrader-scan",
-        () => crypto.randomUUID(),
-        {
-          ttlSeconds: SCAN_LEASE_TTL_SECONDS,
-          renewMs: SCAN_LEASE_RENEW_MS,
-          waitMs: SCAN_LEASE_WAIT_MS,
-          pollMs: SCAN_LEASE_POLL_MS,
-        },
-        () => scanCycle(cycleId, settings),
-      );
-      if (result == null) {
-        await finishCycle(cycleId, "SKIPPED", { reason: "scan lease busy" });
-        return response({ ok: true, status: "SKIPPED", reason: "scan lease busy" });
-      }
+      const result = await scanCycle(cycleId, settings);
       await finishCycle(cycleId, result.skipped ? "SKIPPED" : "SUCCESS", result);
       return response({
         ok: true,
@@ -13120,9 +13223,24 @@ Deno.serve(async (request: Request) => {
     // availability fault. Classifying it as one routes it into the gateway_error_count path
     // that now auto-resumes once things recover, instead of dying silently every cycle.
     const availabilityFailure =
-      /gateway\s+(?:5\d\d)|expired gateway request|fetch failed|network|timeout|timed out|abort|econn|enotfound|socket|502|503|504/i
+      /gateway\s+(?:5\d\d)|expired gateway request|fetch failed|network|timeout|timed out|abort|econn|enotfound|socket|502|503|504|LOAD_SETTINGS_DB|database\s+5\d\d/i
         .test(message);
-    if (availabilityFailure) {
+    const databaseFailure =
+      /LOAD_SETTINGS_DB|database\s+(?:5\d\d|429)|connection timeout|connection terminated/i.test(
+        message,
+      );
+    if (databaseFailure) {
+      // Do not amplify a DB outage by re-reading and PATCHing trading_settings from the error
+      // handler. The next cron invocation re-evaluates after a bounded lease acquisition.
+      console.warn(JSON.stringify({
+        event: "DB_DEGRADED",
+        invocation_id: invocationId,
+        action,
+        db_stage: "cycle",
+        db_error: message,
+        total_runtime_ms: Date.now() - invocationStartedAt,
+      }));
+    } else if (availabilityFailure) {
       const current = await loadSettings().catch(() => ({ gateway_error_count: 0 }));
       const count = 1 + finite(current.gateway_error_count);
       await patch("trading_settings", "id=eq.1", {
@@ -13151,6 +13269,45 @@ Deno.serve(async (request: Request) => {
       ).catch(() => null);
     }
     console.error("market-autotrader failed", error);
+    if (databaseFailure) {
+      return response({
+        ok: true,
+        status: "DB_DEGRADED",
+        action,
+        error: message,
+        invocation_id: invocationId,
+        version: VERSION,
+      });
+    }
     return response({ ok: false, error: message, version: VERSION }, 500);
+  } finally {
+    if (cycleLease) {
+      clearInterval(cycleLease.renew);
+      await rpc("release_trading_lease", {
+        p_name: cycleLease.name,
+        p_owner: cycleLease.owner,
+      }, DB_LIGHT_TIMEOUT_MS).catch((error) =>
+        console.warn(JSON.stringify({
+          event: "LEASE_RELEASE_FAILED",
+          invocation_id: invocationId,
+          action,
+          lease_owner: cycleLease?.owner,
+          db_error: error instanceof Error ? error.message : String(error),
+        }))
+      );
+      console.log(JSON.stringify({
+        event: "EXECUTOR_INVOCATION_FINISHED",
+        invocation_id: invocationId,
+        cron_scheduled_at: cronScheduledAt,
+        started_at: new Date(invocationStartedAt).toISOString(),
+        lease_acquired_at: new Date(cycleLease.acquiredAt).toISOString(),
+        lease_owner: cycleLease.owner,
+        lease_expires_at: new Date(cycleLease.expiresAt).toISOString(),
+        skipped_already_running: false,
+        finished_at: new Date().toISOString(),
+        total_runtime_ms: Date.now() - invocationStartedAt,
+        action,
+      }));
+    }
   }
 });

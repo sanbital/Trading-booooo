@@ -31,7 +31,15 @@ test('the run admits by capacity and the cycle budget, never by a fixed attempt 
   // The wall clock still bounds the run as well: an E1 fast-weak watch can wait per attempt.
   assert.match(run, /Date\.now\(\)>=runDeadline/, 'the run needs a wall-clock bound too');
   const budget = Number(source.match(/const ENTRY_RUN_BUDGET_MS=(\d+);/)[1]);
-  assert.ok(budget > 0 && budget < 60000, `${budget}ms must fit inside the cadence`);
+  const cycleBudget = Number(
+    source.match(/cycleBudgets\.set\(db,createBudget\(\{ms:(\d+),calls:(\d+)\}\)\)/)[1],
+  );
+  assert.ok(
+    budget > 0 && budget < cycleBudget,
+    `${budget}ms entry work must fit inside the ${cycleBudget}ms leased cycle budget`,
+  );
+  assert.match(source, /if\(lock\.data!==true\)\{[\s\S]{0,500}return \{ok:true,skipped:"V17_EXECUTOR_BUSY"\}/,
+    'the 30s scheduler may overlap the 70s run, but the second invocation must fail fast on the execution lease');
 });
 
 test('a symbol never occupies more than one place in the queue', () => {
@@ -648,7 +656,13 @@ test('advancing setups is bounded on the wall clock as well as by queue size', (
   const runBudget = Number(source.match(/const ENTRY_RUN_BUDGET_MS=(\d+);/)[1]);
   assert.ok(budget > 0 && budget < runBudget,
     `${budget}ms of setup work must leave room inside the ${runBudget}ms run budget`);
-  assert.ok(budget + runBudget < 60_000, 'and the two together must fit the cadence');
+  const cycleBudget = Number(
+    source.match(/cycleBudgets\.set\(db,createBudget\(\{ms:(\d+),calls:(\d+)\}\)\)/)[1],
+  );
+  assert.ok(
+    budget + runBudget < cycleBudget,
+    'setup + entry work must fit the leased cycle budget; cron cadence is protected by single-flight',
+  );
   // A setup that misses its turn is NOT dropped: it stays NEW for the next cycle.
   assert.ok(!/setupDeadline[\s\S]{0,200}status:"REJECTED"/.test(run),
     'the budget must never retire a setup it simply had no time for');

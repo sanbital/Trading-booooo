@@ -1,0 +1,98 @@
+name: Release DB single-flight collector 20260930
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'collectors/doa-capture/core.mjs'
+      - 'collectors/doa-capture/worker.mjs'
+      - 'collectors/doa-capture/Dockerfile'
+      - '.github/workflows/release-db-singleflight-collector-20260930.yml'
+permissions:
+  contents: read
+concurrency:
+  group: release-db-singleflight-collector-20260930
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: 0.4.108
+      - name: Build and push exact collector image
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP='sanbital-doa-capture-20260925'
+          IMAGE="registry.fly.io/$APP:${GITHUB_SHA}"
+          flyctl auth docker
+          docker build --build-arg SOURCE_COMMIT="${GITHUB_SHA}" -t "$IMAGE" collectors/doa-capture
+          docker push "$IMAGE"
+      - name: Replace only the existing collector machine image
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const app='sanbital-doa-capture-20260925',sha=process.env.GITHUB_SHA;
+          const image=`registry.fly.io/${app}:${sha}`;
+          const api=async(path='',method='GET',body,nonce)=>{
+            const r=await fetch(`https://api.machines.dev/v1/apps/${app}/machines${path}`,{
+              method,
+              headers:{authorization:'Bearer '+process.env.FLY_API_TOKEN,'content-type':'application/json',
+                ...(nonce?{'fly-machine-lease-nonce':nonce}:{})},
+              ...(body?{body:JSON.stringify(body)}:{}),
+              signal:AbortSignal.timeout(60000)
+            });
+            const text=await r.text();
+            if(!r.ok)throw Error(`MACHINE_HTTP_${r.status}:${text.slice(0,200)}`);
+            return text?JSON.parse(text):null;
+          };
+          const list=await api();
+          if(!Array.isArray(list)||list.length!==1)throw Error('EXPECTED_ONE_COLLECTOR');
+          const before=await api('/'+list[0].id),cfg=before.config??{};
+          if(before.state!=='started')throw Error('COLLECTOR_NOT_STARTED_BEFORE_RELEASE');
+          if(cfg.env?.CAPTURE_ENDPOINT!=='https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/doa-capture-ingest')
+            throw Error('CAPTURE_ENDPOINT_CHANGED');
+          if(!/^[a-f0-9]{64}$/.test(cfg.env?.PROTOCOL_SHA256??''))throw Error('PROTOCOL_ENV_INVALID');
+          const lease=await api('/'+before.id+'/lease','POST',{description:'db-singleflight-'+sha.slice(0,12),ttl:60});
+          const nonce=lease?.data?.nonce;if(!nonce)throw Error('MACHINE_LEASE_MISSING');
+          try{
+            const current=await api('/'+before.id);
+            if(current.instance_id!==before.instance_id)throw Error('CONCURRENT_COLLECTOR_DEPLOY');
+            await api('/'+before.id,'POST',{
+              current_version:before.instance_id,
+              config:{...cfg,image,auto_destroy:false,restart:{policy:'always'}}
+            },nonce);
+          }finally{
+            await api('/'+before.id+'/lease','DELETE',undefined,nonce).catch(()=>null);
+          }
+          await new Promise(r=>setTimeout(r,15000));
+          const after=await api('/'+before.id);
+          if(after.state!=='started'||after.config?.image!==image)throw Error('COLLECTOR_IMAGE_NOT_ACTIVE');
+          if(after.config?.restart?.policy!=='always'||after.config?.auto_destroy===true)
+            throw Error('COLLECTOR_SUPERVISION_NOT_SAFE');
+          console.log(JSON.stringify({collector_id:after.id,state:after.state,image:after.config.image,
+            restart:after.config.restart,auto_destroy:after.config.auto_destroy,source_commit:sha}));
+          NODE
+      - name: Capture post-release collector logs
+        if: always()
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          flyctl logs --app sanbital-doa-capture-20260925 --no-tail 2>&1 | tail -160 | tee collector-release.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: db-singleflight-collector-release
+          path: collector-release.log
+          retention-days: 14
