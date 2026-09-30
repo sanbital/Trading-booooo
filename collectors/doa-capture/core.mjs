@@ -116,6 +116,7 @@ export function retireMarketCapture(s,now){
  *   - a crash or a resource cap -> exit non-zero so the supervisor hands us a fresh process.
  * Jitter keeps a fleet from retrying in lockstep after a shared outage.
  */
+// Production release trigger: collector DB-isolation semantics are unchanged; deploy the already-tested worker bundle.
 export const CONTROL_RECOVERY=Object.freeze({baseMs:1000,maxMs:30000,factor:2,jitter:.25});
 export function controlBackoffMs(failures,policy=CONTROL_RECOVERY,random=Math.random){
   if(!Number.isInteger(failures)||failures<1)return 0;

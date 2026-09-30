@@ -547,7 +547,7 @@ function dbHeaders(extra: Record<string, string> = {}): HeadersInit {
     ...extra,
   };
 }
-const DB_LIGHT_TIMEOUT_MS = 3_000;
+const DB_LIGHT_TIMEOUT_MS = 750;
 const AUTOTRADER_CYCLE_LEASE_TTL_SECONDS = 150;
 const AUTOTRADER_CYCLE_LEASE_RENEW_MS = 30_000;
 
