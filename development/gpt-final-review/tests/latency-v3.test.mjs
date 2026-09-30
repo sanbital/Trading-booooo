@@ -101,6 +101,18 @@ test('virtual protection loop yields after a completed observation; ordinary lea
  assert.ok(events.indexOf('yield-after-protection')>events.indexOf('protection-complete-4'));
  assert.ok(events.indexOf('second-cycle-protection')>events.indexOf('lease-released'));
 });
+test('started GPT review is durably completed before runWithGptReview returns',async()=>{
+ let release,returned=false;const hold=new Promise(r=>release=r),c=service({hold}),db={};setTestCoordinator(db,c);
+ const run=runWithGptReview(db,async()=>{
+   const out=await gptFilterExecutable(db,[candidate()]);
+   return {ok:true,entry:{entered:false,reason:out.reason}};
+ }).then(x=>{returned=true;return x;});
+ await flush();assert.equal(returned,false,'request must remain alive while its started provider call is pending');
+ release();const result=await run;
+ assert.equal(returned,true);assert.equal(c.pending.size,0);
+ assert.equal([...c.store.rows.values()][0].state,'DONE','provider result must reach durable complete before return');
+ assert.equal(result.gptFinalReview?.rechecked,true);
+});
 test('GPT ready hint waits for protection and re-enters through the leased cycle',()=>{
  const path=new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url);
  if(existsSync(path)){
