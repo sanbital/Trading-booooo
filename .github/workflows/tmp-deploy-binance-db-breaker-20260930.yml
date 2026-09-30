@@ -47,7 +47,7 @@ jobs:
           flyctl deploy . --remote-only -a "$FLY_BINANCE_APP_NAME" --config ./fly.binance.toml --ha=false
           flyctl status -a "$FLY_BINANCE_APP_NAME" --json > ../binance-after.json
           node - <<'NODE'
-          const b=require('./binance-before.json'),a=require('./binance-after.json');
+          const b=require('../binance-before.json'),a=require('../binance-after.json');
           const state=x=>x?.Machines?.[0]?.state??x?.machines?.[0]?.state??x?.Status??x?.status;
           console.log(JSON.stringify({gateway:'binance',before_state:state(b),after_state:state(a)}));
           NODE
@@ -64,7 +64,7 @@ jobs:
           flyctl deploy . --remote-only -a "$FLY_APP_NAME" --config ./fly.toml --ha=false
           flyctl status -a "$FLY_APP_NAME" --json > ../upbit-after.json
           node - <<'NODE'
-          const b=require('./upbit-before.json'),a=require('./upbit-after.json');
+          const b=require('../upbit-before.json'),a=require('../upbit-after.json');
           const state=x=>x?.Machines?.[0]?.state??x?.machines?.[0]?.state??x?.Status??x?.status;
           console.log(JSON.stringify({gateway:'upbit',before_state:state(b),after_state:state(a)}));
           NODE
