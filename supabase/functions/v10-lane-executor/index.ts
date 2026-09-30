@@ -2,7 +2,7 @@
 import {storedDynamicReplay} from "../_shared/gpt-final-decision/stored-replay.mjs";
 import {EXIT_AUTHORITY_VERSION,EXIT_CLASS,PROTECTION_ACTIONS,PROTECTION_ARBITRATION_VERSION,exitClass,hardSafetyState,softCandidate,approvedProtection,exitContext,legacySoftOrders,assertExitAuthority,positionGeneration} from "../_shared/exit-authority.mjs";
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
-import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume,gptArmFollowUp,clockReviewDiagnostics,gptClockWakeAt} from "./gpt-final-review-adapter.mjs";
+import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume,gptArmFollowUp,clockReviewDiagnostics,gptClockWakeAt,setImmediateExecutionWake} from "./gpt-final-review-adapter.mjs";
 import {entryQueueWithLateReviews} from "./entry-late-review.mjs";
 import {isLeader20,validEvent,eventExpiry} from "../_shared/leader20/campaign.mjs";
 import {leaderControl,requireEntryAuthority} from "../_shared/leader20/runtime.mjs";
@@ -3282,7 +3282,7 @@ async function qv3AfterProtection(db,p,ctx){
   }
 }
 const exchangeGateway=gateway;
-const leaseOwners=new WeakMap(),cycleBudgets=new WeakMap(),executionDispatchClaims=new WeakMap();
+const leaseOwners=new WeakMap(),cycleBudgets=new WeakMap(),executionDispatchClaims=new WeakMap(),executionWakeQueues=new WeakMap();
 const EXECUTION_LEASE_TTL_SECONDS=150;
 async function verifyExecutionLease(db,allowBudgetExceeded=false){
   if(!allowBudgetExceeded&&cycleBudgets.get(db)?.remaining()===0)throw Error("V18_API_BUDGET_EXHAUSTED");
@@ -3493,6 +3493,27 @@ async function runExecutionDispatchOnly(db,signalId=null){
   return{ok:true,revision:REVISION,patch:PATCH,dispatchMode:"IMMEDIATE_DURABLE_BUY",
     skipped:claim.reason??"EXECUTION_DISPATCH_NOT_CLAIMABLE"};
 }
+/** In-process latency fast path for a durable clock BUY.
+ * The DB outbox remains the authority and pg_net/cron remain crash fallbacks.
+ * One queue per request-scoped DB client serializes account-side order work and prevents
+ * simultaneous BUY callbacks from stampeding the global execution lease/gateway. */
+function queueDurableExecutionWake(db,signalId){
+  let q=executionWakeQueues.get(db);
+  if(!q){q={ids:[],seen:new Set(),task:null};executionWakeQueues.set(db,q);}
+  const id=String(signalId);
+  if(!q.seen.has(id)){q.seen.add(id);q.ids.push(id);}
+  if(!q.task){
+    q.task=(async()=>{
+      while(q.ids.length){
+        const next=q.ids.shift();
+        try{await runExecutionDispatchOnly(db,next);}
+        catch(e){console.error("DURABLE_EXECUTION_WAKE_FAILED",next,String(e?.message??e).slice(0,200));}
+        finally{q.seen.delete(next);}
+      }
+    })().finally(()=>{q.task=null;});
+  }
+  return q.task;
+}
 async function runWithExecutionDispatch(db,signalId=null){
   const dispatched=await runExecutionDispatchOnly(db,signalId);
   if(signalId||dispatched?.skipped!=="NO_READY_EXECUTION")return dispatched;
@@ -3510,6 +3531,9 @@ Deno.serve(async req=>{
     }}
   });
   if(!(await auth(db,req)))return res(401,{ok:false,error:"UNAUTHORIZED"});
+  // Register before any GPT coordinator can be created in this invocation. A durable
+  // clock BUY can therefore wake execution in-process immediately after its DB commit.
+  setImmediateExecutionWake(db,(signalId)=>queueDurableExecutionWake(db,signalId));
   const body=await req.json().catch(()=>({})),mode=String(body.mode||"run").toLowerCase();
   try{
     if(mode==="preflight"||mode==="diagnostic"){
