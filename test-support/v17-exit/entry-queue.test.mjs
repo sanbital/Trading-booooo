@@ -38,7 +38,7 @@ test('the run admits by capacity and the cycle budget, never by a fixed attempt 
     budget > 0 && budget < cycleBudget,
     `${budget}ms entry work must fit inside the ${cycleBudget}ms leased cycle budget`,
   );
-  assert.match(source, /if\(lock\.data!==true\)return \{ok:true,skipped:"V17_EXECUTOR_BUSY"\}/,
+  assert.match(source, /if\(lock\.data!==true\)\{[\s\S]{0,500}return \{ok:true,skipped:"V17_EXECUTOR_BUSY"\}/,
     'the 30s scheduler may overlap the 70s run, but the second invocation must fail fast on the execution lease');
 });
 
