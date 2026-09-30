@@ -1,4 +1,5 @@
 name: Release DB single-flight collector 20260930
+# release-trigger: production incident recovery after Edge DB load shedding
 on:
   push:
     branches: [main]
