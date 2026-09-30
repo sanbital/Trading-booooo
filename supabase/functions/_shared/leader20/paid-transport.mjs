@@ -36,6 +36,16 @@ export function paidTransport(db,{parentKey,purpose,fetchFn=fetch,now=Date.now}=
     await new Promise(resolve=>setTimeout(resolve,100*(attempt+1)));
    }
   };
+  const settleReceipt=async(extra,responseBody,httpStatus)=>{
+   for(let attempt=0;attempt<3;attempt++){
+    const r=await db.rpc('ai_call_settle_receipt',{p_call_key:key,p_owner:owner,p_actual_usd:null,
+     p_usage:extra.p_usage??{},p_request_id:extra.p_request_id??null,p_latency_ms:extra.p_latency_ms??null,
+     p_http_status:httpStatus,p_response:responseBody});
+    if(!r.error)return r.data;
+    if(!['55P03','57014','40001','40P01'].includes(r.error.code)||attempt===2)throw Error('API_LEDGER_RECEIPT_WRITE_FAILED');
+    await new Promise(resolve=>setTimeout(resolve,100*(attempt+1)));
+   }
+  };
   if(init.signal?.aborted){await transition('CANCELLED');throw Error('API_CANCELLED_BEFORE_DISPATCH');}
   await transition('DISPATCHED');
   const start=now();let response;
@@ -48,8 +58,11 @@ export function paidTransport(db,{parentKey,purpose,fetchFn=fetch,now=Date.now}=
    cached_input_tokens:u?.input_tokens_details?.cached_tokens??0}:
    {input_tokens:u?.prompt_tokens,output_tokens:u?.completion_tokens,
     cached_input_tokens:u?.prompt_cache_hit_tokens??u?.prompt_tokens_details?.cached_tokens??0};
-  if([usage.input_tokens,usage.output_tokens,usage.cached_input_tokens].every(x=>Number.isSafeInteger(x)&&x>=0)&&usage.cached_input_tokens<=usage.input_tokens)
-   await transition('SETTLED',{p_usage:usage,p_request_id:raw.id??response.headers.get('x-request-id'),p_latency_ms:now()-start});
+  if([usage.input_tokens,usage.output_tokens,usage.cached_input_tokens].every(x=>Number.isSafeInteger(x)&&x>=0)&&usage.cached_input_tokens<=usage.input_tokens){
+   const settled={p_usage:usage,p_request_id:raw?.id??raw?.request_id??response.headers.get('x-request-id'),p_latency_ms:now()-start};
+   if(response.ok&&raw&&typeof raw==='object')await settleReceipt(settled,raw,response.status);
+   else await transition('SETTLED',settled);
+  }
   else if(provider==='deepseek'&&!response.ok){
    const error=raw?.error??raw??{},clean=x=>typeof x==='string'?x.replace(/[\r\n]+/g,' ').slice(0,240):null;
    const detail=[clean(error.code),clean(error.type),clean(error.message)].filter(Boolean).join(':');
