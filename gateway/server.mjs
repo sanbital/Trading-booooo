@@ -2731,9 +2731,9 @@ if (isMain) {
 }
 
 export {
+  assertOrderEngineVersion,
   autotraderDbBackoffMs,
   autotraderDbCircuitSuppresses,
-  assertOrderEngineVersion,
   binanceFuturesCreateOrder,
   binanceQueryString,
   binanceTradesToFills,
