@@ -373,11 +373,21 @@ export class FinalReviewCoordinator {
    * EdgeRuntime.waitUntil is not a durability boundary: the request must keep the
    * worker alive until a started provider result has reached complete CAS. */
   async drainPending({exclude=null}={}){
-    const tasks=[...this.pending].filter(([key])=>!exclude?.has(key)).map(([,task])=>task);
-    if(!tasks.length)return {count:0,rejected:0};
-    const settled=await Promise.allSettled(tasks),rejected=settled.filter(x=>x.status==='rejected');
-    if(rejected.length)console.error('GPT_PENDING_DRAIN_REJECTED',rejected.length);
-    return {count:tasks.length,rejected:rejected.length};
+    let count=0,rejected=0;
+    // A completed provider attempt may synchronously schedule one bounded recovery
+    // child. Re-read the map after each settle so the durability boundary covers the
+    // whole chain started by this invocation, not only the first snapshot of tasks.
+    for(let round=0;round<8;round++){
+      const tasks=[...this.pending].filter(([key])=>!exclude?.has(key)).map(([,task])=>task);
+      if(!tasks.length)return {count,rejected};
+      count+=tasks.length;
+      const settled=await Promise.allSettled(tasks),bad=settled.filter(x=>x.status==='rejected');
+      rejected+=bad.length;
+      if(bad.length)console.error('GPT_PENDING_DRAIN_REJECTED',bad.length);
+      await Promise.resolve();
+    }
+    console.error('GPT_PENDING_DRAIN_ROUND_LIMIT');
+    return {count,rejected};
   }
   /** Called only AFTER runWithLease has returned, never from the order path. */
   async waitReady(){
