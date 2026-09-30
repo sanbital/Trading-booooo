@@ -38,8 +38,11 @@ test('a DB outage cannot recursively amplify itself through settings telemetry w
 });
 
 test('monitor and scan keep their separate safety lanes while each lane is single-flight',()=>{
-  const monitor=handler.slice(handler.indexOf('if (action === "monitor")'),handler.indexOf('if (action === "scan")'));
-  const scan=handler.slice(handler.indexOf('if (action === "scan")'),handler.indexOf('await finishCycle(cycleId, "FAILED"'));
+  const monitorAt=handler.lastIndexOf('if (action === "monitor")');
+  const scanAt=handler.lastIndexOf('if (action === "scan")');
+  const monitor=handler.slice(monitorAt,scanAt);
+  const scan=handler.slice(scanAt,handler.indexOf('await finishCycle(cycleId, "FAILED"',scanAt));
+  assert.ok(monitorAt>=0&&scanAt>monitorAt);
   assert.ok(monitor.includes('await monitorCycle(cycleId, settings)'));
   assert.equal(monitor.includes('withLease('),false);
   assert.ok(scan.includes('await scanCycle(cycleId, settings)'));
