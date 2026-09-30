@@ -51,4 +51,7 @@ test('a repeatedly failing first candidate cannot starve the rest of the cohort;
  assert.equal(new Set(seen).size,20);
  const held={symbol:'HELDUSDT',roles:['OPEN_POSITION'],lastRestAttemptAt:99999};
  assert.equal(recoveryOrder([...states,held])[0].symbol,'HELDUSDT');
+ const noisy={symbol:'NOISYUSDT',roles:['SCANNER_LEADER'],depthSnapshots:9,lastRestAttemptAt:0};
+ const cold={symbol:'COLDUSDT',roles:['SCANNER_LEADER'],depthSnapshots:0,lastRestAttemptAt:99999};
+ assert.equal(recoveryOrder([noisy,cold])[0].symbol,'COLDUSDT','first snapshot wins over repeated candidate resync');
 });
