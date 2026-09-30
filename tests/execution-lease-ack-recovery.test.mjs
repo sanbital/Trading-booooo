@@ -18,8 +18,8 @@ function harness({lost=false,throws=false,competing=false,cleanupFailures=0}={})
  }};
  const leaseOwners=new WeakMap(),cycleBudgets=new WeakMap();
  const run=async()=>{operations++;return {ok:true};};
- const fn=new Function('run','leaseOwners','cycleBudgets','createBudget','console',body+';return runWithLease;')
-  (run,leaseOwners,cycleBudgets,()=>({remaining:()=>1}),{error:e=>errors.push(e)});
+ const fn=new Function('run','leaseOwners','cycleBudgets','createBudget','console','EXECUTION_LEASE_TTL_SECONDS',body+';return runWithLease;')
+  (run,leaseOwners,cycleBudgets,()=>({remaining:()=>1}),{error:e=>errors.push(e),log:()=>{}},150);
  return {db,fn,stats:()=>({held,operations,releases,errors,tracked:leaseOwners.has(db),budget:cycleBudgets.has(db)})};
 }
 for(const throws of [false,true])test(`uncertain ${throws?'thrown':'returned'} acquisition releases its own unstarted lease`,async()=>{
