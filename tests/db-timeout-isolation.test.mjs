@@ -11,6 +11,30 @@ test('normal lease has one call and busy lease never retries', async () => {
   assert.equal(await acquireCycleLease(async () => { calls++; return false; }, lease), false);
   assert.equal(calls, 2);
 });
+test('an 800 ms lease response completes without retry', async () => {
+  let calls = 0;
+  const start = Date.now();
+  assert.equal(await acquireCycleLease(async () => {
+    calls++;
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    return true;
+  }, lease), true);
+  assert.equal(calls, 1);
+  assert.ok(Date.now() - start >= 800);
+});
+test('concurrent owners cannot both pass a contended lease', async () => {
+  let owner = null;
+  const rpc = async (_name, args) => {
+    if (owner && owner !== args.p_owner) return false;
+    owner = args.p_owner;
+    return true;
+  };
+  const result = await Promise.all([
+    acquireCycleLease(rpc, { ...lease, owner: 'first' }),
+    acquireCycleLease(rpc, { ...lease, owner: 'second' }),
+  ]);
+  assert.deepEqual(result, [true, false]);
+});
 test('lease timeout retries with exactly the same owner and fails closed', async () => {
   const seen = [];
   const rpc = async (_name, args, timeout) => {
