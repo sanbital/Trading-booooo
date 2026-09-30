@@ -82,6 +82,21 @@ test('storage failure cannot produce an actionable wake hint',async()=>{
  const store=new MemoryReviewStore();store.complete=async()=>{throw Error('DB_FAILURE');};const c=service({store}),db={};setTestCoordinator(db,c);
  await gptFilterExecutable(db,[candidate()]);await Promise.all([...c.pending.values()]);assert.equal(gptReviewReadyToResume(db),false);
 });
+test('provider result is durably snapshotted before terminal complete CAS',async()=>{
+ const store=new MemoryReviewStore(),baseComplete=store.complete.bind(store);
+ let completeCalled=false;
+ store.complete=async(...args)=>{completeCalled=true;throw Error('DB_COMPLETE_TIMEOUT');};
+ const c=service({store}),db={};setTestCoordinator(db,c);
+ await gptFilterExecutable(db,[candidate()]);
+ await Promise.allSettled([...c.pending.values()]);
+ assert.equal(completeCalled,true);
+ const row=[...store.rows.values()][0];
+ assert.equal(row.state,'RUNNING');
+ assert.equal(row.record?.result?.origin,'OPENAI_API');
+ assert.ok(row.record?.result?.raw_response,'exact provider-derived response must survive terminal CAS failure');
+ assert.ok(row.record?.result?.request_id);
+ store.complete=baseComplete;
+});
 test('expired PASS cannot interrupt X1 or extend signal validity',async()=>{
  let now=T+1000;const c=service({now:()=>now}),db={};setTestCoordinator(db,c);await gptFilterExecutable(db,[candidate()]);await Promise.all([...c.pending.values()]);now=T+17000;assert.equal(gptReviewReadyToResume(db),false);
 });
