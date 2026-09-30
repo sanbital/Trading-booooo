@@ -77,6 +77,15 @@ test('synthetic delayed snapshot cannot overwrite a newer socket generation',()=
 });
 test('buffer applies in order and stale snapshot cannot silently skip data',()=>{const b=new Book();b.event({...event(11),U:10},1000);b.snapshot(snap);assert.equal(b.last,11);assert.throws(()=>{const c=new Book();c.event(event(20),1000);c.snapshot(snap);},/GAP/);});
 test('depth bands incomplete stay flagged; stale book rejected',()=>{const b=new Book();b.snapshot({lastUpdateId:10,bids:[[99.99,10]],asks:[[100.01,10]]});b.event({...event(11),U:10},1000);assert.equal(b.metrics(1000).coverage_50,false);assert.equal(b.metrics(5000).book_complete,false);});
+test('diff levels outside the finite snapshot boundary do not grow the local book',()=>{
+ const b=new Book();b.snapshot({lastUpdateId:10,bids:[[99,10],[98,10]],asks:[[101,10],[102,10]]},900);
+ b.event({U:11,u:11,pu:10,E:1000,b:[],a:[]},1000);
+ const before=b.bids.size+b.asks.size;
+ b.event({U:12,u:12,pu:11,E:1100,b:[['50','1'],['99.5','1']],a:[['150','1'],['100.5','1']]},1100);
+ assert.equal(b.bids.has(50),false);assert.equal(b.asks.has(150),false);
+ assert.equal(b.bids.has(99.5),true);assert.equal(b.asks.has(100.5),true);
+ assert.equal(b.bids.size+b.asks.size,before+2);
+});
 test('displayed additions/removals measure gross updates, not snapshot net',()=>{const b=new Book();b.snapshot(snap);b.event({...event(11),U:10},1000);b.event({...event(12,11),a:[[101,15]]},1100);b.event({...event(13,12),a:[[101,10]]},1200);assert.equal(b.add,505);assert.equal(b.remove,505);});
 test('VWAP conserves quote, unavailable liquidity returns null',()=>{assert.equal(vwap([[100,1],[110,1]],210),105);assert.equal(vwap([[100,1]],101),null);});
 test('trade gap marks incomplete; duplicate ignored; next full bucket recovers',()=>{const f=new Flow();f.event({a:1,p:100,q:2,T:1000,m:true});f.event({a:1,p:100,q:2,T:1000,m:true});assert.equal(f.sell,200);assert.equal(f.complete,false);f.reset();f.event({a:2,p:100,q:1,T:2000,m:false});assert.equal(f.complete,true);f.event({a:4,p:100,q:1,T:2000,m:true});assert.equal(f.complete,false);});
