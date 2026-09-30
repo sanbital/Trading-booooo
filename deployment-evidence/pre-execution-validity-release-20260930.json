@@ -1,0 +1,17 @@
+{
+  "release_scope": "PRE_EXECUTION_STALE_BUY_ONLY",
+  "baseline_main": "7d06f6adf4d65ef13a5ba8eb4a74e7e9cf2bf7e6",
+  "validation_orders": false,
+  "model_change": false,
+  "strategy_change": false,
+  "leverage_change": false,
+  "slot_change": false,
+  "stop_change": false,
+  "movr_regression": {
+    "gpt_buy_completed_at": "2026-09-30T20:40:40+09:00",
+    "fill_at": "2026-09-30T20:41:32+09:00",
+    "decision_age_ms": 52000,
+    "original_mid": 1.83305,
+    "actual_entry_price": 1.81955
+  }
+}
