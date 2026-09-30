@@ -10,8 +10,11 @@ import {isLeader20,validEvent,eventExpiry,clockAuthorityDeadline} from '../_shar
 import {requireEntryAuthority} from '../_shared/leader20/runtime.mjs';
 import {triggerExpiry} from '../_shared/gpt-final-review/contract.mjs';
 import {CLOCK_FINAL_MIN_BUDGET_MS} from '../_shared/leader20/final.mjs';
-const contexts=new WeakMap();
+const contexts=new WeakMap(),executionWakes=new WeakMap();
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
+export function setImmediateExecutionWake(db,wake){
+  if(typeof wake==='function')executionWakes.set(db,wake);else executionWakes.delete(db);
+}
 /** After lease release, replace only this identity's still-pending lifecycle note.
  * Read fresh features and CAS the whole JSON to avoid overwriting a concurrent cycle.
  * No signal claim, terminalization, order, or historical-row repair is performed here. */
@@ -54,6 +57,7 @@ export function coordinatorFor(db){
     baseline:s=>isLeader20(s)?validEvent(s):baselineAllowedLive(s),
     expiry:s=>isLeader20(s)?eventExpiry(s):triggerExpiry(s),
     onResolved:(s,review)=>recordAsyncReviewOutcome(db,s,review),
+    onDurableAllowed:(s,review)=>executionWakes.get(db)?.(String(s.id),review)??Promise.resolve(null),
     schedule:promise=>{if(globalThis.EdgeRuntime?.waitUntil)EdgeRuntime.waitUntil(promise);else promise.catch(()=>{});}}));
   return contexts.get(db);
 }
