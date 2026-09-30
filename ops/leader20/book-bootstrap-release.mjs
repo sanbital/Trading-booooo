@@ -43,7 +43,7 @@ try{
 let healthy=false;for(let i=0;i<24;i++){
  await sleep(10000);const [c]=await query(`select protocol_sha256,metrics->>'version' version,metrics->>'source_commit' source_commit,
  metrics->'exchange_weight_limit' exchange_weight_limit,extract(epoch from clock_timestamp()-heartbeat_at) age_s from doa_capture.control where id=1`);
- if(c.protocol_sha256===protocol&&c.version==='DOA-CAPTURE-8-CLOCK-BOOTSTRAP'&&c.source_commit===sha&&Number(c.age_s)<25){evidence.collector_verified=c;healthy=true;break;}
+ if(c.protocol_sha256===protocol&&c.version==='DOA-CAPTURE-9-SYMBOL-RESYNC'&&c.source_commit===sha&&Number(c.age_s)<25){evidence.collector_verified=c;healthy=true;break;}
 }if(!healthy)throw Error('COLLECTOR_NOT_HEALTHY');
 const [after]=await query(`select clock_capture_enabled,watch_limit,generation,(select jsonb_agg(to_jsonb(p) order by provider) from ai_provider_limits p) provider_limits from leader20_control where singleton`);
 evidence.after=after;evidence.functions_after=await versions();

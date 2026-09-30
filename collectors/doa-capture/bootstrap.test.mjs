@@ -27,7 +27,7 @@ test('clock REST capacity admits all twenty real depth snapshots without relaxin
   assert.equal(budget.claim(20,at+i*200,limit),true);
   s.book.snapshot({lastUpdateId:100,bids:[[99,5]],asks:[[101,5]]},at+i*200);
   assert.equal(s.book.ready,false,'a snapshot alone still does not prove a continuous book');
-  s.book.event({U:101,u:102,pu:100,E:at+5000,b:[],a:[]},at+5000);
+  s.book.event({U:100,u:102,pu:99,E:at+5000,b:[],a:[]},at+5000);
   assert.equal(completeCaptureInterval({...s,started:at,lastBucket:slot-120000,marketResetAt:at,marketSequenceVerified:true},slot-115000,true),true);
  }
  assert.equal(budget.used.reduce((n,x)=>n+x[1],0),400);

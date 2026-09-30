@@ -1,4 +1,26 @@
 export const VERSION = 'DOA-CAPTURE-9-SYMBOL-RESYNC';
+export const BOOK_STATE=Object.freeze({SYNCED:'SYNCED',UNSYNCED:'UNSYNCED',RESYNCING:'RESYNCING'});
+export function symbolSingleFlight(target,work){
+  if(target.resyncPromise)return target.resyncPromise;
+  const flight=Promise.resolve().then(work).finally(()=>{if(target.resyncPromise===flight)target.resyncPromise=null;});
+  target.resyncPromise=flight;return flight;
+}
+export async function boundedSnapshotResync({fetchSnapshot,applySnapshot,stillCurrent=()=>true,
+  sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms)),maxAttempts=2,retryDelayMs=250}){
+  let failure='SNAPSHOT_UNAVAILABLE';
+  for(let attempt=1;attempt<=maxAttempts;attempt++){
+    try{
+      const snapshot=await fetchSnapshot(attempt);
+      if(!stillCurrent())return {ok:false,stale_generation:true,attempts:attempt,failure_reason:'STALE_SOCKET_GENERATION'};
+      if(!snapshot)throw Error('REST_SNAPSHOT_DEFERRED');
+      const outcome=applySnapshot(snapshot);
+      if(outcome?.status!==BOOK_STATE.UNSYNCED)return {ok:true,snapshot,outcome,attempts:attempt};
+      failure=outcome.reason??'SNAPSHOT_SEQUENCE_FAILED';
+    }catch(error){failure=String(error?.message??error).slice(0,100);}
+    if(attempt<maxAttempts)await sleep(retryDelayMs);
+  }
+  return {ok:false,stale_generation:false,attempts:maxAttempts,failure_reason:failure};
+}
 export function transportFresh(e,receivedAt){const at=Number(e.E??e.T);return Number.isSafeInteger(at)&&Number.isSafeInteger(receivedAt)&&at<=receivedAt+1000&&receivedAt-at<=10000;}
 export const normalizeSymbol=value=>{const s=String(value??'').trim().toUpperCase();return /^[\p{L}\p{N}]{1,24}USDT$/u.test(s)?s:null;};
 export const iso = n => new Date(n).toISOString();
@@ -9,23 +31,41 @@ export function streamURLs(symbol){
 }
 export class Book {
   constructor() { this.reset(); }
-  reset() { this.bids=new Map(); this.asks=new Map(); this.last=null; this.ready=false; this.buffer=[]; this.at=0; this.add=0; this.remove=0; this.bidAdd=0; this.bidRemove=0; this.received=0; this.syncAt=Infinity; }
-  snapshot(s,now=Date.now()) {
-    this.bids=new Map(s.bids.map(([p,q])=>[+p,+q])); this.asks=new Map(s.asks.map(([p,q])=>[+p,+q]));
-    this.last=+s.lastUpdateId; this.ready=false;
-    this.bidBoundary=Math.min(...this.bids.keys()); this.askBoundary=Math.max(...this.asks.keys());
-    const mid=(Math.max(...this.bids.keys())+Math.min(...this.asks.keys()))/2;
-    this.snapshotAt=now;this.snapshotCovered25=this.bidBoundary<=mid*.9975&&this.askBoundary>=mid*1.0025;
-    const pending=this.buffer; this.buffer=[];
-    for (const [e,t] of pending) this.event(e,t);
+  reset(reason='INITIAL_SNAPSHOT') {
+    this.bids=new Map();this.asks=new Map();this.last=null;this.ready=false;this.state=BOOK_STATE.UNSYNCED;
+    this.buffer=[];this.bufferOverflow=false;this.snapshotLoaded=false;this.snapshotAt=0;this.snapshotCovered25=false;
+    this.bidBoundary=undefined;this.askBoundary=undefined;this.at=0;this.received=0;this.syncAt=Infinity;
+    this.add=0;this.remove=0;this.bidAdd=0;this.bidRemove=0;this.lastIncident={reason,gap_detected_at:null,
+      previous_last_update_id:null,incoming_first_update_id:null,incoming_final_update_id:null};
   }
-  event(e,t) {
-    // Before snapshot, retain only the latest20s; a missing bridge still fails closed.
-    if (this.last===null) { if(this.buffer.length>=200)this.buffer.shift(); this.buffer.push([e,t]); return; }
-    // USD-M: discard updates already included in the snapshot; the first
-    // applied diff must span lastUpdateId + 1 (not lastUpdateId).
-    if (+e.u<=this.last) return;
-    if ((!this.ready && !(+e.U<=this.last+1 && +e.u>=this.last+1)) || (this.ready && +e.pu!==this.last)) throw Error('DEPTH_GAP');
+  disposeDepth() {
+    this.bids=new Map();this.asks=new Map();this.last=null;this.ready=false;this.snapshotLoaded=false;
+    this.at=0;this.received=0;this.syncAt=Infinity;this.snapshotAt=0;this.snapshotCovered25=false;
+    this.bidBoundary=undefined;this.askBoundary=undefined;
+    this.add=0;this.remove=0;this.bidAdd=0;this.bidRemove=0;
+  }
+  bufferEvent(e,t) {
+    if(this.buffer.length>=200){this.buffer.shift();this.bufferOverflow=true;}
+    this.buffer.push([e,t]);
+  }
+  markUnsynced(reason,e=null,t=Date.now()) {
+    const incident={reason,gap_detected_at:t,previous_last_update_id:this.last,
+      incoming_first_update_id:Number.isSafeInteger(+e?.U)?+e.U:null,
+      incoming_final_update_id:Number.isSafeInteger(+e?.u)?+e.u:null,
+      incoming_previous_update_id:Number.isSafeInteger(+e?.pu)?+e.pu:null};
+    this.disposeDepth();this.buffer=[];this.bufferOverflow=false;this.state=BOOK_STATE.UNSYNCED;
+    this.lastIncident=incident;if(e)this.bufferEvent(e,t);
+    return {status:BOOK_STATE.UNSYNCED,resync:true,incident};
+  }
+  beginResync(now=Date.now()) {
+    if(this.state===BOOK_STATE.SYNCED)return false;
+    this.state=BOOK_STATE.RESYNCING;this.ready=false;this.resyncStartedAt=now;return true;
+  }
+  failResync(reason) {
+    const buffered=this.buffer;this.disposeDepth();this.buffer=buffered;this.state=BOOK_STATE.UNSYNCED;
+    return {status:BOOK_STATE.UNSYNCED,resync:true,reason};
+  }
+  apply(e,t,countDeltas=true) {
     for(const [side,rows] of [[this.bids,e.b],[this.asks,e.a]]) for(const [p0,q0] of rows) {
       const p=+p0,q=+q0;
       // The REST snapshot defines the finite trustworthy book boundary. Diff events can
@@ -36,13 +76,54 @@ export class Book {
       if(side===this.bids&&p<this.bidBoundary&&!side.has(p))continue;
       if(side===this.asks&&p>this.askBoundary&&!side.has(p))continue;
       const old=side.get(p)||0;
-      if(side===this.asks && this.ready) { this.add+=Math.max(0,q-old)*p; this.remove+=Math.max(0,old-q)*p; }
-      if(side===this.bids && this.ready) { this.bidAdd+=Math.max(0,q-old)*p; this.bidRemove+=Math.max(0,old-q)*p; }
+      if(countDeltas&&side===this.asks) { this.add+=Math.max(0,q-old)*p; this.remove+=Math.max(0,old-q)*p; }
+      if(countDeltas&&side===this.bids) { this.bidAdd+=Math.max(0,q-old)*p; this.bidRemove+=Math.max(0,old-q)*p; }
       if(q===0) side.delete(p); else side.set(p,q);
     }
-    if(this.bids.size+this.asks.size>12000) throw Error('DEPTH_MEMORY_CAP');
-    if(!this.ready)this.syncAt=t;
-    this.last=+e.u; this.at=+e.E; this.received=t; this.ready=true;
+    if(this.bids.size+this.asks.size>12000)throw Error('DEPTH_MEMORY_CAP');
+    this.last=+e.u;this.at=+e.E;this.received=t;
+  }
+  drainBuffered() {
+    if(!this.snapshotLoaded||this.last===null)return {status:BOOK_STATE.RESYNCING,waiting_for_bridge:true};
+    const pending=this.buffer.filter(([e])=>+e.u>=this.last);this.buffer=[];
+    if(!pending.length)return {status:BOOK_STATE.RESYNCING,waiting_for_bridge:true};
+    const [first,firstReceived]=pending[0];
+    // Binance USD-M rule: after discarding u < snapshot.lastUpdateId, the first
+    // processed event must span lastUpdateId. Later events must chain pu == prior u.
+    if(+first.U>this.last || +first.u<this.last){
+      this.buffer=pending;return this.failResync('SNAPSHOT_BRIDGE_MISSING');
+    }
+    let completedAt=Math.max(this.snapshotAt??0,firstReceived);
+    try{
+      this.apply(first,firstReceived,false);
+      for(let i=1;i<pending.length;i++){
+        const [e,t]=pending[i];if(+e.u<=this.last)continue;
+        if(+e.pu!==this.last){this.buffer=pending.slice(i);return this.failResync('BUFFERED_SEQUENCE_MISMATCH');}
+        this.apply(e,t,false);completedAt=Math.max(completedAt,t);
+      }
+    }catch(e){this.buffer=pending;return this.failResync(e.message);}
+    this.state=BOOK_STATE.SYNCED;this.ready=true;this.syncAt=completedAt;
+    return {status:BOOK_STATE.SYNCED,resync_completed_at:completedAt,buffered_event_count:pending.length};
+  }
+  snapshot(s,now=Date.now()) {
+    if(!Number.isSafeInteger(+s?.lastUpdateId)||!Array.isArray(s?.bids)||!Array.isArray(s?.asks))return this.failResync('INVALID_SNAPSHOT');
+    const validSide=rows=>rows.length>0&&rows.every(row=>Array.isArray(row)&&row.length>=2&&Number(row[0])>0&&Number(row[1])>0&&Number.isFinite(Number(row[0]))&&Number.isFinite(Number(row[1])));
+    if(!validSide(s.bids)||!validSide(s.asks))return this.failResync('INVALID_SNAPSHOT');
+    this.bids=new Map(s.bids.map(([p,q])=>[+p,+q])); this.asks=new Map(s.asks.map(([p,q])=>[+p,+q]));
+    this.last=+s.lastUpdateId;this.ready=false;this.state=BOOK_STATE.RESYNCING;this.snapshotLoaded=true;
+    this.bidBoundary=Math.min(...this.bids.keys()); this.askBoundary=Math.max(...this.asks.keys());
+    const bestBid=Math.max(...this.bids.keys()),bestAsk=Math.min(...this.asks.keys());
+    if(bestBid>bestAsk)return this.failResync('CROSSED_SNAPSHOT');
+    const mid=(bestBid+bestAsk)/2;
+    this.snapshotAt=now;this.snapshotCovered25=this.bidBoundary<=mid*.9975&&this.askBoundary>=mid*1.0025;
+    return this.drainBuffered();
+  }
+  event(e,t) {
+    if(this.state!==BOOK_STATE.SYNCED){this.bufferEvent(e,t);return this.state===BOOK_STATE.RESYNCING?this.drainBuffered():{status:BOOK_STATE.UNSYNCED,buffered:true};}
+    if(+e.u<=this.last)return {status:BOOK_STATE.SYNCED,duplicate:true};
+    if(+e.pu!==this.last)return this.markUnsynced('DEPTH_SEQUENCE_MISMATCH',e,t);
+    try{this.apply(e,t,true);return {status:BOOK_STATE.SYNCED};}
+    catch(error){return this.markUnsynced(error.message,e,t);}
   }
   needsCoverageRefresh(now) {
     // A diff book can be fresh but its finite snapshot boundary may have been left
@@ -55,8 +136,12 @@ export class Book {
     if(!(bid>0&&ask>=bid))return false;const mid=(bid+ask)/2;
     return !(this.bidBoundary<=mid*.9975&&this.askBoundary>=mid*1.0025);
   }
+  needsStaleResync(now) {
+    return this.state===BOOK_STATE.SYNCED&&(!Number.isSafeInteger(this.received)||now-this.received>3000||
+      !Number.isSafeInteger(this.at)||now-this.at>10000);
+  }
   metrics(now) {
-    if(!this.ready || now-this.received>3000 || this.at>now || now-this.at>10000) return {book_complete:false,reason:'BOOK_UNSYNCED_OR_STALE'};
+    if(this.state!==BOOK_STATE.SYNCED || !this.ready || now-this.received>3000 || this.at>now || now-this.at>10000) return {book_complete:false,reason:'BOOK_UNSYNCED_OR_STALE'};
     const bids=[...this.bids].sort((a,b)=>b[0]-a[0]),asks=[...this.asks].sort((a,b)=>a[0]-b[0]);
     const bid=bids[0]?.[0],ask=asks[0]?.[0],mid=(bid+ask)/2;
     if(!(bid>0 && ask>=bid)) return {book_complete:false,reason:'CROSSED_OR_EMPTY'};
