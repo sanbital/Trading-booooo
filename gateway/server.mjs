@@ -55,6 +55,8 @@ const SCHEDULER_ENABLED = boolEnv("SCHEDULER_ENABLED", true);
 const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 12, 8, 3600) * 1000;
 const COLD_START_SCAN_MS = integerEnv("LOB_COLD_START_SCAN_SECONDS", 3, 1, 120) * 1000;
 const MONITOR_INTERVAL_MS = integerEnv("AUTO_MONITOR_INTERVAL_SECONDS", 2, 1, 300) * 1000;
+const AUTOTRADER_DB_BREAKER_BASE_MS = 30_000;
+const AUTOTRADER_DB_BREAKER_MAX_MS = 60_000;
 // v5.10.1: 60 -> 180 seconds.
 //
 // The timestamp is stamped when the caller builds the request and checked when it lands.
@@ -83,7 +85,13 @@ const schedulerState = {
   lastScanResult: null,
   lastMonitorResult: null,
   lastError: null,
+  dbCircuitFailures: 0,
+  dbCircuitRetryAt: null,
+  dbCircuitSkips: 0,
 };
+let autotraderDbFailures = 0;
+let autotraderDbRetryAt = 0;
+let autotraderDbProbeRunning = false;
 let binanceTimeOffsetMs = 0;
 let lastBinanceTimeSyncAt = 0;
 // Per-symbol leverage the gateway has already confirmed with the exchange this process
@@ -2524,20 +2532,68 @@ async function callAutotrader(action) {
     clearTimeout(timer);
   }
 }
+function autotraderDbBackoffMs(failures) {
+  if (!Number.isInteger(failures) || failures < 1) return 0;
+  return Math.min(
+    AUTOTRADER_DB_BREAKER_MAX_MS,
+    AUTOTRADER_DB_BREAKER_BASE_MS * 2 ** Math.min(failures - 1, 10),
+  );
+}
+function autotraderDbCircuitSuppresses(now, retryAt, failures, probeRunning = false) {
+  if (!(Number.isFinite(now) && Number.isFinite(retryAt))) return false;
+  return retryAt > now || (failures > 0 && probeRunning);
+}
+function openAutotraderDbCircuit(now = Date.now()) {
+  autotraderDbFailures += 1;
+  const backoffMs = autotraderDbBackoffMs(autotraderDbFailures);
+  autotraderDbRetryAt = now + backoffMs;
+  schedulerState.dbCircuitFailures = autotraderDbFailures;
+  schedulerState.dbCircuitRetryAt = new Date(autotraderDbRetryAt).toISOString();
+  return backoffMs;
+}
+function clearAutotraderDbCircuit() {
+  autotraderDbFailures = 0;
+  autotraderDbRetryAt = 0;
+  schedulerState.dbCircuitFailures = 0;
+  schedulerState.dbCircuitRetryAt = null;
+}
+function autotraderDbFailure(error) {
+  const message = String(error?.message ?? error);
+  return /autotrader\s+5\d\d|abort|fetch failed|network|timeout|timed out|socket/i.test(message);
+}
 async function schedulerTick(kind) {
   const key = kind === "scan" ? "scanRunning" : "monitorRunning";
+  const now = Date.now();
+  if (autotraderDbCircuitSuppresses(now, autotraderDbRetryAt, autotraderDbFailures, autotraderDbProbeRunning)) {
+    schedulerState.dbCircuitSkips += 1;
+    schedulerState[kind === "scan" ? "lastScanResult" : "lastMonitorResult"] = "DB_CIRCUIT_OPEN";
+    return;
+  }
   if (schedulerState[key]) return;
+  if (autotraderDbFailures > 0) autotraderDbProbeRunning = true;
   schedulerState[key] = true;
   try {
     const result = await callAutotrader(kind);
     schedulerState[kind === "scan" ? "lastScanAt" : "lastMonitorAt"] = new Date().toISOString();
     schedulerState[kind === "scan" ? "lastScanResult" : "lastMonitorResult"] = result?.status ||
       "ok";
+    if (result?.status === "DB_DEGRADED") {
+      const backoffMs = openAutotraderDbCircuit();
+      schedulerState.lastError = `${kind}: DB_DEGRADED; retry in ${backoffMs}ms`;
+      return;
+    }
+    clearAutotraderDbCircuit();
     schedulerState.lastError = null;
   } catch (error) {
-    schedulerState.lastError = `${kind}: ${error.message}`;
+    if (autotraderDbFailure(error)) {
+      const backoffMs = openAutotraderDbCircuit();
+      schedulerState.lastError = `${kind}: DB_DEPENDENCY_UNAVAILABLE; retry in ${backoffMs}ms`;
+    } else {
+      schedulerState.lastError = `${kind}: ${error.message}`;
+    }
     console.error("scheduler", kind, error);
   } finally {
+    autotraderDbProbeRunning = false;
     schedulerState[key] = false;
   }
 }
@@ -2685,6 +2741,8 @@ export {
   FUTURES_MIN_ENTRY_MARGIN_USDT,
   GATEWAY_BUILD,
   localRateLimit,
+  autotraderDbBackoffMs,
+  autotraderDbCircuitSuppresses,
   monitorCadenceDelayMs,
   neverPlacedVerdict,
   normalizeBinanceOrder,
