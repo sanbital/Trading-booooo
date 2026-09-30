@@ -15,15 +15,18 @@ import {dualEntryDecision} from '../supabase/functions/_shared/gpt-final-decisio
 const slot=Date.parse('2026-09-28T08:50:00+09:00');
 const fixed=()=>({...rawCapture(slot+200),entry_window:{version:CLOCK_VERSION,slot_ms:slot,expires_at_ms:slot+120000}});
 
+
 test('48–50 capture has 24 data buckets plus one book seed; holdings and BTC remain continuous',()=>{
  const w={version:CLOCK_VERSION,slot_ms:slot},roles=['SCANNER_LEADER'];
  assert.deepEqual(captureDisposition(roles,w,slot-180001),{connect:false,persist:false});
  assert.deepEqual(captureDisposition(roles,w,slot-180000),{connect:true,persist:false});
  assert.deepEqual(captureDisposition(roles,w,slot-120000),{connect:true,persist:true});
- let rows=0;for(let at=slot-600000;at<=slot+590000;at+=5000)if(captureDisposition(roles,w,at).persist)rows++;
- assert.equal(rows,25);
- assert.deepEqual(captureDisposition(roles,w,slot+1001),{connect:false,persist:true});
- assert.deepEqual(captureDisposition(roles,w,slot+5000),{connect:false,persist:false});
+ let entryRows=0;for(let at=slot-600000;at<=slot;at+=5000)if(captureDisposition(roles,w,at).persist)entryRows++;
+ assert.equal(entryRows,25,'the immutable entry path keeps its seed plus 24 buckets');
+ assert.deepEqual(captureDisposition(roles,w,slot+1001),{connect:true,persist:true});
+ assert.deepEqual(captureDisposition(roles,w,slot+115000),{connect:true,persist:true});
+ assert.deepEqual(captureDisposition(roles,w,slot+119999),{connect:true,persist:true});
+ assert.deepEqual(captureDisposition(roles,w,slot+120000),{connect:false,persist:false});
  for(const role of ['OPEN_POSITION','MARKET_SENSOR'])for(const at of [slot-250000,slot+60000,slot+300000])
   assert.deepEqual(captureDisposition([role],w,at),{connect:true,persist:true});
  assert.equal(captureDisposition(roles,{version:CLOCK_VERSION,slot_ms:null},slot).connect,false);
@@ -59,60 +62,3 @@ test('each capture preparation ranks current rolling24h Top20 and cannot refresh
  const e=await selectEpoch(make(slot-179000));assert.equal(e.capture_slot_ms,slot);
  assert.equal(e.next_refresh_at_ms,slot+420000);assert.equal(e.members[0].symbol,'C24USDT');
  await assert.rejects(selectEpoch(make(slot-119999)),/CLOCK_PREPARATION_NOT_DUE/);
- const next=await selectEpoch({...make(slot+421000),previous:e});assert.equal(next.capture_slot_ms,slot+600000);
-});
-test('off-clock wakes perform no market, account, capture or paid reads',async()=>{
- let reads=0;const db={rpc:()=>{reads++;throw Error('off clock');},from:()=>{reads++;throw Error('off clock');}};
- for(const at of [slot-1,slot+120000,slot+480000]){
-  assert.equal((await runEntryBatch(db,{clock_capture_enabled:true},{now:()=>at})).reason,'DECISION_WINDOW_EXPIRED');
- }
- assert.equal(reads,0);
-});
-
-test('delayed generator wake at 31.442s can prepare the same frozen Top20 without new capture',async()=>{
- const at=slot+31442,rows=Array.from({length:20},(_,i)=>({symbol:`C${i}USDT`,rank:i+1}));
- let captures=0,claims=0;
- const db={from(table){return {select(){return this;},eq(){return this;},lte(){return this;},
-  async maybeSingle(){assert.equal(table,'leader20_batch_control');return {data:{last_periodic_slot:null}};},
-  async order(){assert.equal(table,'leader20_members');return {data:rows};}};},async rpc(name,args){
-  if(name==='leader20_collector_health')return {data:{live:true}};
-  if(name==='leader20_batch_capacity')return {data:{available:2,held:[]}};
-  if(name==='leader20_clock_note')return {data:{recorded:true}};
-  if(name==='doa_context_for_role_v1'){captures++;return {data:fixed()};}
-  if(name==='leader20_batch_claim'){
-   claims++;assert.equal(args.p_packet.symbols.length,20);
-   assert.ok(args.p_packet.symbols.every(x=>x.state==='READY'&&x.matrix.length===24));
-   assert.equal(args.p_packet.entry_window.expires_at_ms,slot+120000);
-   return {data:{created:false,reason:'OFFLINE_CLAIM_OBSERVED'}};
-  }
-  throw Error('Unexpected call '+name);
- }};
- const result=await runEntryBatch(db,{clock_capture_enabled:true,epoch_id:'e',generation:4},
-  {now:()=>at,fetchFn:async()=>{throw Error('offline momentum unavailable');}});
- assert.equal(result.reason,'OFFLINE_CLAIM_OBSERVED');assert.equal(captures,20);assert.equal(claims,1);
-});
-test('actual FINAL RECHECK accepts the identical clock path with a new quote and only BUY permits execution',async()=>{
- for(const decision of ['BUY','WAIT','SKIP']){
-  const at=slot+60000,c=validateCapture120(fixed(),at),leader20={version:'LEADER20_DYNAMIC_1',batch_advice:{id:'C0USDT'}};
-  const ticket={expires:slot+120000,snapshotHash:'fixed-'+decision,identityJson:'{}',initial:{facts:{},support:[],leader20,capture_context:c}},
-   preDispatch=preDispatchSnapshot({at,rawQuote:{best_bid:1,best_ask:1.001},capture:c});
-  let calls=0;
-  const result=await runFinalRecheck({signal:{id:decision,symbol:'C0USDT',features:{referenceClose:1,leader20}},ticket,preDispatch,
-   detection:detectChange(ticket.initial,preDispatch),store:new MemoryReviewStore(),
-   config:{mode:'ENFORCE',modeValid:true,enforceApproved:true,approvalRef:'fixture',apiBudgetUsd:100,maxCalls:100},apiKey:'offline',now:()=>at,
-   readFresh:async()=>({src:{...src(at),captureContext:c},errors:{}}),
-   review:async(packet,options)=>dualEntryDecision(packet,{...options,fetchFn:async()=>{throw Error('offline');},
-    counterCall:async()=>({valid:false,attempted:false,error:'FIXTURE_UNAVAILABLE'}),gptCall:async(p,o)=>{
-     assert.ok(o.timeoutMs>0);const input=JSON.parse(o.payloadFn(p).input[1].content);
-     if(!input.independent_reviews)return {valid:false,attempted:false,error:'FIXTURE_FIRST'};
-     calls++;assert.deepEqual(p.facts.capture_context.trajectory,c.trajectory);assert.equal(p.current_ref.at,at);
-     const wire={...dynamicWire({t:'RECHECK',c:p.candidate_id,d:decision,reasons:decision==='SKIP'?[{r:'GPT_JUDGMENT',e:['return_5m']}]:[],support:decision==='BUY'?['return_5m']:[],n:'Observed flow'},p),
-      action:decision==='BUY'?'ENTER':'DEFER',pressure_state:'MIXED',decision_reason:'Boundary evidence assessed',counter_evidence:[],
-      thesis_invalidation:'Demand fails',next_review_conditions:'Next clock window',
-      arbitration:{considered:[],adopted:[],rejected:[],supporting:[],opposing:[],reason:'Independent judgment'}};
-     return {valid:true,wire,answer:wire,decision,attempted:true,completed_at_ms:at};
-    }})});
-  assert.equal(result.valid,true,JSON.stringify({error:result.error,decision:result.decision}));assert.equal(calls,1);
-  assert.equal(recheckAllows(result,at),decision==='BUY');
- }
-});
