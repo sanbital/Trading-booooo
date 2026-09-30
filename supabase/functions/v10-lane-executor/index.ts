@@ -3486,12 +3486,16 @@ async function executeClaimedDispatch(db,row,owner){
   }catch(e){error=String(e?.message??e);throw e;}
   finally{await finishExecutionDispatch(db,claim,result,error);executionDispatchClaims.delete(db);}
 }
-async function runWithExecutionDispatch(db,signalId=null){
+async function runExecutionDispatchOnly(db,signalId=null){
   const owner=crypto.randomUUID(),claim=await claimExecutionDispatch(db,{signalId,owner,
     minRemainingMs:ENTRY_ATTEMPT_RESERVE.ms});
   if(claim.claimed===true&&claim.row)return await executeClaimedDispatch(db,claim.row,owner);
-  if(signalId)return{ok:true,revision:REVISION,patch:PATCH,dispatchMode:"IMMEDIATE_DURABLE_BUY",
+  return{ok:true,revision:REVISION,patch:PATCH,dispatchMode:"IMMEDIATE_DURABLE_BUY",
     skipped:claim.reason??"EXECUTION_DISPATCH_NOT_CLAIMABLE"};
+}
+async function runWithExecutionDispatch(db,signalId=null){
+  const dispatched=await runExecutionDispatchOnly(db,signalId);
+  if(signalId||dispatched?.skipped!=="NO_READY_EXECUTION")return dispatched;
   return await runWithGptReview(db,runWithLease);
 }
 Deno.serve(async req=>{
@@ -3587,8 +3591,12 @@ Deno.serve(async req=>{
       const signalId=String(body.signalId??"");
       if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(signalId))
         return res(400,{ok:false,revision:REVISION,patch:PATCH,error:"SIGNAL_ID"});
-      return res(200,await runWithExecutionDispatch(db,signalId));
+      return res(200,await runExecutionDispatchOnly(db,signalId));
     }
+    // Dedicated durable-outbox sweeper: claim at most one READY BUY and never fall
+    // through into the long GPT/position cycle. Atomic SQL claim keeps this idempotent
+    // with the per-BUY wakeup and the ordinary 30s executor.
+    if(mode==="execute-ready-any")return res(200,await runExecutionDispatchOnly(db));
     if(!["run","live"].includes(mode))return res(400,{ok:false,revision:REVISION,patch:PATCH,error:"MODE_UNSUPPORTED"});
     return res(200,await runWithExecutionDispatch(db));
   }catch(e){
