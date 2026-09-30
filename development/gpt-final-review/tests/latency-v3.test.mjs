@@ -113,6 +113,17 @@ test('started GPT review is durably completed before runWithGptReview returns',a
  assert.equal([...c.store.rows.values()][0].state,'DONE','provider result must reach durable complete before return');
  assert.ok(result?.entry,'run completes only after the durable review is consumable');
 });
+test('started GPT review is drained even when the entry path returns another reason',async()=>{
+ let release,returned=false;const hold=new Promise(r=>release=r),c=service({hold}),db={};setTestCoordinator(db,c);
+ const run=runWithGptReview(db,async()=>{
+   await gptFilterExecutable(db,[candidate()]);
+   return {ok:true,entry:{entered:false,reason:'V17_NO_ENTRY'}};
+ }).then(x=>{returned=true;return x;});
+ await flush();assert.equal(returned,false,'a non-pending entry reason must not orphan a started paid review');
+ release();const result=await run;
+ assert.equal(returned,true);assert.equal(result.entry.reason,'V17_NO_ENTRY');
+ assert.equal(c.pending.size,0);assert.equal([...c.store.rows.values()][0].state,'DONE');
+});
 test('GPT ready hint waits for protection and re-enters through the leased cycle',()=>{
  const path=new URL('../../../supabase/functions/v10-lane-executor/index.ts',import.meta.url);
  if(existsSync(path)){
