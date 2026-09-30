@@ -372,10 +372,12 @@ export class FinalReviewCoordinator {
    * This does not start a new review and does not extend any authority deadline.
    * EdgeRuntime.waitUntil is not a durability boundary: the request must keep the
    * worker alive until a started provider result has reached complete CAS. */
-  async drainPending(){
-    const tasks=[...this.pending.values()];
-    if(!tasks.length)return;
-    await Promise.allSettled(tasks);
+  async drainPending({exclude=null}={}){
+    const tasks=[...this.pending].filter(([key])=>!exclude?.has(key)).map(([,task])=>task);
+    if(!tasks.length)return {count:0,rejected:0};
+    const settled=await Promise.allSettled(tasks),rejected=settled.filter(x=>x.status==='rejected');
+    if(rejected.length)console.error('GPT_PENDING_DRAIN_REJECTED',rejected.length);
+    return {count:tasks.length,rejected:rejected.length};
   }
   /** Called only AFTER runWithLease has returned, never from the order path. */
   async waitReady(){
