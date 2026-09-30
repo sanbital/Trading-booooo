@@ -1,0 +1,61 @@
+name: Temporary deploy Binance DB breaker 20260930
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/tmp-deploy-binance-db-breaker-20260930.yml'
+permissions:
+  contents: read
+concurrency:
+  group: deploy-binance-order-gateway
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test and stage exact main gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "2ccedb70052ded18d007459c71426d74e552185e"
+          node --check gateway/server.mjs
+          node --test gateway/server.test.mjs
+          node gateway/patch-trade-history.mjs
+          node gateway/stage-engine.mjs
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: 0.4.108
+      - name: Deploy only the existing Binance gateway
+        working-directory: gateway
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$FLY_BINANCE_APP_NAME"
+          flyctl status -a "$FLY_BINANCE_APP_NAME" --json > ../binance-before.json
+          flyctl deploy . --remote-only -a "$FLY_BINANCE_APP_NAME" --config ./fly.binance.toml --ha=false
+          flyctl status -a "$FLY_BINANCE_APP_NAME" --json > ../binance-after.json
+          node - <<'NODE'
+          const b=require('./binance-before.json'),a=require('./binance-after.json');
+          const state=x=>x?.Machines?.[0]?.state??x?.machines?.[0]?.state??x?.Status??x?.status;
+          console.log(JSON.stringify({before_state:state(b),after_state:state(a)}));
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: binance-db-breaker-release
+          path: |
+            binance-before.json
+            binance-after.json
+          retention-days: 14
