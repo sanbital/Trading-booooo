@@ -18,7 +18,7 @@ test('recurring autotrader cycles acquire their lease before settings and never 
 });
 
 test('lightweight DB admission and settings reads are bounded separately from executor/AI timeouts',()=>{
-  assert.match(src,/const DB_LIGHT_TIMEOUT_MS = 3_000;/);
+  assert.match(src,/const DB_LIGHT_TIMEOUT_MS = 750;/);
   assert.match(src,/AUTOTRADER_CYCLE_LEASE_TTL_SECONDS = 150/);
   assert.match(src,/AUTOTRADER_CYCLE_LEASE_RENEW_MS = 30_000/);
   assert.match(src,/trading_settings\?id=eq\.1&select=\*", \{\}, DB_LIGHT_TIMEOUT_MS/);
