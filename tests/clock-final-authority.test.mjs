@@ -60,6 +60,13 @@ test('NMR original 22:10 BUY -> actual coordinator -> safety -> real IOC dispatc
  assert.ok(!JSON.stringify(step.record).includes('RC_BATCH_CAPTURE_NOT_ADVANCED'));
 });
 
+test('clock BUY execution never depends on stale DB account snapshots',()=>{
+ const source=readFileSync(new URL('../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
+ assert.match(source,/clockFinalAuthority\?Promise\.resolve\(null\):\(E1_ENABLED\?snap\(db\)/);
+ assert.match(source,/sn=dispatchSnap\?\?finalCheck\.pf/);
+ assert.match(source,/clockFinalAuthority\?Promise\.resolve\(null\):snap\(db\)/);
+ assert.match(source,/retrySnap\?\?retryPair\.pf/);
+});
 test('clock expiry is absolute, including retry/superseding parameters and a fresh quote',async()=>{
  const f=await nmrClockFinal();f.setNow(f.ticket.expires-1);assert.equal(f.c.check(f.s).allowed,true);
  f.setNow(f.ticket.expires);
