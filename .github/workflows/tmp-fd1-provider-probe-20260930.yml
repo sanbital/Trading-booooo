@@ -1,0 +1,65 @@
+name: Temporary FD1 provider probe 20260930
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/tmp-fd1-provider-probe-20260930.yml'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Run order-free GPT DeepSeek and FINAL probes
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PGCONNECT_TIMEOUT=5 PGOPTIONS='-c statement_timeout=8000'
+          token="$(psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 -c "select token from public.edge_internal_tokens where name='v10-lane-executor'")"
+          test -n "$token"
+          echo "::add-mask::$token"
+          base="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/v10-lane-executor"
+          runid="recovery-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          curl -fsS --max-time 90 "$base"             -H 'content-type: application/json' -H "x-v10-executor-token: $token"             --data "{"mode":"fd1-exit-probe","symbol":"BTCUSDT","runId":"$runid-exit"}"             > exit-probe.json
+          curl -fsS --max-time 90 "$base"             -H 'content-type: application/json' -H "x-v10-executor-token: $token"             --data "{"mode":"fd1-recheck-probe","symbol":"BTCUSDT","fixture":"LIVE","runId":"$runid-final"}"             > final-probe.json
+          node - <<'NODE'
+          const fs=require('fs');
+          const exit=JSON.parse(fs.readFileSync('exit-probe.json'));
+          const final=JSON.parse(fs.readFileSync('final-probe.json'));
+          const safeExit={
+            ok:exit.ok,orderCalls:exit.orderCalls,release:exit.release,
+            gpt:{valid:exit.gpt?.valid,decision:exit.gpt?.decision,error:exit.gpt?.error,latency_ms:exit.gpt?.latency_ms},
+            deepseek:{valid:exit.deepseek?.valid,model:exit.deepseek?.model,error:exit.deepseek?.error,
+              completed_at_ms:exit.deepseek?.completed_at_ms},
+            identicalPacket:exit.identicalPacket
+          };
+          const p=final.probe??final;
+          const safeFinal={
+            ok:final.ok,orderCalls:final.orderCalls??p.orderCalls,
+            triggered:p.recheck_triggered??p.finalRecheck?.recheck_triggered??null,
+            initial:p.initial?.decision??p.initialDecision??null,
+            final:p.final?.decision??p.finalDecision??null,
+            error:p.error??p.final?.error??null,
+            latency_ms:p.final?.latency_ms??p.finalLatencyMs??null
+          };
+          console.log(JSON.stringify({exit:safeExit,final:safeFinal},null,2));
+          if(exit.orderCalls!==0 || (final.orderCalls??p.orderCalls)!==0) process.exit(2);
+          if(exit.gpt?.valid!==true || exit.deepseek?.valid!==true || exit.identicalPacket!==true) process.exit(3);
+          if(final.ok!==true) process.exit(4);
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fd1-provider-probe
+          path: |
+            exit-probe.json
+            final-probe.json
+          retention-days: 3
