@@ -33,6 +33,10 @@ const clockTraces=new WeakMap();
 export function clockExecutionTrace(ticket){
  if(!clockTraces.has(ticket))clockTraces.set(ticket,{gpt_completed_at:ticket.clockFinalAuthority?.completed_at_ms,
   gpt_buy_completed_at:ticket.clockFinalAuthority?.completed_at_ms,
+  pre_execution_check_at:null,pre_execution_check_latency_ms:null,decision_age_ms:null,original_snapshot_at:ticket.initial?.snapshotAt??null,
+  latest_snapshot_at:null,new_buckets_since_buy:null,price_drift_bps:null,spread_delta_bps:null,
+  slippage_delta_bps:null,validity_result:null,validity_reasons:[],gpt_recheck_attempted:false,
+  gpt_recheck_result:'NOT_ATTEMPTED',gpt_recheck_latency_ms:null,order_sent_at:null,fill_at:null,
   old_quote_used:false,quote_refresh_attempts:0,quote_requests:0});
  return clockTraces.get(ticket);
 }
@@ -189,7 +193,7 @@ export async function clockExecutionStep(db,s,ticket,readQuote,{now=Date.now,seq
   proceed=final.valid===true&&final.decision==='KEEP_BUY'&&now()<final.valid_until_ms;
   reason=proceed?'PRE_EXECUTION_GPT_KEEP_BUY':'PRE_EXECUTION_GPT_CANCEL_OR_ERROR:'+gptResult;}
  const record=clockExecutionRecord(ticket,quote,safety,at,sequence,validity,final),trace=clockExecutionTrace(ticket);
- Object.assign(trace,{pre_execution_check_at:at,decision_age_ms:validity.decision_age_ms,
+ Object.assign(trace,{pre_execution_check_at:at,pre_execution_check_latency_ms:at-checkedAt,decision_age_ms:validity.decision_age_ms,
   original_snapshot_at:validity.original_snapshot_at,latest_snapshot_at:validity.latest_snapshot_at,
   new_buckets_since_buy:validity.new_buckets_since_buy,price_drift_bps:validity.price_drift_bps,
   spread_delta_bps:validity.spread_delta_bps,slippage_delta_bps:validity.slippage_delta_bps,
