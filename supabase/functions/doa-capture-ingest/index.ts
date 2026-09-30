@@ -2,6 +2,7 @@
 import {createHandler} from './handler.mjs';
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import {maintainArchive,ARCHIVE_BUCKET} from './archive.mjs';
+import {createTokenReader} from './token-read.mjs';
 const base=Deno.env.get('SUPABASE_URL')!;
 const key=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const client=createClient(base,key,{auth:{persistSession:false,autoRefreshToken:false},
@@ -26,8 +27,8 @@ const storage={
  async download(path:string){const r=await bucket.download(path);if(r.error||!r.data)throw Error('ARCHIVE_DOWNLOAD');return new Uint8Array(await r.data.arrayBuffer());},
  async remove(path:string){const r=await bucket.remove([path]);if(r.error&&Number(('statusCode' in r.error?r.error.statusCode:undefined))!==404)throw Error('ARCHIVE_DELETE');},
 };
-const DB_LIGHT_TIMEOUT_MS=3000,DB_RPC_TIMEOUT_MS=5000,DB_HEAVY_TIMEOUT_MS=10000,TOKEN_CACHE_MS=30000;
-let tokenCache:{token:string|null,expires:number}|null=null;
+// The collector's outer request deadline is 12 seconds; two read attempts stay below it.
+const DB_LIGHT_TIMEOUT_MS=4500,DB_RPC_TIMEOUT_MS=5000,DB_HEAVY_TIMEOUT_MS=10000;
 async function db(path:string,body?:unknown,timeoutMs=DB_RPC_TIMEOUT_MS) {
   const started=performance.now();
   try{
@@ -39,13 +40,8 @@ async function db(path:string,body?:unknown,timeoutMs=DB_RPC_TIMEOUT_MS) {
     throw error;
   }
 }
-async function getToken(){
-  const now=Date.now();
-  if(tokenCache&&tokenCache.expires>now&&tokenCache.token)return tokenCache.token;
-  const token=(await db('edge_internal_tokens?name=eq.doa-capture&select=token&limit=1',undefined,DB_LIGHT_TIMEOUT_MS))[0]?.token??null;
-  tokenCache={token,expires:now+TOKEN_CACHE_MS};
-  return token;
-}
+const getToken=createTokenReader(async()=>
+  (await db('edge_internal_tokens?name=eq.doa-capture&select=token&limit=1',undefined,DB_LIGHT_TIMEOUT_MS))[0]?.token??null);
 Deno.serve(createHandler({
  getToken,
  invoke:(action:string,body:any)=>action==='release'?db('rpc/doa_capture_release',{p_worker_id:String(body?.worker_id??'')},DB_LIGHT_TIMEOUT_MS):db('rpc/doa_capture_rpc',{p_action:action,p_body:body},DB_RPC_TIMEOUT_MS),

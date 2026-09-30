@@ -152,6 +152,7 @@ import {
   P10_SCAN_PORTFOLIO_CONCURRENCY,
 } from "./monitor-concurrency.ts";
 import { shouldLoadCompletedPolicyBar } from "./p10-monitor-cadence.ts";
+import { acquireCycleLease } from "./cycle-lease-retry.mjs";
 import { observeV17EntrySettlement } from "./v17-entry-settlement-observation.mjs";
 import {
   dedupeP10LinkedFills,
@@ -547,7 +548,9 @@ function dbHeaders(extra: Record<string, string> = {}): HeadersInit {
     ...extra,
   };
 }
-const DB_LIGHT_TIMEOUT_MS = 750;
+// Successful lease requests were p99 ~400 ms before the DB connection outage.
+// Two 1.8 s attempts plus a short pause fit inside the 30 s executor cadence.
+const DB_LIGHT_TIMEOUT_MS = 1800;
 const AUTOTRADER_CYCLE_LEASE_TTL_SECONDS = 150;
 const AUTOTRADER_CYCLE_LEASE_RENEW_MS = 30_000;
 
@@ -12805,11 +12808,12 @@ Deno.serve(async (request: Request) => {
       const leaseStartedAt = performance.now();
       let acquired = false;
       try {
-        acquired = await rpc("acquire_trading_lease", {
-          p_name: leaseName,
-          p_owner: owner,
-          p_seconds: AUTOTRADER_CYCLE_LEASE_TTL_SECONDS,
-        }, DB_LIGHT_TIMEOUT_MS) === true;
+        acquired = await acquireCycleLease(rpc, {
+          name: leaseName,
+          owner,
+          ttlSeconds: AUTOTRADER_CYCLE_LEASE_TTL_SECONDS,
+          timeoutMs: DB_LIGHT_TIMEOUT_MS,
+        });
       } catch (error) {
         console.warn(JSON.stringify({
           event: "DB_DEGRADED",
