@@ -208,7 +208,12 @@ const timer=setInterval(()=>{
     overResourceCap:process.memoryUsage().rss>230000000||(!production&&now-boot>14*86400000)});
   if(decided.action==='exit'){
     clearInterval(timer);for(const s of states.values()){s.socket?.close();s.marketSocket?.close();}
-    log('STOPPED',{reason:decided.reason});setTimeout(()=>process.exit(decided.code),1000);return;}
+    // Normal release must not leave the replacement worker blind behind the 90s
+    // crash-recovery lease. Ownership is checked server-side; a stale worker cannot
+    // release another collector's lease.
+    void api('release').then(x=>log('LEASE_RELEASED',{released:x.released===true}))
+      .catch(e=>log('LEASE_RELEASE_FAILED',{reason:e.message}));
+    log('STOPPED',{reason:decided.reason});setTimeout(()=>process.exit(decided.code),1500);return;}
   if(decided.action==='idle'){
     // Hold no streams and persist nothing, but keep asking: authority can come back.
     if(!idleSince){idleSince=now;for(const [symbol,st] of states){st.socket?.close();st.marketSocket?.close();states.delete(symbol);}
