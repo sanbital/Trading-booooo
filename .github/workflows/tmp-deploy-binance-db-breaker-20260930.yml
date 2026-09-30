@@ -49,7 +49,24 @@ jobs:
           node - <<'NODE'
           const b=require('./binance-before.json'),a=require('./binance-after.json');
           const state=x=>x?.Machines?.[0]?.state??x?.machines?.[0]?.state??x?.Status??x?.status;
-          console.log(JSON.stringify({before_state:state(b),after_state:state(a)}));
+          console.log(JSON.stringify({gateway:'binance',before_state:state(b),after_state:state(a)}));
+          NODE
+      - name: Deploy only the existing Tokyo Upbit gateway
+        working-directory: gateway
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$FLY_APP_NAME"
+          flyctl status -a "$FLY_APP_NAME" --json > ../upbit-before.json
+          flyctl deploy . --remote-only -a "$FLY_APP_NAME" --config ./fly.toml --ha=false
+          flyctl status -a "$FLY_APP_NAME" --json > ../upbit-after.json
+          node - <<'NODE'
+          const b=require('./upbit-before.json'),a=require('./upbit-after.json');
+          const state=x=>x?.Machines?.[0]?.state??x?.machines?.[0]?.state??x?.Status??x?.status;
+          console.log(JSON.stringify({gateway:'upbit',before_state:state(b),after_state:state(a)}));
           NODE
       - uses: actions/upload-artifact@v4
         if: always()
@@ -58,4 +75,6 @@ jobs:
           path: |
             binance-before.json
             binance-after.json
+            upbit-before.json
+            upbit-after.json
           retention-days: 14
