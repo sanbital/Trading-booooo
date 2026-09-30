@@ -15,5 +15,9 @@ export function restWeightLimit(window,states,now,exchangeLimit){
 /** Held exits keep priority; repeated failures cannot monopolize candidate startup. */
 export function recoveryOrder(states){
  return [...states].sort((a,b)=>Number(!a.roles?.includes('OPEN_POSITION'))-Number(!b.roles?.includes('OPEN_POSITION'))||
+  // A newly watched symbol must get its first authoritative snapshot before another
+  // candidate consumes a second/third resync. This preserves the same REST ceiling
+  // while preventing one noisy symbol from starving cold Top20 members.
+  Number((a.depthSnapshots??0)>0)-Number((b.depthSnapshots??0)>0)||
   (a.lastRestAttemptAt??0)-(b.lastRestAttemptAt??0));
 }
