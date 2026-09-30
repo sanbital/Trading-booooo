@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 import {BATCH_INTERVAL_MS} from '../supabase/functions/_shared/leader20/batch.mjs';
 const migration=new URL('../supabase/migrations/20260928012054_leader20_batch_provider_ledger.sql',import.meta.url);
-const terminalMigration=new URL('../supabase/migrations/20260930115548_deepseek_terminal_failure_settlement.sql',import.meta.url);
+const terminalMigration=new URL('../supabase/migrations/20260930120306_deepseek_terminal_failure_settlement.sql',import.meta.url);
 test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
  const {PGlite}=await import(pathToFileURL(process.env.PGLITE_MODULE).href), db=new PGlite();t.after(()=>db.close());
  await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;

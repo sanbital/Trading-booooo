@@ -1,4 +1,4 @@
--- A received non-2xx provider response is a terminal, non-billable call when it
+-- A received non-2xx provider response is terminal and non-billable when it
 -- carries no usage. Allow that dispatched reservation to be cancelled while
 -- preserving UNKNOWN for pre-header timeouts and HTTP 200 responses without usage.
 create or replace function public.ai_call_transition(p_key text,p_owner uuid,p_state text,
