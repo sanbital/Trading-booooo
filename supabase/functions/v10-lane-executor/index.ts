@@ -1311,16 +1311,19 @@ if(E1_ENABLED&&!isLeader20(s)){
 // hand. Re-introducing an await between the quote read and the dispatch check is
 // exactly the defect this fixes; see booGateInputs for the production evidence.
 await requireLeaderEntryControls(db);
-const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuoteRead,dispatchCapture]=await Promise.all([
+const dispatchFlowEnd=Date.now();
+const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuoteRead,dispatchCapture,dispatchTape]=await Promise.all([
   readOpsPair(db,undefined,s.symbol),
   gateway({action:"v18_open_orders"},5000),
   E1_ENABLED?snap(db):Promise.resolve(sn),
   booGateInputs(db,s),
   attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q),
-  executionCapture(attempt.gptFinalReview,s.symbol,Date.now())]),finalCheck=rawFinalCheck;
+  executionCapture(attempt.gptFinalReview,s.symbol,Date.now()),
+  attempt.gptFinalReview?.clockFinalAuthority?fetchE1AggTrades(s.symbol,dispatchFlowEnd-10000,dispatchFlowEnd):Promise.resolve(null)]),finalCheck=rawFinalCheck;
 const clockQuote=attempt.gptFinalReview?.clockFinalAuthority?await readClockExecutionQuote(s,attempt.gptFinalReview,ms=>gateway({action:"quote",market:s.symbol},ms)):null;
 const dispatchQuote=clockQuote?clockQuote.quote:dispatchQuoteRead;
-attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:dispatchCapture,dispatch_quote:dispatchQuote};
+attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:dispatchCapture,
+  dispatch_tape:dispatchTape,dispatch_quote:dispatchQuote};
 const dispatchDynamic=clockQuote&&!clockQuote.safety.ok?clockQuote.safety:executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
 attempt.finalRecheck.dispatch_dynamic=dispatchDynamic;
 if(!dispatchDynamic.ok){
@@ -1458,7 +1461,8 @@ const first=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:1,quantity:siz
   payload:{...baseIntentPayload,ioc_attempt_evidence:firstEvidence},
   authorize:()=>attempt.gptFinalReview?.clockFinalAuthority?
     authorizeClockExecution(s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),
-      ()=>gptFinalCheck(db,s,attempt.finalRecheck)):gptFinalCheck(db,s,attempt.finalRecheck)});
+      ()=>gptFinalCheck(db,s,attempt.finalRecheck),{readTape:(startAt,endAt)=>fetchE1AggTrades(s.symbol,startAt,endAt)}):
+    gptFinalCheck(db,s,attempt.finalRecheck)});
 if(first.blocked)return await finishPartialOrAbort(first.reason,{executionAttempts:0});
 const retryArmed=gptConfirmFirstFinality(db,retryAuthority,first);
 lastEvidence=first.evidence;lastReceipt=first.receipt;
@@ -1510,13 +1514,16 @@ if(!retryRecheck.proceed)return await finishPartialOrAbort(retryRecheck.reason,{
 
 // FINAL BUY can take seconds. Re-read every execution-safety input after the answer.
 await requireLeaderEntryControls(db);
-const[retryPair,retryOrders,retrySnap,retryQuoteRead,retryInfo,retryCapture]=await Promise.all([
+const retryFlowEnd=Date.now();
+const[retryPair,retryOrders,retrySnap,retryQuoteRead,retryInfo,retryCapture,retryDispatchTape]=await Promise.all([
   readOpsPair(db,undefined,s.symbol),gateway({action:"v18_open_orders"},5000),snap(db),
   attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):gateway({action:"quote",market:s.symbol},3000),
-  gateway({action:"symbol_info",market:s.symbol},3000),executionCapture(attempt.gptFinalReview,s.symbol,Date.now())]);
+  gateway({action:"symbol_info",market:s.symbol},3000),executionCapture(attempt.gptFinalReview,s.symbol,Date.now()),
+  attempt.gptFinalReview?.clockFinalAuthority?fetchE1AggTrades(s.symbol,retryFlowEnd-10000,retryFlowEnd):Promise.resolve(null)]);
 const retryClockQuote=attempt.gptFinalReview?.clockFinalAuthority?await readClockExecutionQuote(s,attempt.gptFinalReview,ms=>gateway({action:"quote",market:s.symbol},ms)):null;
 let retryQuote=retryClockQuote?retryClockQuote.quote:retryQuoteRead;
-attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:retryCapture,dispatch_quote:retryQuote};
+attempt.finalRecheck={...attempt.finalRecheck,dynamic_policy:DYNAMIC_VERSION,dispatch_capture:retryCapture,
+  dispatch_tape:retryDispatchTape,dispatch_quote:retryQuote};
 let retryDynamic=retryClockQuote&&!retryClockQuote.safety.ok?retryClockQuote.safety:executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,Date.now());
 attempt.finalRecheck.dispatch_dynamic=retryDynamic;
 if(!retryDynamic.ok)return await finishPartialOrAbort(retryDynamic.reason,{executionAttempts:1,decision:"WAIT",dynamic:retryDynamic});
@@ -1614,7 +1621,7 @@ const second=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:2,quantity:re
       return authorizeClockExecution(s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),()=>{
         const check=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority);
         return check.allowed&&gptConsumeRetry(db,retryAuthority)?check:{allowed:false,reason:check.reason??"IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID"};
-      });
+      },{readTape:(startAt,endAt)=>fetchE1AggTrades(s.symbol,startAt,endAt)});
     const check=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority),age=Date.now()-Number(retryQuote?.timing?.received_at_ms);
     if(!check.allowed)return check;
     if(!Number.isFinite(age)||age<0||age>E1_POLICY.maxQuoteAgeMs)return {allowed:false,reason:"EXECUTION_SAFETY_REJECT:STALE_QUOTE"};
