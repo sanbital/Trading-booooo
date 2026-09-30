@@ -1321,7 +1321,7 @@ const dispatchFlowEnd=Date.now();
 const[rawFinalCheck,finalOrders,dispatchSnap,booInputs,dispatchQuoteRead,dispatchCapture,dispatchTape]=await Promise.all([
   readOpsPair(db,undefined,s.symbol),
   gateway({action:"v18_open_orders"},5000),
-  E1_ENABLED?snap(db):Promise.resolve(sn),
+  attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):(E1_ENABLED?snap(db):Promise.resolve(sn)),
   booGateInputs(db,s),
   attempt.gptFinalReview?.clockFinalAuthority||E1_ENABLED?gateway({action:"quote",market:s.symbol},3000):Promise.resolve(q),
   executionCapture(attempt.gptFinalReview,s.symbol,Date.now()),
@@ -1373,7 +1373,7 @@ if(E1_ENABLED){
       e1:{...e1Decision,dispatchRecheck:assessment.quote},operatorOverride:OPERATOR_OVERRIDE});
     return{entered:false,reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,e1:{...e1Decision,dispatchRecheck:assessment.quote}};
   }
-  q=dispatchQuote;sn=dispatchSnap;pf=finalCheck.pf;manualRows=finalCheck.manual;
+  q=dispatchQuote;sn=dispatchSnap??finalCheck.pf;pf=finalCheck.pf;manualRows=finalCheck.manual;
   bid=N(q.best_bid);ask=N(q.best_ask);sp=(ask/bid-1)*10000;sized=assessment.sized;
   live=N(pf?.available_quote,NaN);avail=Math.min(N(sn.available_quote),live);
   if(!Number.isFinite(live))throw Error("ENTRY_AVAILABLE_BALANCE_UNREADABLE");
@@ -1546,7 +1546,8 @@ if(!retryRecheck.proceed)return await finishPartialOrAbort(retryRecheck.reason,{
 await requireLeaderEntryControls(db);
 const retryFlowEnd=Date.now();
 const[retryPair,retryOrders,retrySnap,retryQuoteRead,retryInfo,retryCapture,retryDispatchTape]=await Promise.all([
-  readOpsPair(db,undefined,s.symbol),gateway({action:"v18_open_orders"},5000),snap(db),
+  readOpsPair(db,undefined,s.symbol),gateway({action:"v18_open_orders"},5000),
+  attempt.gptFinalReview?.clockFinalAuthority?Promise.resolve(null):snap(db),
   gateway({action:"quote",market:s.symbol},3000),
   gateway({action:"symbol_info",market:s.symbol},3000),executionCapture(attempt.gptFinalReview,s.symbol,Date.now()),
   attempt.gptFinalReview?.clockFinalAuthority?fetchE1AggTrades(s.symbol,retryFlowEnd-10000,retryFlowEnd):Promise.resolve(null)]);
@@ -1638,7 +1639,7 @@ if(retryPlan.complete){
   return await finishPartialOrAbort("IOC_RETRY_NO_QUANTITY",{executionAttempts:1,retryPlan});
 }
 const additionalMargin=retryPlan.remainingQuantity*retryPlan.limitPrice/LEV,
-  retryAvail=Math.min(N(retrySnap.available_quote),N(retryPair.pf?.available_quote,NaN));
+  retryAvail=Math.min(N((retrySnap??retryPair.pf)?.available_quote),N(retryPair.pf?.available_quote,NaN));
 if(!Number.isFinite(retryAvail)||retryAvail<additionalMargin+ENTRY_CASH_BUFFER_USDT)
   return await finishPartialOrAbort("EXECUTION_SAFETY_REJECT:INSUFFICIENT_MARGIN",{executionAttempts:1,retryPlan});
 const retryDecision=await decideEntry(db,retryPair,s.symbol,retryOrders,{proposedMargin:additionalMargin,
