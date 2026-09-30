@@ -164,7 +164,7 @@ test('09 entry timeout: successful existing ID is recovered and protected; termi
   assert.equal(h.state.calls.filter(c=>c.action==='create_order').length,1);
   assert.equal(h.state.tables.v11_long_regime_positions.length,executed?1:0);
   if(executed)assert.ok(h.state.calls.some(c=>c.action==='v17_create_stop'&&c.params.quantity===93));
-  else assert.equal(h.state.tables.v11_long_regime_orders[0].state,'REJECTED');
+  else assert.equal(h.state.tables.v11_long_regime_orders[0].state,'EXPIRED');
  }
 });
 test('13 process restart loads durable receipt, settles late fees exactly once',async()=>{

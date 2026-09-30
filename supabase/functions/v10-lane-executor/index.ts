@@ -20,6 +20,7 @@ import {protectNewLeaderPosition} from "../_shared/leader-entry-protection.mjs";
 import {createGatewayProtection} from "../_shared/leader-protection-adapter.mjs";
 import {classifyPortfolio, freshPortfolio, ownedEntry, riskOrders, classifyFailure, operatorAllowsRecovery, recoveryEvidence, confirmedLiveProtection, createBudget, boundedMap} from "../_shared/leader-ops-isolation.mjs";
 import {entryReceipt,entryExposureMatches} from "../_shared/leader-entry-settlement.mjs";
+import {classifyEntryOrderState} from "../_shared/entry-order-state.mjs";
 import {applyExitReceipt} from "../_shared/leader-exit-settlement.mjs";
 import {analyzeDbOnlyExit} from "../_shared/leader-db-only-reconciliation.mjs";
 import {ENTRY_CONTROL_VERSION,CONTROL_SCOPE,evaluateEntryDecision,symbolRecoveryEvidence} from "../_shared/leader-entry-control.mjs";
@@ -27,6 +28,7 @@ import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Sc
 import {E1_POLICY,advanceE1,e1QuoteEvidence,fetchE1AggTrades,startE1} from "../_shared/leader-e1-runtime.mjs";
 import {V24_ADAPTER_VERSION,v24EntryGate} from "./v24-entry-adapter.mjs";
 import {IOC_RETRY_POLICY,planAggressiveIocRetry} from "./entry-ioc-retry.mjs";
+import {EXECUTION_DISPATCH_STATE,claimExecutionDispatch,transitionExecutionDispatch} from "./execution-dispatch.mjs";
 import {RETRY_RECONCILIATION_VERSION,retryProofCandidate,parentTradeStart,proveUnplacedPartialRetry} from "./entry-retry-reconciliation.mjs";
 import {ENTRY_LIFECYCLE_VERSION,lifecycleNote,noteChanged,gptTerminalReason,expiredTriggerReason,agedOutReason,mergeLifecycleNote,technicalFailureNote,isSymbolLocalSelectionError} from "./entry-lifecycle.mjs";
 import {ENTRY_CAPACITY_VERSION,UNUSED_SLOT_REASON,accountStopReason,budgetCovers,entryCapacity,ledgerEntry,slotCostUsdt,slotReasonOf,unusedSlotAccounting} from "./entry-capacity.mjs";
@@ -300,18 +302,20 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
       if(wr.error)throw Error("IOC_NO_DISPATCH_WRITE");
       return {blocked:true,reason,oi:oi.data};
     }
+    const dispatchClaim=typeof executionDispatchClaims==="undefined"?null:executionDispatchClaims.get(db);
+    if(dispatchClaim?.signalId===String(s.id)&&typeof transitionExecutionDispatch==="function")await transitionExecutionDispatch(db,{signalId:s.id,
+      owner:dispatchClaim.owner,state:EXECUTION_DISPATCH_STATE.SUBMITTING,orderId:oi.data.id});
     const sentAt=Date.now();if(clockTrace)clockTrace.order_sent_at??=sentAt;
-    const initialRaw=await gw(rp),respondedAt=Date.now(),initial=fill(initialRaw);let finalRaw=initialRaw,receipt=null,finalitySource="CREATE_RESPONSE";
-    try{receipt=entryReceipt(initialRaw,oi.data);}catch{}
-    if(!receipt){
-      await verifyExecutionLease(db);
-      const pending=await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_PENDING",
-        exchange_order_id:initial.exchangeOrderId,response_payload:{...initialRaw,v22ImmediateEntryQueryPending:true},
-        reject_reason:`IOC_CONFIRMING:${initial.status}`,updated_at:new Date().toISOString()}).eq("id",oi.data.id);
-      if(pending.error)throw Error("ENTRY_PENDING_WRITE");
-      finalRaw=await gw({action:"get_order",market:s.symbol,identifier:id,exchange_order_id:initial.exchangeOrderId},5000);
-      receipt=entryReceipt(finalRaw,oi.data);finalitySource="SAME_ORDER_QUERY";
-    }
+    const initialRaw=await gw(rp),respondedAt=Date.now(),initial=fill(initialRaw);
+    await verifyExecutionLease(db);
+    const pending=await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_PENDING",
+      exchange_order_id:initial.exchangeOrderId,response_payload:{...initialRaw,v22ImmediateEntryQueryPending:true},
+      reject_reason:`IOC_CONFIRMING:${initial.status}`,updated_at:new Date().toISOString()}).eq("id",oi.data.id);
+    if(pending.error)throw Error("ENTRY_PENDING_WRITE");
+    // The create response is acknowledgement evidence, never final settlement truth.
+    // Always query this exact venue order before reconciling the actual position.
+    const finalRaw=await gw({action:"get_order",market:s.symbol,identifier:id,exchange_order_id:initial.exchangeOrderId},5000),
+      receipt=entryReceipt(finalRaw,oi.data),finalitySource="SAME_ORDER_QUERY";
     if(clockTrace&&receipt?.quantity>0&&Number.isSafeInteger(receipt.lastAt))clockTrace.fill_at??=receipt.lastAt;
     const evidence={source:finalitySource,initialStatus:initial.status,confirmedAt:new Date().toISOString(),attemptNo,
       sentAt,respondedAt,latencyMs:respondedAt-sentAt,finalStatus:receipt?.status??null,executedQty:receipt?.quantity??null,
@@ -1123,7 +1127,10 @@ attempt.gptFinalReview=gptEntryCheck.review??null;
 if(attempt.gptFinalReview?.clockFinalAuthority){
   const t=attempt.gptFinalReview;
   attempt.clockExecutionTelemetry=clockExecutionTrace(t);
-  Object.assign(attempt.clockExecutionTelemetry,{executor_wake_at:gptClockWakeAt(db,s)??executionStartedAt,execution_started_at:executionStartedAt});
+  const dispatchClaim=typeof executionDispatchClaims==="undefined"?null:executionDispatchClaims.get(db),
+    claimedAt=dispatchClaim?.signalId===String(s.id)?dispatchClaim.claimedAt:null;
+  Object.assign(attempt.clockExecutionTelemetry,{executor_wake_at:claimedAt??gptClockWakeAt(db,s)??executionStartedAt,
+    executor_claimed_at:claimedAt??null,execution_started_at:executionStartedAt});
 }
 await requireLeaderEntryControls(db);
 const exitPolicy=rec(s.features?.exitPolicy);
@@ -1662,15 +1669,29 @@ async function pushShadowPositions(db,open){
 async function settleKnownEntry(db,intent,raw,gw=opsGateway(db),opts={}) {
   const receipt=entryReceipt(raw,intent),sig=await db.from("v11_long_regime_signals").select("*").eq("id",intent.signal_id).single();
   if(sig.error||!sig.data||sig.data.features?.strategy!==STRATEGY||intent.request_payload?.order?.side!=="BUY"||intent.request_payload?.order?.position_effect!=="OPEN")throw Error("ENTRY_INTENT_OWNERSHIP_UNPROVEN");
+  // Exchange position is the final truth for every order outcome, including zero-fill
+  // expiry and terminal IOC partials. This read occurs after create + get_order.
+  const pf=await gw({action:"p10_portfolio"}),reconciledAt=Date.now();
+  if(!freshPortfolio(pf,reconciledAt))throw Error("ENTRY_POSITION_RECONCILIATION_STALE");
+  const exchangeRows=(pf?.positions??[]).filter(p=>(p.market??p.symbol)===intent.symbol&&Number(p.quantity)!==0);
+  if(exchangeRows.length>1||exchangeRows.some(p=>String(p.side??"LONG").toUpperCase()!=="LONG"))
+    throw Error("ENTRY_POSITION_RECONCILIATION_AMBIGUOUS");
+  const actualPositionQty=exchangeRows.length?Number(exchangeRows[0].quantity):0,
+    reconciliation={source:"BINANCE_FUTURES_P10_PORTFOLIO",reconciledAt,
+      actualPositionQty,positionRows:exchangeRows.length,positionsComplete:pf?.positions_complete===true};
+  if(!Number.isFinite(actualPositionQty)||actualPositionQty<0)throw Error("ENTRY_POSITION_RECONCILIATION_QUANTITY");
   if(receipt.quantity===0){
-    const pf=await gw({action:"p10_portfolio"});
-    const residual=pf?.positions?.filter(p=>(p.market??p.symbol)===intent.symbol&&Number(p.quantity)!==0)??[];
     const held=opts.existingPosition;
-    const exposureProven=held?held.symbol===intent.symbol&&held.state==="OPEN"&&residual.length===1&&
-      String(residual[0].side??"LONG").toUpperCase()==="LONG"&&Number(residual[0].quantity)===Number(held.remaining_quantity):residual.length===0;
-    if(!freshPortfolio(pf)||!exposureProven)throw Error("ENTRY_ZERO_EXPOSURE_UNPROVEN");
+    const exposureProven=held?held.symbol===intent.symbol&&held.state==="OPEN"&&exchangeRows.length===1&&
+      Math.abs(actualPositionQty-Number(held.remaining_quantity))<=Math.max(1e-12,actualPositionQty*1e-9):exchangeRows.length===0;
+    if(!exposureProven)throw Error("ENTRY_ZERO_EXPOSURE_UNPROVEN");
+    const orderState=classifyEntryOrderState({requestedQty:receipt.requested,executedQty:receipt.quantity,
+      remainingQty:receipt.remaining,rawStatus:receipt.status,fills:receipt.fills,updateTime:receipt.updateTime,
+      reconciledPositionQty:actualPositionQty,positionReconciled:true});
     await verifyExecutionLease(db);
-    const wr=await db.from("v11_long_regime_orders").update({state:"REJECTED",exchange_order_id:receipt.id,response_payload:{...raw,v18ExposureFinal:true},reject_reason:`IOC_NO_FILL:${receipt.status}`,updated_at:new Date().toISOString()}).eq("id",intent.id);
+    const wr=await db.from("v11_long_regime_orders").update({state:orderState.state,exchange_order_id:receipt.id,
+      response_payload:{...raw,v18ExposureFinal:true,positionReconciliation:reconciliation,orderStateEvidence:orderState},
+      reject_reason:`IOC_NO_FILL:${receipt.status}`,updated_at:new Date().toISOString()}).eq("id",intent.id);
     if(wr.error)throw Error("ENTRY_TERMINAL_WRITE");
     if(opts.retireZeroFillSignal!==false){
       const sr=await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:`IOC_NO_FILL:${receipt.status}`,updated_at:new Date().toISOString()}).eq("id",intent.signal_id);
@@ -1686,6 +1707,9 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db),opts={}) {
     const meta=rec(position.metadata),fills=Array.isArray(meta.entryFillOrders)?meta.entryFillOrders:[],
       already=fills.find(x=>String(x.exchangeOrderId)===receipt.id||String(x.intentId)===String(intent.id));
     if(already){
+      const reconciledExisting=position.state==="CLOSED"?actualPositionQty===0:
+        entryExposureMatches(pf,row.symbol,N(position.remaining_quantity));
+      if(!reconciledExisting)throw Error("ENTRY_EXISTING_POSITION_EXPOSURE_UNPROVEN");
       if(Math.abs(N(already.quantity)-receipt.quantity)>1e-8||Math.abs(N(already.price)-receipt.price)>Math.max(1e-12,receipt.price*1e-7))
         throw Error("ENTRY_RETRY_IDEMPOTENCY_MISMATCH");
       // A terminal order may be known before its canonical fills/fees arrive. Resolve
@@ -1710,7 +1734,7 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db),opts={}) {
       // A retry may only top up an untouched partial entry. If protection/exit changed
       // quantity in the meantime, stop rather than re-expand the position.
       if(Math.abs(N(position.original_quantity)-N(position.remaining_quantity))>1e-8)throw Error("PARTIAL_FILL_POSITION_CHANGED");
-      const manual=await manualPositionAllowances(db),pf=await gw({action:"p10_portfolio"}),
+      const manual=await manualPositionAllowances(db),
         newQty=N(position.original_quantity)+receipt.quantity;
       if(manual.some(x=>x.symbol===row.symbol)||!entryExposureMatches(pf,row.symbol,newQty))throw Error("ENTRY_RETRY_EXPOSURE_UNPROVEN");
       const oldQty=N(position.original_quantity),oldAvg=N(position.entry_price),newAvg=(oldQty*oldAvg+receipt.quantity*receipt.price)/newQty,
@@ -1735,7 +1759,7 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db),opts={}) {
       position=up.data;
     }
   }else{
-    const manual=await manualPositionAllowances(db),pf=await gw({action:"p10_portfolio"});
+    const manual=await manualPositionAllowances(db);
     if(manual.some(x=>x.symbol===row.symbol)||!entryExposureMatches(pf,row.symbol,receipt.quantity))throw Error("ENTRY_EXPOSURE_UNPROVEN");
     const sized={sizedMargin:receipt.quantity*receipt.price/LEV};
     await verifyExecutionLease(db);
@@ -1748,9 +1772,13 @@ async function settleKnownEntry(db,intent,raw,gw=opsGateway(db),opts={}) {
       pos=await db.from("v11_long_regime_positions").insert({signal_id:row.id,revision:REVISION,entry_lane:"BULL",active_lane:"BULL",transition_from:null,symbol:row.symbol,side:"LONG",original_quantity:z.qty,remaining_quantity:z.qty,entry_price:z.avg,entry_at:now.toISOString(),entry_atr:isLeader20(row)?null:atr,entry_bb_pos:N(f.bbPos,0),hard_stop_price:stop,hard_deadline:new Date(now.getTime()+POLICY.maxHoldMs).toISOString(),active_since:now.toISOString(),active_ref_bb:N(f.bbPos,0),active_target_delta:null,t1_completed:false,peak_price:z.avg,last_evaluated_at:now.toISOString(),state:"OPEN",realized_pnl_usdt:receipt.exact?-receipt.fee:null,entry_fee_usdt:receipt.fee,metadata:{entryDynamicSeed:{version:DYNAMIC_VERSION,capture:intent.request_payload?.entry_final_recheck?.dispatch_capture??null,seeded_at_ms:now.getTime()},entrySelectionPolicyVersion:intent.request_payload?.entry_selection?.version??null,b06133:intent.request_payload?.entry_selection??null,v30Front:intent.request_payload?.entry_front??null,entryBranch:intent.request_payload?.entry_branch??null,entryControllerPolicyVersion:entryController?.version??null,cec0040:entryController?.version===CEC0040_VERSION?entryController:null,gptEntryDecision:intent.request_payload?.entry_gpt_decision??null,finalRecheck:intent.request_payload?.entry_final_recheck??null,qv3:entryTiming?.version===SETUP_POLICY_VERSION?null:(intent.request_payload?.qv3?.version===QV3_VERSION&&intent.request_payload.qv3.basis===QV3_ACTIVATION_BASIS&&Date.parse(intent.created_at)>=Number(intent.request_payload.qv3.activation)?qv3Stamp(intent.request_payload.qv3.activation,now.getTime()):null),entryTimingPolicyVersion:entryTiming?.version??null,entryTimingSetup:entryTiming?.setup??null,v18SettledPnl:receipt.exact?-receipt.fee:0,v18EntryAccountingPending:!receipt.exact,exitAccountingPending:!receipt.exact,executionMode:STRATEGY,leaderExitPolicy:f.exitPolicy,fd1HoldPolicyVersion:FD1_HOLD_POLICY_VERSION,leaderExitPolicyVersion:entryController?.version===CEC0040_VERSION&&entryController.enforcementEnabled===true?P142_POLICY_VERSION:EXIT_REVIEW_R5.policyVersion,entryExecutionPolicyVersion:fillGuard?.version??null,postFillEntryGuard:fillGuard,entryConfirmationPolicyVersion:intent.request_payload?.e1?.policyVersion??null,entryConfirmation:intent.request_payload?.e1??null,exitObservationPolicyVersion:intent.request_payload?.x1?.policyVersion??null,x1Observation:{observedBidPeak:z.avg,executableVwapPeak:null,lastObservationId:null,lastObservationAt:null,source:"P10_TOP_OF_BOOK_BATCH",maxQuoteAgeMs:1000},entryMarketRules:{priceTick:N(intent.request_payload?.price_tick),quantityStep:N(intent.request_payload?.quantity_step)},operatorOverride:intent.request_payload?.operator_override??null,leaderLastHighAt:now.toISOString(),entryFillAt:receipt.lastAt??null,entryRecordedAt:new Date(settledAt).toISOString(),executorPatch:PATCH,maxSlots:MAX_SLOTS,setupMaxConcurrent:SETUP_MAX_CONCURRENT,targetMarginUsdt:MARGIN,sizedMarginUsdt:sized.sizedMargin,lastAppliedOrderId:intent.id,entryOrderId:z.exchangeOrderId,entryFillOrders:[{intentId:intent.id,exchangeOrderId:receipt.id,quantity:receipt.quantity,price:receipt.price,fee:receipt.fee,exact:receipt.exact,filledAt:receipt.lastAt??null}],entryFeatures:f}}).select("*").single();
     if(pos.error)throw Error(`POSITION:${pos.error.message}`);position=pos.data;
   }
+  const orderState=classifyEntryOrderState({requestedQty:receipt.requested,executedQty:receipt.quantity,
+    remainingQty:receipt.remaining,rawStatus:receipt.status,fills:receipt.fills,updateTime:receipt.updateTime,
+    reconciledPositionQty:actualPositionQty,positionReconciled:true});
   await verifyExecutionLease(db);
-  const wr=await db.from("v11_long_regime_orders").update({state:receipt.exact?"FILLED":"RECONCILIATION_PENDING",exchange_order_id:receipt.id,
-    response_payload:{...raw,v18ExposureFinal:true},position_id:position.id,reject_reason:null,updated_at:new Date().toISOString()}).eq("id",intent.id);
+  const wr=await db.from("v11_long_regime_orders").update({state:orderState.state,exchange_order_id:receipt.id,
+    response_payload:{...raw,v18ExposureFinal:true,positionReconciliation:reconciliation,orderStateEvidence:orderState},
+    position_id:position.id,reject_reason:orderState.reason,updated_at:new Date().toISOString()}).eq("id",intent.id);
   if(wr.error)throw Error("ENTRY_ORDER_WRITE");
   const sr=await db.from("v11_long_regime_signals").update({status:position.state==="CLOSED"?"CLOSED":"FILLED",position_id:position.id,updated_at:new Date().toISOString()}).eq("id",row.id);
   if(sr.error)throw Error("ENTRY_SIGNAL_WRITE");
@@ -1766,8 +1794,8 @@ async function readOpsPositions(db) {
 }
 async function readOpsOrders(db,positions=[]) {
   const [pending,accounting,entries]=await Promise.all([
-    db.from("v11_long_regime_orders").select("*").in("state",["PLANNED","DISPATCHED","RECONCILIATION_FAILED","RECONCILIATION_PENDING"]).or("response_payload->>v18ExposureFinal.is.null,response_payload->>v18ExposureFinal.neq.true").order("updated_at",{ascending:true}).limit(101),
-    db.from("v11_long_regime_orders").select("*").in("state",["RECONCILIATION_FAILED","RECONCILIATION_PENDING"]).eq("response_payload->>v18ExposureFinal","true").order("updated_at",{ascending:true}).limit(3),
+    db.from("v11_long_regime_orders").select("*").in("state",["PLANNED","DISPATCHED","PARTIALLY_FILLED","UNKNOWN","RECONCILIATION_FAILED","RECONCILIATION_PENDING"]).or("response_payload->>v18ExposureFinal.is.null,response_payload->>v18ExposureFinal.neq.true").order("updated_at",{ascending:true}).limit(101),
+    db.from("v11_long_regime_orders").select("*").in("state",["PARTIALLY_FILLED","UNKNOWN","RECONCILIATION_FAILED","RECONCILIATION_PENDING"]).eq("response_payload->>v18ExposureFinal","true").order("updated_at",{ascending:true}).limit(3),
     positions.length?db.from("v11_long_regime_orders").select("*").in("position_id",positions.map(p=>p.id)):Promise.resolve({data:[]})]);
   if(pending.error||accounting.error||entries.error)throw Error("ORDERS_READ");
   if(pending.data?.length>100)throw Error("RECONCILIATION_BACKLOG_OVERFLOW");
@@ -1789,7 +1817,7 @@ async function readOpsPair(db,gw=opsGateway(db),candidateSymbol=null) {
       .eq("exchange","binance_futures").eq("account_scope","futures").eq("control_scope","SYMBOL_QUARANTINE")
       .in("status",["OPEN","VERIFYING"]).order("last_checked_at",{ascending:true}).limit(101),
     candidate?db.from("v11_long_regime_orders").select("*").eq("symbol",candidate)
-      .in("state",["PLANNED","DISPATCHED","RECONCILIATION_FAILED","RECONCILIATION_PENDING"])
+      .in("state",["PLANNED","DISPATCHED","PARTIALLY_FILLED","UNKNOWN","RECONCILIATION_FAILED","RECONCILIATION_PENDING"])
       .order("updated_at",{ascending:true}).limit(101):Promise.resolve({data:[]})]);
   if(quarantines.error)throw Error("SYMBOL_QUARANTINE_READ");
   if((quarantines.data??[]).length>100)throw Error("SYMBOL_QUARANTINE_BACKLOG_OVERFLOW");
@@ -2018,7 +2046,7 @@ async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
   const gw=scopedGateway(db,budget),results=[];
   // Exposure-uncertain order identity gets the first reconciliation budget.
   // Closed native-stop cleanup remains bounded and runs immediately afterward.
-  for(const o of pair.orders.filter(o=>["PLANNED","DISPATCHED","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state)).slice(0,3)){
+  for(const o of pair.orders.filter(o=>["PLANNED","DISPATCHED","PARTIALLY_FILLED","UNKNOWN","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state)).slice(0,3)){
     if(budget.remaining()<500)break;
     try{
       await verifyExecutionLease(db);
@@ -2350,7 +2378,7 @@ async function run(db) {
       pair.positions.length===0?"FLAT":protectedIds.size===safe.length?"PROTECTED":"SOFTWARE_ONLY";
     // Native fills and software receipts share one bounded reconciliation turn.
     pair=await readOpsPair(db);
-    pendingAge=Math.max(0,...pair.orders.filter(o=>["PLANNED","DISPATCHED","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state)).map(o=>(Date.now()-Date.parse(o.created_at))/1000),...pair.match.issues.filter(i=>i.positionId).map(i=>(Date.now()-Date.parse(pair.positions.find(p=>p.id===i.positionId)?.last_evaluated_at))/1000));
+    pendingAge=Math.max(0,...pair.orders.filter(o=>["PLANNED","DISPATCHED","PARTIALLY_FILLED","UNKNOWN","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state)).map(o=>(Date.now()-Date.parse(o.created_at))/1000),...pair.match.issues.filter(i=>i.positionId).map(i=>(Date.now()-Date.parse(pair.positions.find(p=>p.id===i.positionId)?.last_evaluated_at))/1000));
     reconciliation=await reconcileOps(db,pair);
     pair=await readOpsPair(db);
     health=managed.some(x=>x.error||x.skipped)?"DEGRADED":!pair.match.ok?"DEGRADED":pair.positions.length===0?"FLAT":
@@ -2592,9 +2620,12 @@ const stageRank=(row)=>{
   const st=rec(rec(row.features).v17Setup).state;
   return st===SETUP_STATE.TRIGGERED?3:st===SETUP_STATE.PULLBACK_OBSERVED?2:st===SETUP_STATE.ARMED?1:0;
 };
-const advanceOrder=[...stillFresh].sort((a,b)=>
+let advanceOrder=[...stillFresh].sort((a,b)=>
   stageRank(b)-stageRank(a)||Date.parse(b.entry_bar_at)-Date.parse(a.entry_bar_at));
 if(leader20Control.active_strategy==='LEADER20_DYNAMIC_1')advanceOrder.sort((a,b)=>Date.parse(a.entry_bar_at)-Date.parse(b.entry_bar_at));
+const preferredSignalId=typeof executionDispatchClaims==="undefined"?null:executionDispatchClaims.get(db)?.signalId,
+  preferredIndex=preferredSignalId?advanceOrder.findIndex(row=>String(row.id)===String(preferredSignalId)):-1;
+if(preferredIndex>0)advanceOrder=[advanceOrder[preferredIndex],...advanceOrder.slice(0,preferredIndex),...advanceOrder.slice(preferredIndex+1)];
 for(const row of advanceOrder){
   if(isLeader20(row)){
     try{await requireEntryAuthority(db,row);if(validEvent(row)&&Date.now()<eventExpiry(row))executable.push(row);}
@@ -3218,7 +3249,7 @@ async function qv3AfterProtection(db,p,ctx){
   }
 }
 const exchangeGateway=gateway;
-const leaseOwners=new WeakMap(),cycleBudgets=new WeakMap();
+const leaseOwners=new WeakMap(),cycleBudgets=new WeakMap(),executionDispatchClaims=new WeakMap();
 const EXECUTION_LEASE_TTL_SECONDS=150;
 async function verifyExecutionLease(db,allowBudgetExceeded=false){
   if(!allowBudgetExceeded&&cycleBudgets.get(db)?.remaining()===0)throw Error("V18_API_BUDGET_EXHAUSTED");
@@ -3231,7 +3262,7 @@ async function opsReadiness(db){
   const [pf,oo,rt,positions,orders,control]=await Promise.all([gateway({action:"p10_portfolio"}),gateway({action:"v18_open_orders"}),
     db.from("v11_long_regime_runtime").select("circuit_open,circuit_reason,incident_kind,incident_generation,last_error,entry_block_reason,protection_health,last_cycle_completed_at").eq("singleton",true).single(),
     db.from("v11_long_regime_positions").select("id,symbol,remaining_quantity").eq("state","OPEN").limit(MAX_SLOTS+1),
-    db.from("v11_long_regime_orders").select("id,symbol,state").in("state",["PLANNED","DISPATCHED","RECONCILIATION_PENDING","RECONCILIATION_FAILED"]).limit(101),
+    db.from("v11_long_regime_orders").select("id,symbol,state").in("state",["PLANNED","DISPATCHED","PARTIALLY_FILLED","UNKNOWN","RECONCILIATION_PENDING","RECONCILIATION_FAILED"]).limit(101),
     readReviewControl(db)]);
   const ex=active(pf).map(x=>({symbol:sym(x),quantity:qty(x)}));
   return {ok:true,revision:REVISION,patch:PATCH,observedAt:new Date().toISOString(),
@@ -3291,7 +3322,7 @@ async function gptDryRun(db,body){
     g.margin={availableUsdt:avail,required:sized?sized.sizedMargin+ENTRY_CASH_BUFFER_USDT:null,ok:!!sized&&avail>=sized.sizedMargin+ENTRY_CASH_BUFFER_USDT};if(!g.margin.ok)reasons.push("ENTRY_MARGIN_INSUFFICIENT");
     g.slots={exchangePositions:active(pair.pf).length,maxSlots:MAX_SLOTS,ok:active(pair.pf).length<MAX_SLOTS};if(!g.slots.ok)reasons.push("V11_SLOT_FULL");
     g.duplicate={symbolOpen:pair.positions.some(p=>String(p.symbol).toUpperCase()===String(s.symbol).toUpperCase()),
-      pendingSymbolOrders:pair.orders.filter(o=>String(o.symbol).toUpperCase()===String(s.symbol).toUpperCase()&&["PLANNED","DISPATCHED","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state)).length,
+      pendingSymbolOrders:pair.orders.filter(o=>String(o.symbol).toUpperCase()===String(s.symbol).toUpperCase()&&["PLANNED","DISPATCHED","PARTIALLY_FILLED","UNKNOWN","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state)).length,
       intentId:cid("v11e",s.id)};
     const dupIntent=await db.from("v11_long_regime_orders").select("id,state").eq("client_order_id",g.duplicate.intentId).limit(1);
     g.duplicate.existingIntent=(dupIntent.data??[]).length>0;
@@ -3353,6 +3384,82 @@ async function runWithLease(db,operation=run){
       lease_owner:owner,skipped_already_running:false,finished_at:new Date().toISOString(),
       total_runtime_ms:Date.now()-startedAt,active_executor_concurrency:0}));
   }
+}
+/** Immediate event path for a durably completed clock BUY. It uses the same global
+ * execution lease, exchange/account reconciliation, entry queue and order guards as
+ * the ordinary cycle, but does not wait behind unrelated periodic position work. */
+async function runDispatchedEntry(db){
+  await verifyExecutionLease(db);
+  const controls=await opsControls(db);
+  if(controls.runtime.revision!==REVISION)throw Error("REVISION_MISMATCH");
+  if(controls.runtime.live_enabled!==true)return{ok:true,skipped:"RUNTIME_NOT_LIVE"};
+  let pair=await readOpsPair(db);
+  await recordMismatch(db,pair.match);
+  const unresolved=pair.orders.some(o=>["PLANNED","DISPATCHED","PARTIALLY_FILLED","UNKNOWN","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state));
+  if(unresolved){await reconcileOps(db,pair);pair=await readOpsPair(db);await recordMismatch(db,pair.match);}
+  if(controls.runtime.circuit_open)return{ok:true,entry:{entered:false,reason:"CIRCUIT_OPEN_MANAGEMENT_ACTIVE"}};
+  if(!operatorAllowsRecovery(controls.runtime,controls.control,controls.settings))
+    return{ok:true,entry:{entered:false,reason:"OPERATOR_ENTRY_BLOCK"}};
+  const backlog=await readClosedProtectionBacklog(db,1000);
+  pair.managementFailures=[];
+  const entry=await runEntryQueue(db,pair,pair.manual,new Set(backlog.rows.map(p=>String(p.symbol).toUpperCase())),backlog.complete);
+  return{ok:true,revision:REVISION,patch:PATCH,dispatchMode:"IMMEDIATE_DURABLE_BUY",entry};
+}
+function dispatchTerminalState(orders,result,signal,position){
+  const states=orders.map(o=>String(o.state));
+  if(states.includes("FILLED"))return "FILLED";
+  if(states.includes("PARTIALLY_FILLED_CANCELED"))return "PARTIALLY_FILLED_CANCELED";
+  if(states.includes("PARTIALLY_FILLED"))return "PARTIALLY_FILLED";
+  if(position?.state==="OPEN")return "PARTIALLY_FILLED_CANCELED";
+  if(states.includes("EXPIRED"))return "EXPIRED";
+  if(states.includes("REJECTED"))return "REJECTED";
+  if(states.includes("UNKNOWN"))return "UNKNOWN";
+  if(signal?.status==="REJECTED")return "REJECTED";
+  const reason=String(result?.entry?.reason??result?.skipped??"");
+  if(reason.includes("CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION"))return "CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION";
+  if(reason.includes("EXECUTION_WINDOW_INSUFFICIENT"))return "EXECUTION_WINDOW_INSUFFICIENT";
+  return null;
+}
+async function finishExecutionDispatch(db,claim,result,error=null){
+  const signalId=claim.signalId,owner=claim.owner;
+  try{
+    const [orders,signal,position]=await Promise.all([
+      db.from("v11_long_regime_orders").select("id,state,created_at").eq("signal_id",signalId).eq("intent","OPEN_LONG").order("created_at",{ascending:true}),
+      db.from("v11_long_regime_signals").select("status,reject_reason").eq("id",signalId).maybeSingle(),
+      db.from("v11_long_regime_positions").select("id,state,original_quantity,remaining_quantity").eq("signal_id",signalId).maybeSingle()
+    ]);
+    if(orders.error||signal.error||position.error)throw Error("EXECUTION_DISPATCH_FINAL_READ");
+    const rows=orders.data??[],terminal=dispatchTerminalState(rows,result,signal.data,position.data);
+    if(terminal)return await transitionExecutionDispatch(db,{signalId,owner,state:terminal,
+      error:error??signal.data?.reject_reason??result?.entry?.reason??null,orderId:rows.at(-1)?.id??null});
+    return await transitionExecutionDispatch(db,{signalId,owner,state:EXECUTION_DISPATCH_STATE.READY,
+      error:error??result?.skipped??result?.entry?.reason??null});
+  }catch(e){console.error("EXECUTION_DISPATCH_FINALIZE_FAILED",signalId,String(e?.message??e).slice(0,200));return null;}
+}
+async function executeClaimedDispatch(db,row,owner){
+  const claim={signalId:String(row.signal_id),owner,claimedAt:Date.parse(row.executor_claimed_at),
+    validUntil:Date.parse(row.valid_until)};
+  executionDispatchClaims.set(db,claim);
+  let result=null,error=null;
+  try{
+    const waitUntil=Math.min(Date.now()+10000,claim.validUntil-ENTRY_ATTEMPT_RESERVE.ms);
+    do{
+      result=await runWithLease(db,runDispatchedEntry);
+      if(result?.skipped!=="V17_EXECUTOR_BUSY")break;
+      if(Date.now()>=waitUntil)break;
+      await new Promise(resolve=>setTimeout(resolve,250));
+    }while(true);
+    return result;
+  }catch(e){error=String(e?.message??e);throw e;}
+  finally{await finishExecutionDispatch(db,claim,result,error);executionDispatchClaims.delete(db);}
+}
+async function runWithExecutionDispatch(db,signalId=null){
+  const owner=crypto.randomUUID(),claim=await claimExecutionDispatch(db,{signalId,owner,
+    minRemainingMs:ENTRY_ATTEMPT_RESERVE.ms});
+  if(claim.claimed===true&&claim.row)return await executeClaimedDispatch(db,claim.row,owner);
+  if(signalId)return{ok:true,revision:REVISION,patch:PATCH,dispatchMode:"IMMEDIATE_DURABLE_BUY",
+    skipped:claim.reason??"EXECUTION_DISPATCH_NOT_CLAIMABLE"};
+  return await runWithGptReview(db,runWithLease);
 }
 Deno.serve(async req=>{
   if(req.method!=="POST")return res(405,{ok:false,error:"POST_ONLY"});
@@ -3443,8 +3550,14 @@ Deno.serve(async req=>{
           simulateFinalTimeout:mode==="fd1-recheck-timeout-probe"})});
     }
     if(mode==="cec-bootstrap")return res(200,await runWithLease(db,bootstrapCec0040));
-    if(mode!=="run")return res(400,{ok:false,revision:REVISION,patch:PATCH,error:"MODE_UNSUPPORTED"});
-    return res(200,await runWithGptReview(db,runWithLease));
+    if(mode==="execute-ready"){
+      const signalId=String(body.signalId??"");
+      if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(signalId))
+        return res(400,{ok:false,revision:REVISION,patch:PATCH,error:"SIGNAL_ID"});
+      return res(200,await runWithExecutionDispatch(db,signalId));
+    }
+    if(!["run","live"].includes(mode))return res(400,{ok:false,revision:REVISION,patch:PATCH,error:"MODE_UNSUPPORTED"});
+    return res(200,await runWithExecutionDispatch(db));
   }catch(e){
     const msg=e instanceof Error?e.message:String(e);
     return res(500,{ok:false,revision:REVISION,patch:PATCH,error:msg});

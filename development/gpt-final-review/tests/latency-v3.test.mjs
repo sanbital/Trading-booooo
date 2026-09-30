@@ -109,6 +109,7 @@ test('GPT ready hint waits for protection and re-enters through the leased cycle
    const cycle=source.slice(source.indexOf('async function run(db)'),source.indexOf('async function runEntryQueue('));
    assert.match(fast,/await manageLeader\(db,fresh,[\s\S]*?if\(gptReviewReadyToResume\(db\)\)/);
    assert.match(cycle,/await verifyExecutionLease\(db\);[\s\S]*?await runEntryQueue\(db,pair/);
-   assert.match(source,/return res\(200,await runWithGptReview\(db,runWithLease\)\)/);
+   assert.match(source,/return res\(200,await runWithExecutionDispatch\(db\)\)/);
+   assert.match(source,/mode==="execute-ready"[\s\S]*?runWithExecutionDispatch\(db,signalId\)/);
  }
 });

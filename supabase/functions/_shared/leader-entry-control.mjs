@@ -20,7 +20,7 @@ const number=x=>Number(x);
 const finite=x=>Number.isFinite(number(x));
 const quantity=x=>Math.abs(number(x?.quantity??x?.positionAmt??x?.position_amount));
 const symbol=x=>upper(x?.symbol??x?.market);
-const pending=o=>['PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED'].includes(o?.state);
+const pending=o=>['PLANNED','DISPATCHED','PARTIALLY_FILLED','UNKNOWN','RECONCILIATION_PENDING','RECONCILIATION_FAILED'].includes(o?.state);
 const exposurePending=o=>pending(o)&&o?.response_payload?.v18ExposureFinal!==true;
 const accountingPending=o=>['RECONCILIATION_PENDING','RECONCILIATION_FAILED'].includes(o?.state)&&
   o?.response_payload?.v18ExposureFinal===true;

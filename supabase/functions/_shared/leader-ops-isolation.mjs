@@ -30,7 +30,7 @@ export function ownedEntry(p,orders) {
     o.request_payload?.order?.position_side==='LONG');
 }
 export function riskOrders(orders) {
-  return orders.filter(o=>['PLANNED','DISPATCHED','RECONCILIATION_FAILED','RECONCILIATION_PENDING'].includes(o.state)&&
+  return orders.filter(o=>['PLANNED','DISPATCHED','PARTIALLY_FILLED','UNKNOWN','RECONCILIATION_FAILED','RECONCILIATION_PENDING'].includes(o.state)&&
     o.response_payload?.v18ExposureFinal!==true);
 }
 function boundedImmediateCloseOrder(o) {

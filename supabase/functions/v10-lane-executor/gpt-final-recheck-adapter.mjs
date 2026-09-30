@@ -23,7 +23,8 @@ export {RECHECK_VERSION,postRecheckSafety};
 const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 const clockTraces=new WeakMap();
 export function clockExecutionTrace(ticket){
- if(!clockTraces.has(ticket))clockTraces.set(ticket,{gpt_buy_completed_at:ticket.clockFinalAuthority?.completed_at_ms,
+ if(!clockTraces.has(ticket))clockTraces.set(ticket,{gpt_completed_at:ticket.clockFinalAuthority?.completed_at_ms,
+  gpt_buy_completed_at:ticket.clockFinalAuthority?.completed_at_ms,
   old_quote_used:false,quote_refresh_attempts:0,quote_requests:0});
  return clockTraces.get(ticket);
 }

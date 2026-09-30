@@ -41,7 +41,7 @@ test('NMR original 22:10 BUY -> actual coordinator -> safety -> real IOC dispatc
  f.db.rpc=async()=>({data:{allowed:true}});
  f.db.from=table=>table==='leader20_control'?{select(){return this;},eq(){return this;},async maybeSingle(){return {data:{active_strategy:'LEADER20_DYNAMIC_1'}};}}:
  {insert:row=>({select:()=>({single:async()=>{if(intents.has(row.client_order_id))return {error:{message:'duplicate client order id'}};
-  intents.set(row.client_order_id,row);return {data:{id:'mock-intent',...row}};}})})};
+  intents.set(row.client_order_id,row);return {data:{id:'mock-intent',...row}};}})}),update:()=>({eq:async()=>({error:null})})};
  const source=readFileSync(new URL('../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8'),start=source.indexOf('async function dispatchEntryIocAttempt('),
   code=source.slice(start,source.indexOf('\n// ---',start));
  const ctx={requireEntryAuthority,IOC_RETRY_POLICY:{maxAttempts:2},LEV:3,REVISION:'offline',PATCH:'offline',cid:(p,id)=>p+id,
@@ -49,7 +49,8 @@ test('NMR original 22:10 BUY -> actual coordinator -> safety -> real IOC dispatc
   classifyFailure:()=>({fatal:true})};vm.createContext(ctx);vm.runInContext(code+'\nthis.dispatch=dispatchEntryIocAttempt;',ctx);
  const options={attemptNo:1,quantity:40,limitPrice:f.quote().best_ask,step:.1,payload:{entry_clock_final:step.record.clock_final_authority},
   authorize:()=>gptFinalCheck(f.db,f.s,step.record)};
- const exchange=async request=>{orders.push(request);return {quantity:40,status:'FILLED',price:request.order.price};};
+ const exchange=async request=>{if(request.action==='get_order')return {quantity:40,status:'FILLED',price:f.quote().best_ask};
+  orders.push(request);return {quantity:40,status:'FILLED',price:request.order.price,exchangeOrderId:'mock'};};
  const placed=await ctx.dispatch(f.db,f.s,exchange,options);assert.equal(placed.receipt.quantity,40);assert.equal(orders.length,1);
  await assert.rejects(ctx.dispatch(f.db,f.s,exchange,options),/duplicate client order id/);assert.equal(orders.length,1);
  assert.equal(guard.reads(),0);assert.equal(guard.ai(),0);assert.equal(f.store.rows.size,1);

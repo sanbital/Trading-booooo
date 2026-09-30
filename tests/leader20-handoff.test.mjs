@@ -43,6 +43,7 @@ function harness({start=2000,ready=5000,reserve=80000,capacity=2,partial=false,d
   if(url.startsWith('https://fapi')){assert.ok(url.includes('endTime='+String(slot-1)));throw Error('offline momentum');}
   paid.push(JSON.parse(init.body));at+=9000;
   if(ds==='timeout')throw Object.assign(Error('fixture'),{name:'TimeoutError'});
+  if(ds==='402')return new Response(JSON.stringify({error:{message:'Payment Required'}}),{status:402});
   return new Response(JSON.stringify({model:'deepseek-flash',choices:[{finish_reason:'stop',message:{content:'invalid JSON'}}],
    usage:{prompt_tokens:100,completion_tokens:5}}));
  }};
@@ -80,6 +81,9 @@ test('reserve is configurable, T itself may wait for freeze ingest, and capacity
 });
 test('DeepSeek timeout remains explicit unavailable advice for twenty GPT events',async()=>{
  const h=harness({ds:'timeout'});assert.equal((await runEntryBatch(h.db,h.ctl,h.options)).events,20);assert.equal(h.paid.length,1);
+});
+test('TEST 8: DeepSeek HTTP 402 remains advisory and does not block GPT event materialization',async()=>{
+ const h=harness({ds:'402'});assert.equal((await runEntryBatch(h.db,h.ctl,h.options)).events,20);assert.equal(h.paid.length,1);
 });
 test('already-expired GPT FINAL is a technical ABSTAIN and makes no API call',async()=>{
  let calls=0;const r=await batchFinalDecision({leader20:{entry_window:{expires_at_ms:slot+120000}}},

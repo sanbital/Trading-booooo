@@ -33,7 +33,8 @@ async function fixture(){
   fill:r=>r,entryReceipt:r=>r,classifyFailure:()=>({fatal:true})};
  vm.createContext(ctx);vm.runInContext(code+'\nthis.dispatch=dispatchEntryIocAttempt;',ctx);
  const run=(readQuote=async()=>f.quote())=>ctx.dispatch(f.db,f.s,async request=>{
-  events.push('send');orders.push(request);return {quantity:40,status:'FILLED',price:request.order.price};
+  if(request.action==='get_order'){events.push('order-query');return {quantity:40,status:'FILLED',price:f.quote().best_ask};}
+  events.push('send');orders.push(request);return {quantity:40,status:'FILLED',price:request.order.price,exchangeOrderId:'mock'};
  },{attemptNo:1,quantity:40,limitPrice:f.quote().best_ask,step:.1,payload:{entry_clock_execution:clockExecutionTrace(f.ticket)},
   authorize:()=>authorizeClockExecution(f.s,f.ticket,record,async()=>{events.push('quote');return readQuote();},
    ()=>gptFinalCheck(f.db,f.s,record),{now:f.now})});
@@ -43,7 +44,7 @@ async function fixture(){
 test('clock IOC acquires a new quote after slow durable intent, lease and generation reads, then sends without AI',async()=>{
  const f=await fixture(),old=f.record.dispatch_quote.timing.received_at_ms,r=await f.run();
  assert.equal(r.receipt.quantity,40);assert.equal(f.orders.length,1);assert.ok(f.now()-old>1000);
- assert.deepEqual(f.events.slice(-4),['lease','authority','quote','send']);
+ assert.deepEqual(f.events.slice(-6),['lease','authority','quote','send','lease','order-query']);
  assert.equal(r.evidence.clockExecutionSafety.received_at_ms,r.evidence.sentAt);
  assert.equal(r.evidence.clockExecutionSafety.checked_at_ms,r.evidence.sentAt);
  assert.equal(f.record.recheck_triggered,false);assert.equal(f.calls(),1);assert.equal(f.store.rows.size,1);

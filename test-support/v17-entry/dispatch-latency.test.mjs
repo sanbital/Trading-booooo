@@ -264,7 +264,7 @@ test('5. a triggered candidate advances before a merely watching one', () => {
     rec: (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {})};
   Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);
   vm.runInContext(QUEUE.slice(QUEUE.indexOf('const stageRank='),
-    QUEUE.indexOf('const advanceOrder=')) + 'this.rank=stageRank;', ctx);
+    QUEUE.indexOf('let advanceOrder=')) + 'this.rank=stageRank;', ctx);
   const of = (state) => ({features: {v17Setup: {state}}});
   assert.ok(ctx.rank(of(SETUP_STATE.TRIGGERED)) > ctx.rank(of(SETUP_STATE.PULLBACK_OBSERVED)));
   assert.ok(ctx.rank(of(SETUP_STATE.PULLBACK_OBSERVED)) > ctx.rank(of(SETUP_STATE.ARMED)));

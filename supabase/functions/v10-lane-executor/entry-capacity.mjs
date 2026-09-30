@@ -59,7 +59,7 @@ const R=UNUSED_SLOT_REASON;
 /** Refusals that describe the ACCOUNT: the run stops on them and every fundable slot left
  * takes that reason. Anything else is about one symbol and the loop moves on. */
 export const ACCOUNT_SCOPED_REASONS=Object.freeze([R.INSUFFICIENT_MARGIN,R.MAX_SLOTS_REACHED,R.PENDING_CAPITAL_RESERVED,R.ACCOUNT_SAFETY_BLOCK]);
-const PENDING_STATES=new Set(['PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED']);
+const PENDING_STATES=new Set(['PLANNED','DISPATCHED','PARTIALLY_FILLED','UNKNOWN','RECONCILIATION_PENDING','RECONCILIATION_FAILED']);
 const EPS=1e-9;
 const num=v=>{const x=Number(v);return Number.isFinite(x)?x:NaN;};
 const upper=v=>String(v??'').trim().toUpperCase();
