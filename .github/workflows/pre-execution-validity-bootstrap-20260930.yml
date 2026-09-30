@@ -32,8 +32,7 @@ jobs:
           git diff --check
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add .github/workflows/pre-execution-validity-release-20260930.yml \
-            deployment-evidence/pre-execution-validity-release-20260930.json \
+          git add deployment-evidence/pre-execution-validity-release-20260930.json \
             development/gpt-final-review/tests/reviewer.test.mjs \
             supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs \
             supabase/functions/v10-lane-executor/index.ts \
