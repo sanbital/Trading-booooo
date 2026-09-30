@@ -48,6 +48,15 @@ test('TEST 6: durable GPT BUY trigger dispatches immediate execution and exact s
   assert.match(executor,/mode==="execute-ready"/);assert.match(executor,/runDispatchedEntry/);
   assert.deepEqual(prioritizeSignal([{id:'a'},{id:'b'}],'b').map(x=>x.id),['b','a']);
 });
+test('TEST 6B: execute-ready-any is a short outbox-only path with no GPT fallback',async()=>{
+  const executor=await read('supabase/functions/v10-lane-executor/index.ts');
+  assert.match(executor,/async function runExecutionDispatchOnly\(db,signalId=null\)/);
+  assert.match(executor,/mode==="execute-ready-any"\)return res\(200,await runExecutionDispatchOnly\(db\)\)/);
+  const start=executor.indexOf('async function runExecutionDispatchOnly');
+  const end=executor.indexOf('async function runWithExecutionDispatch',start);
+  assert.ok(start>=0&&end>start);
+  assert.doesNotMatch(executor.slice(start,end),/runWithGptReview/);
+});
 test('TEST 7, 10, 11: atomic signal claim, expired refusal, and live 30-second authority',async t=>{
   assert.ok(process.env.PGLITE_MODULE,'PGLITE_MODULE is required');
   const {PGlite}=await import(pathToFileURL(process.env.PGLITE_MODULE).href),db=new PGlite();t.after(()=>db.close());
