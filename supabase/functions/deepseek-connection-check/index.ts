@@ -1,6 +1,15 @@
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 const reply=(status:number,body:unknown)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json','cache-control':'no-store'}});
 function eq(a:string,b:string){if(a.length!==b.length)return false;let n=0;for(let i=0;i<a.length;i++)n|=a.charCodeAt(i)^b.charCodeAt(i);return n===0;}
+function providerError(text:string){
+  try{
+    const body=JSON.parse(text),error=body?.error??body;
+    return {message:typeof error?.message==='string'?error.message.slice(0,500):null,
+      type:typeof error?.type==='string'?error.type.slice(0,100):null,
+      code:typeof error?.code==='string'||typeof error?.code==='number'?error.code:null,
+      param:typeof error?.param==='string'?error.param.slice(0,100):null};
+  }catch{return {message:'NON_JSON_PROVIDER_ERROR',type:null,code:null,param:null};}
+}
 Deno.serve(async(req:Request)=>{
   if(req.method!=='POST')return reply(405,{error:'POST_ONLY'});
   try{
@@ -10,11 +19,27 @@ Deno.serve(async(req:Request)=>{
     if(error||!supplied||!expected||!eq(supplied,expected))return reply(401,{error:'UNAUTHORIZED'});
     const key=Deno.env.get('deepseek api');
     if(!key)return reply(200,{ok:false,error:'DEEPSEEK_KEY_MISSING',orderCalls:0});
-    const start=Date.now();
-    const res=await fetch('https://api.deepseek.com/models',{redirect:'error',headers:{authorization:'Bearer '+key},signal:AbortSignal.timeout(8000)});
-    if(!res.ok)return reply(200,{ok:false,http_status:res.status,latency_ms:Date.now()-start,orderCalls:0});
-    const body=await res.json();
-    const models=(Array.isArray(body.data)?body.data:[]).map((m:{id?:string})=>m.id).filter((id:unknown)=>typeof id==='string'&&/^deepseek-[a-z0-9.-]+$/.test(id as string));
-    return reply(200,{ok:true,models,latency_ms:Date.now()-start,orderCalls:0});
+    const start=Date.now(),headers={authorization:'Bearer '+key};
+    const balanceRes=await fetch('https://api.deepseek.com/user/balance',{redirect:'error',headers,signal:AbortSignal.timeout(8000)});
+    const balanceText=await balanceRes.text();
+    if(!balanceRes.ok){
+      return reply(200,{ok:false,http_status:balanceRes.status,provider_error:providerError(balanceText),
+        endpoint:'https://api.deepseek.com/user/balance',secret_env_name:'deepseek api',
+        key_present:true,latency_ms:Date.now()-start,orderCalls:0});
+    }
+    const balance=JSON.parse(balanceText);
+    const chatRes=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',redirect:'error',
+      headers:{...headers,'content-type':'application/json'},signal:AbortSignal.timeout(8000),
+      body:JSON.stringify({model:'deepseek-flash',thinking:{type:'disabled'},max_tokens:1,
+        messages:[{role:'user',content:'Reply with OK.'}]})});
+    const chatText=await chatRes.text();
+    if(!chatRes.ok){
+      return reply(200,{ok:false,http_status:chatRes.status,provider_error:providerError(chatText),
+        endpoint:'https://api.deepseek.com/chat/completions',model:'deepseek-flash',balance,
+        secret_env_name:'deepseek api',key_present:true,latency_ms:Date.now()-start,orderCalls:0});
+    }
+    const chat=JSON.parse(chatText);
+    return reply(200,{ok:true,http_status:chatRes.status,endpoint:'https://api.deepseek.com/chat/completions',
+      model:chat.model??'deepseek-flash',balance,usage:chat.usage??null,latency_ms:Date.now()-start,orderCalls:0});
   }catch{return reply(200,{ok:false,error:'PROBE_FAILED',orderCalls:0});}
 });

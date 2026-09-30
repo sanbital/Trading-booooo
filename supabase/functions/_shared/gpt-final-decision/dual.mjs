@@ -305,7 +305,9 @@ export async function dualEntryDecision(packet,{apiKey,deepseekKey,fetchFn=fetch
   const finalDecision=accepted?final.decision:final.decision==='WAIT'?'WAIT':'ABSTAIN';
   const audit={version:DUAL_VERSION,authority:'GPT_FINAL_ONLY',analysis_mode:analysis?ENTRY_ANALYSIS.version:null,requires_final_recheck:analysis,review_tier:fast?'FAST':'FULL',first_wire_version:dynamicEnabled(packet)?FIRST_COMPACT_VERSION:null,policy_version:policy.bundle.policy_version,policy_hash:policy.hash,policy_source:policy.source,policy_generation:policy.generation??null,initial_gpt_decision:first.decision??'ABSTAIN',
     deepseek_preference:ds.valid===true?ds.answer.decision_preference:null,deepseek_valid:ds.valid===true,
-    deepseek_status:ds.status,deepseek_invalid_evidence:ds.invalid_evidence??[],
+    deepseek_status:ds.status,deepseek_availability:ds.valid===true?'AVAILABLE':'DEEPSEEK_UNAVAILABLE',
+    provider_mode:ds.valid===true?'GPT_PLUS_DEEPSEEK':'GPT_ONLY',deepseek_provider_error:ds.provider_error??null,
+    deepseek_invalid_evidence:ds.invalid_evidence??[],
     deepseek_valid_evidence:ds.valid===true?ds.valid_evidence??[]:[],
     deepseek_decision_preference:ds.decision_preference??ds.answer?.decision_preference??null,
     deepseek_available:ds.available===true,deepseek_agreement:disagreement(first,ds),deepseek_error:ds.error??null,

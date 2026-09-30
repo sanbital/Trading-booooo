@@ -33,7 +33,8 @@ function harness({start=2000,ready=5000,reserve=80000,capacity=2,partial=false,d
   if(name==='ai_call_transition')return {data:{}};
   if(name==='leader20_batch_finish'){
    assert.equal(args.p_result.results.length,20);
-   assert.ok(args.p_result.results.every(s=>s.decision==='BLOCKED'&&s.valid===false));
+   assert.ok(args.p_result.results.every(s=>s.decision==='UNAVAILABLE'&&s.valid===false&&
+    s.market_evidence_valid===true&&s.advice_status==='DEEPSEEK_UNAVAILABLE'));
    return {data:{events:20}};
   }
   throw Error('Unexpected RPC '+name);

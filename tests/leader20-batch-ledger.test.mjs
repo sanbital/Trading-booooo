@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 import {BATCH_INTERVAL_MS} from '../supabase/functions/_shared/leader20/batch.mjs';
 const migration=new URL('../supabase/migrations/20260928012054_leader20_batch_provider_ledger.sql',import.meta.url);
+const terminalMigration=new URL('../supabase/migrations/20260930115548_deepseek_terminal_failure_settlement.sql',import.meta.url);
 test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
  const {PGlite}=await import(pathToFileURL(process.env.PGLITE_MODULE).href), db=new PGlite();t.after(()=>db.close());
  await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;
@@ -33,6 +34,7 @@ test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
  declare n bigint;begin insert into net.requests(body) values(body) returning id into n;return n;end $$;
  create function leader20_materialize_event(uuid,jsonb) returns jsonb language sql as 'select ''{"created":false}''::jsonb';`);
  await db.exec(await readFile(migration,'utf8'));
+ await db.exec(await readFile(terminalMigration,'utf8'));
  const q=async(s,a=[]) => (await db.query(s,a)).rows;
  const rpc=async(n,a=[]) => (await q(`select public.${n}(${a.map((_,i)=>'$'+(i+1)).join(',')}) r`,a))[0].r;
  const reserve=(k,provider='deepseek',purpose='ENTRY',amount=.01)=>rpc('ai_call_reserve',[k,provider,provider==='deepseek'?'deepseek-flash':'gpt-5.4-mini-2026-03-17',purpose,k,k,amount]);
@@ -64,6 +66,13 @@ test('provider ledger and batch SQL execute in isolated PostgreSQL',async t=>{
   await assert.rejects(rpc('ai_call_transition',['timeout',b.row.owner,'CANCELLED']),/API_CALL_TRANSITION/);
   assert.equal(Number((await q("select coalesce(actual_usd,reserved_usd) v from ai_call_ledger where call_key='timeout'"))[0].v),.01);
   await rpc('ai_call_transition',['timeout',b.row.owner,'SETTLED',{input_tokens:1000,output_tokens:100,cached_input_tokens:0}]);
+ });
+ await t.test('received terminal HTTP failure cancels dispatched reserve with zero actual cost',async()=>{
+  const c=await reserve('http-402');await rpc('ai_call_transition',['http-402',c.row.owner,'DISPATCHED']);
+  await rpc('ai_call_transition',['http-402',c.row.owner,'CANCELLED',null,'request-402',321,'PROVIDER_HTTP_402:invalid_request_error']);
+  const row=(await q("select state,actual_usd,request_id,latency_ms,error,settled_at is not null settled from ai_call_ledger where call_key='http-402'"))[0];
+  assert.equal(row.state,'CANCELLED');assert.equal(Number(row.actual_usd),0);assert.equal(row.request_id,'request-402');
+  assert.equal(Number(row.latency_ms),321);assert.equal(row.error,'PROVIDER_HTTP_402:invalid_request_error');assert.equal(row.settled,true);
  });
  await t.test('entry cap reports budget exhaustion while protected HOLD has room',async()=>{
   await q("update ai_provider_limits set daily_usd=.6 where provider='deepseek'");

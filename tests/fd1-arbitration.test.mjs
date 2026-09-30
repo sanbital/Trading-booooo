@@ -45,11 +45,13 @@ for(const final of ['BUY','SKIP'])test('independent parallel FIRST; DeepSeek SKI
  assert.ok((final==='BUY'?r.arbitration.deepseek_rejected:r.arbitration.deepseek_adopted).length>0);
  assert.equal(revalidateArbitration(r,r.final_packet).decision,final);
 });
-for(const condition of ['agree','missing','timeout','mismatch','fabricated'])test('FINAL mandatory when advice '+condition,async()=>{
+for(const condition of ['agree','missing','timeout','http402','malformed','mismatch','fabricated'])test('FINAL mandatory when advice '+condition,async()=>{
  let gpt=0,seen;
  const fetchFn=async(url,init)=>{
   const b=JSON.parse(init.body),ds=String(url).includes('deepseek'),input=JSON.parse(ds?b.messages[1].content:b.input[1].content);
   if(!ds){gpt++;if(input.independent_reviews)seen=input;return gptResponse(input);}
+  if(condition==='http402')return Response.json({error:{message:'Insufficient Balance',type:'unknown_error',code:'invalid_request_error'}},{status:402});
+  if(condition==='malformed')return new Response('{bad',{status:200});
   const a=dsAnswer(input,'BUY');if(condition==='mismatch')a.snapshot_hash='f'.repeat(64);
   if(condition==='fabricated')a.bearish_evidence=['facts.invented.sell_pressure'];
   return dsResponse(a,input);
@@ -58,8 +60,21 @@ for(const condition of ['agree','missing','timeout','mismatch','fabricated'])tes
   ...(condition==='timeout'?{counterCall:async()=>({valid:false,available:false,attempted:true,error:'DEEPSEEK_TIMEOUT'})}:{})});
  assert.equal(gpt,2);assert.equal(r.valid,true,r.error);
  assert.equal(seen.independent_reviews.deepseek.valid,condition==='agree');
+ assert.equal(r.arbitration.provider_mode,condition==='agree'?'GPT_PLUS_DEEPSEEK':'GPT_ONLY');
+ if(condition==='http402'){
+  assert.equal(r.arbitration.deepseek_error,'DEEPSEEK_HTTP_402');
+  assert.equal(r.arbitration.deepseek_provider_error.message,'Insufficient Balance');
+ }
  if(condition==='mismatch')assert.equal(seen.independent_reviews.deepseek.error,'DEEPSEEK_INPUT_MISMATCH');
  if(condition==='fabricated')assert.equal(seen.independent_reviews.deepseek.error,'DEEPSEEK_UNSUPPORTED_EVIDENCE');
+});
+for(const final of ['HOLD','EXIT'])test('DeepSeek timeout cannot block GPT HOLD final '+final,async()=>{
+ let gpt=0;const fetchFn=async(_url,init)=>{gpt++;const input=JSON.parse(JSON.parse(init.body).input[1].content);
+  return gptResponse(input,input.independent_reviews?final:'HOLD');};
+ const r=await dualEntryDecision(await packet('HOLD'),{apiKey:'fixture',deepseekKey:'fixture',fetchFn,now:()=>T,
+  counterCall:async()=>({valid:false,status:'UNAVAILABLE',available:false,attempted:true,error:'DEEPSEEK_TIMEOUT'})});
+ assert.equal(gpt,2);assert.equal(r.valid,true,r.error);assert.equal(r.decision,final);
+ assert.equal(r.arbitration.provider_mode,'GPT_ONLY');
 });
 for(const failure of ['http','schema','expired'])test('FINAL '+failure+' never falls back to FIRST BUY',async()=>{
  let now=T;const fetchFn=async(url,init)=>{const input=JSON.parse(JSON.parse(init.body).input[1].content);

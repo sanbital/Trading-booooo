@@ -105,22 +105,22 @@ export function unpackSymbol(batch, symbol) {
 export function validateBatchResponse(text, batch) {
   let wire;
   try { wire = typeof text === 'string' ? JSON.parse(text) : text; }
-  catch { return {results:batch.symbols.map(s => blocked(s,'INVALID_JSON')), errors:['INVALID_JSON']}; }
+  catch { return {results:batch.symbols.map(s => adviceFailure(s,'INVALID_JSON')), errors:['INVALID_JSON']}; }
   if (!wire || !Array.isArray(wire.results))
-    return {results:batch.symbols.map(s => blocked(s,'INVALID_RESPONSE')), errors:['INVALID_RESPONSE']};
+    return {results:batch.symbols.map(s => adviceFailure(s,'INVALID_RESPONSE')), errors:['INVALID_RESPONSE']};
   const expected = new Set(batch.symbols.map(s=>s.id)), errors = [];
   for (const row of wire.results) if (!expected.has(row?.id)) errors.push('UNKNOWN_ID:'+String(row?.id));
   const results = batch.symbols.map(s => {
     const matches = wire.results.filter(r => r?.id === s.id);
-    if (matches.length !== 1) return blocked(s,matches.length ? 'DUPLICATE_ID' : 'MISSING_ID');
+    if (matches.length !== 1) return adviceFailure(s,matches.length ? 'DUPLICATE_ID' : 'MISSING_ID');
     const r = matches[0];
     if (s.state !== 'READY') return blocked(s,s.blocked_reason);
-    if (r.version !== s.review_ref || r.last_ms !== s.last_ms) return blocked(s,'DATA_VERSION_MISMATCH');
+    if (r.version !== s.review_ref || r.last_ms !== s.last_ms) return unavailable(s,'DATA_VERSION_MISMATCH');
     if (!['PASS','WAIT','SKIP'].includes(r.decision) ||
         !['reason','uncertainty'].every(k=>typeof r[k]==='string' && r[k].trim().length>0 && r[k].length<=1200))
-      return blocked(s,'INVALID_SYMBOL_RESULT');
+      return unavailable(s,'INVALID_SYMBOL_RESULT');
     const grounding=checkGrounding(r,batch,s);
-    if(grounding)return blocked(s,grounding);
+    if(grounding)return unavailable(s,grounding);
     const evidence=r.evidence.map(([i,col])=>[i,batch.columns[col],s.matrix[i][col]]);
     return {...r,evidence,evidence_format:'ROW_FIELD_VALUE_V1',source_evidence_format:EVIDENCE_FORMAT,
       version:s.data_version,review_ref:s.review_ref,valid:true,grounding:'SYMBOL_CELLS_VERIFIED_V2',authority:[],requires_final_recheck:true};
@@ -129,6 +129,19 @@ export function validateBatchResponse(text, batch) {
 }
 function blocked(s,error) { return {id:s.id,version:s.data_version,decision:'BLOCKED',
   reason:error,uncertainty:'DATA_OR_RESPONSE_INVALID',last_ms:s.last_ms,valid:false,authority:[]}; }
+function unavailable(s,error) { return {id:s.id,version:s.data_version,decision:'UNAVAILABLE',
+  reason:error,uncertainty:'DEEPSEEK_UNAVAILABLE',last_ms:s.last_ms,valid:false,
+  market_evidence_valid:true,advice_status:'DEEPSEEK_UNAVAILABLE',review_mode:'GPT_ONLY',authority:[]}; }
+function adviceFailure(s,error){return s.state==='READY'?unavailable(s,error):blocked(s,s.blocked_reason);}
+
+async function sanitizedProviderError(response){
+  let body=null;
+  try{body=await response.clone().json();}catch{}
+  const error=body?.error??body??{};
+  const value=(x,max=500)=>typeof x==='string'?x.slice(0,max):x==null?null:String(x).slice(0,max);
+  return {message:value(error.message),type:value(error.type,120),code:value(error.code,120),param:value(error.param,120),
+    request_id:value(body?.request_id??response.headers.get('x-request-id'),160)};
+}
 
 export function batchPayload(batch) {
   // The server retains the full SHA-256. A short response nonce avoids model copy
@@ -155,11 +168,12 @@ export async function callBatch(batch,{apiKey,fetchFn=fetch,now=Date.now,timeout
   const started=now();
   /** @type {Record<string, any>} */
   const out={provider:'deepseek',model:BATCH_MODEL,purpose:'ENTRY',
-    attempted:false,usage:null,api_cost_usd:null,batch_hash:batch.batch_hash};
+    attempted:false,usage:null,api_cost_usd:null,batch_hash:batch.batch_hash,
+    availability:'DEEPSEEK_UNAVAILABLE',review_mode:'GPT_ONLY'};
   // Keep the scheduled batch and explicit per-symbol data blocks, but there is
   // no model evidence to review when every input is already blocked locally.
   if(batch.symbols.length===10&&batch.symbols.every(s=>s.state==='BLOCKED')){
-    out.error='BATCH_NO_READY_SYMBOLS';out.api_cost_usd=0;
+    out.error='BATCH_NO_READY_SYMBOLS';out.api_cost_usd=0;out.availability='NOT_REQUIRED';
     out.results=batch.symbols.map(s=>blocked(s,s.blocked_reason));
     out.completed_at_ms=now();out.latency_ms=out.completed_at_ms-started;
     return out;
@@ -171,16 +185,17 @@ export async function callBatch(batch,{apiKey,fetchFn=fetch,now=Date.now,timeout
       signal:AbortSignal.timeout(timeoutMs),headers:{'content-type':'application/json',authorization:'Bearer '+apiKey},
       body:JSON.stringify(batchPayload(batch))});
     out.http_status=r.status;
-    if(!r.ok)throw Error('BATCH_HTTP_'+r.status);
+    if(!r.ok){out.provider_error=await sanitizedProviderError(r);throw Error('BATCH_HTTP_'+r.status);}
     const body=await r.json();out.usage=body.usage??null;out.request_id=body.id??null;
     Object.assign(out,deepseekCost(out.usage));out.api_cost_usd=out.cost_usd??null;
     if(body.model!==BATCH_MODEL||body.choices?.length!==1||body.choices[0].finish_reason!=='stop')throw Error('BATCH_INCOMPLETE_OR_MODEL');
     out.raw_content=body.choices[0].message.content;
     Object.assign(out,validateBatchResponse(out.raw_content,batch));
+    if(out.results.some(x=>x.valid===true)){out.availability='AVAILABLE';out.review_mode='GPT_PLUS_DEEPSEEK';}
   } catch(e) {
     if(e?.budget){out.budget_block=e.budget;out.attempted=false;out.api_cost_usd=0;}
     out.error=e?.name==='TimeoutError'?'BATCH_TIMEOUT':/^(BATCH_|API_|PROVIDER_)/.test(e?.message)?e.message:'BATCH_TRANSPORT_OR_PARSE';
-    out.results=batch.symbols.map(s=>blocked(s,out.error));
+    out.results=batch.symbols.map(s=>adviceFailure(s,out.error));
   }
   out.completed_at_ms=now();out.latency_ms=out.completed_at_ms-started;
   return out;

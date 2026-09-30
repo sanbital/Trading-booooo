@@ -141,7 +141,13 @@ export async function callAdvisory(shared,{apiKey,fetchFn=fetch,now=Date.now,tim
       out.attempted=true;
       const res=await fetchFn(DEEPSEEK_URL,{method:'POST',redirect:'error',signal:abort.signal,
         headers:{'content-type':'application/json',authorization:'Bearer '+apiKey},body});
-      out.http_status=res.status;if(!res.ok)throw Error('DEEPSEEK_HTTP_'+res.status);
+      out.http_status=res.status;if(!res.ok){
+        let failure=null;try{failure=await res.clone().json();}catch{}
+        const source=failure?.error??failure??{},clean=(x,max=500)=>typeof x==='string'?x.slice(0,max):x==null?null:String(x).slice(0,max);
+        out.provider_error={message:clean(source.message),type:clean(source.type,120),code:clean(source.code,120),
+          param:clean(source.param,120),request_id:clean(failure?.request_id??res.headers.get('x-request-id'),160)};
+        throw Error('DEEPSEEK_HTTP_'+res.status);
+      }
       const rawText=await res.text();out.available=true;if(rawText.length>150000)throw Error('DEEPSEEK_RESPONSE_SIZE');
       const raw=JSON.parse(rawText);out.usage=raw.usage??null;
       if(raw.model!==model)throw Error('DEEPSEEK_MODEL_MISMATCH');

@@ -43,6 +43,17 @@ test('held overlap is blocked and provider failure never retries the same captur
  assert.equal(b.symbols[0].matrix.length,0);
  const r=await callBatch(b,{apiKey:'fixture',fetchFn:async()=>{calls++;throw Error('network');}});
  assert.equal(calls,1);assert.equal(r.results.every(x=>!x.valid),true);assert.equal(r.api_cost_usd,null);
+ assert.equal(r.results[0].decision,'BLOCKED');
+ assert.equal(r.results.slice(1).every(x=>x.decision==='UNAVAILABLE'&&x.market_evidence_valid===true),true);
+});
+test('HTTP 402 preserves READY market evidence and records sanitized DeepSeek unavailability',async()=>{
+ const b=await build(rows());
+ const r=await callBatch(b,{apiKey:'fixture',fetchFn:async()=>Response.json({error:{message:'Insufficient Balance',
+  type:'unknown_error',code:'invalid_request_error'}},{status:402})});
+ assert.equal(r.http_status,402);assert.equal(r.error,'BATCH_HTTP_402');
+ assert.equal(r.provider_error.message,'Insufficient Balance');assert.equal(r.review_mode,'GPT_ONLY');
+ assert.equal(r.availability,'DEEPSEEK_UNAVAILABLE');
+ assert.equal(r.results.every(x=>x.decision==='UNAVAILABLE'&&x.market_evidence_valid===true),true);
 });
 test('usage preserves cache; invalid or unknown tokens retain reservation',()=>{
  assert.equal(deepseekCost({prompt_tokens:1000,completion_tokens:100,prompt_cache_hit_tokens:1000}).cost_usd,.000126);

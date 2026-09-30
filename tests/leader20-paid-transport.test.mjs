@@ -35,6 +35,14 @@ test('ambiguous provider timeout is retained, never refunded or automatically re
  assert.equal(db.events.at(-1).p.p_state,'UNKNOWN');
  assert.equal(db.events.some(e=>e.p.p_state==='CANCELLED'),false);
 });
+test('received HTTP 402 is terminal, releases reserve, and returns the response to GPT-only failover',async()=>{
+ const db=database();let calls=0;
+ const f=paidTransport(db,{parentKey:'p402',purpose:'ENTRY',fetchFn:async()=>{calls++;return Response.json({
+  error:{message:'Insufficient Balance',type:'unknown_error',code:'invalid_request_error'}},{status:402});}});
+ const response=await f(endpoint,init);assert.equal(response.status,402);assert.equal(calls,1);
+ assert.deepEqual(db.events.map(e=>e.name==='ai_call_reserve_owned'?'RESERVED':e.p.p_state),['RESERVED','DISPATCHED','CANCELLED']);
+ assert.match(db.events.at(-1).p.p_error,/^PROVIDER_HTTP_402:invalid_request_error:unknown_error:Insufficient Balance$/);
+});
 
 test('lost reservation response and rolled-back dispatch transition recover without duplicate provider HTTP',async()=>{
  let reserved=null,claims=0,dispatches=0,calls=0;
@@ -64,10 +72,11 @@ test('batch PASS gets one independent GPT FINAL with original latest 24 buckets 
   return {valid:true,decision:'SKIP'};
  }});
  assert.equal(calls,1);assert.equal(r.decision,'SKIP');assert.equal(r.requires_final_recheck,true);
- for(const [decision,valid] of [['WAIT',true],['SKIP',true],['BLOCKED',false]]){
+ for(const [decision,valid] of [['WAIT',true],['SKIP',true],['BLOCKED',false],['UNAVAILABLE',false]]){
   packet.leader20.batch_advice={...packet.leader20.batch_advice,decision,valid};
   const independent=await batchFinalDecision(packet,{apiKey:'fixture',now:()=>T,call:async()=>({valid:true,decision:'BUY'})});
   assert.equal(independent.decision,'BUY','advisor opinion cannot veto GPT');
+  assert.equal(independent.provider_mode,valid?'GPT_PLUS_DEEPSEEK':'GPT_ONLY');
   assert.equal(independent.requires_final_recheck,true,'fixture BUY never grants direct dispatch authority');
  }
  packet.leader20.batch_advice.last_ms=T-600000;
