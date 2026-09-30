@@ -1,0 +1,52 @@
+name: Temporary read Binance state 20260930
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/tmp-read-binance-state-20260930.yml'
+permissions:
+  contents: read
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Read signed Binance account state only
+        env:
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ops/v18-gateway-read.mjs
+          node - <<'NODE'
+          const x=require('./release-evidence/gateway-read.json');
+          console.log(JSON.stringify({
+            observedAt:x.observedAt,
+            positions:x.portfolio.positions.map(p=>({
+              market:p.market,symbol:p.symbol,side:p.side,quantity:p.quantity,
+              entry_price:p.entry_price,mark_price:p.mark_price,unrealized_pnl:p.unrealized_pnl
+            })),
+            regularOrders:x.openOrders.orders.map(o=>({
+              symbol:o.symbol,side:o.side,type:o.type,status:o.status,quantity:o.quantity,price:o.price,
+              clientOrderId:o.clientOrderId
+            })),
+            algoOrders:x.openOrders.algos.map(o=>({
+              symbol:o.symbol,side:o.side,positionSide:o.positionSide,orderType:o.orderType??o.type,
+              algoStatus:o.algoStatus,quantity:o.quantity,triggerPrice:o.triggerPrice,clientAlgoId:o.clientAlgoId
+            }))
+          },null,2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: binance-state-read
+          path: release-evidence/gateway-read.json
+          retention-days: 3
