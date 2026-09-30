@@ -29,6 +29,25 @@ jobs:
         with:
           version: 0.4.108
 
+      - name: Restart Supabase project through Management API
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          curl -fsS -X POST             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/restart"             > /tmp/restart-response.json
+          healthy=false
+          for i in $(seq 1 36); do
+            status="$(curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"               "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF"               | python -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' || true)"
+            echo "restart poll $i status=$status"
+            if [ "$status" = "ACTIVE_HEALTHY" ]; then healthy=true; break; fi
+            sleep 5
+          done
+          test "$healthy" = true || { echo "::error::Supabase project did not return ACTIVE_HEALTHY"; exit 1; }
+          sleep 10
+
       - name: Select a bounded production DB path
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
