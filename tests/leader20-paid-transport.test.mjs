@@ -43,6 +43,12 @@ test('received HTTP 402 is terminal, releases reserve, and returns the response 
  assert.deepEqual(db.events.map(e=>e.name==='ai_call_reserve_owned'?'RESERVED':e.p.p_state),['RESERVED','DISPATCHED','CANCELLED']);
  assert.match(db.events.at(-1).p.p_error,/^PROVIDER_HTTP_402:invalid_request_error:unknown_error:Insufficient Balance$/);
 });
+test('terminal cancellation is scoped to DeepSeek and does not change OpenAI receipt handling',async()=>{
+ const db=database(),openai='https://api.openai.com/v1/responses';
+ await paidTransport(db,{parentKey:'openai-429',purpose:'ENTRY',fetchFn:async()=>new Response('{}',{status:429})})(openai,
+  {body:JSON.stringify({model:'gpt-5.4-mini-2026-03-17',max_output_tokens:100,input:'fixture'})});
+ assert.equal(db.events.at(-1).p.p_state,'UNKNOWN');assert.equal(db.events.at(-1).p.p_error,'USAGE_UNAVAILABLE_HTTP_429');
+});
 
 test('lost reservation response and rolled-back dispatch transition recover without duplicate provider HTTP',async()=>{
  let reserved=null,claims=0,dispatches=0,calls=0;

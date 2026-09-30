@@ -50,7 +50,7 @@ export function paidTransport(db,{parentKey,purpose,fetchFn=fetch,now=Date.now}=
     cached_input_tokens:u?.prompt_cache_hit_tokens??u?.prompt_tokens_details?.cached_tokens??0};
   if([usage.input_tokens,usage.output_tokens,usage.cached_input_tokens].every(x=>Number.isSafeInteger(x)&&x>=0)&&usage.cached_input_tokens<=usage.input_tokens)
    await transition('SETTLED',{p_usage:usage,p_request_id:raw.id??response.headers.get('x-request-id'),p_latency_ms:now()-start});
-  else if(!response.ok){
+  else if(provider==='deepseek'&&!response.ok){
    const error=raw?.error??raw??{},clean=x=>typeof x==='string'?x.replace(/[\r\n]+/g,' ').slice(0,240):null;
    const detail=[clean(error.code),clean(error.type),clean(error.message)].filter(Boolean).join(':');
    await transition('CANCELLED',{p_error:'PROVIDER_HTTP_'+response.status+(detail?':'+detail:''),
