@@ -242,6 +242,12 @@ export class FinalReviewCoordinator {
       record.result=this.engine?await this.engine.call(record.packet,{apiKey:this.apiKey(),fetchFn,now:this.now,deadlineMs:analysisDeadline,identity:record.identity}):
         await callFinalReviewer(record.packet,{apiKey:this.apiKey(),fetchFn,now:this.now,
         deadlineMs:record.valid_until_ms,profile:this.profile});
+      // DURABLE DECISION BOUNDARY: persist the complete provider-derived result while the
+      // journal is still RUNNING, before the terminal CAS. If the worker dies or the DONE
+      // transition times out, the reaper can promote this exact immutable result without
+      // another paid provider call. Strategy/validation is unchanged.
+      preparationStage='RESULT_SNAPSHOT';
+      if(this.store.snapshot)await this.store.snapshot(key,owner,record);
       if(this.engine&&record.result.final_packet){
         record.packet=record.result.final_packet;
         record.snapshot_at_ms=record.result.final_snapshot_at_ms;
