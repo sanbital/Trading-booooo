@@ -6,6 +6,7 @@ on:
     paths:
       - 'collectors/doa-capture/core.mjs'
       - 'collectors/doa-capture/worker.mjs'
+      - 'collectors/doa-capture/bootstrap.mjs'
       - 'collectors/doa-capture/Dockerfile'
       - '.github/workflows/release-db-singleflight-collector-20260930.yml'
 permissions:
