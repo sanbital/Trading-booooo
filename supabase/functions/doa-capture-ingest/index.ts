@@ -48,7 +48,7 @@ async function getToken(){
 }
 Deno.serve(createHandler({
  getToken,
- invoke:(action:string,body:unknown)=>db('rpc/doa_capture_rpc',{p_action:action,p_body:body},DB_RPC_TIMEOUT_MS),
+ invoke:(action:string,body:any)=>action==='release'?db('rpc/doa_capture_release',{p_worker_id:String(body?.worker_id??'')},DB_LIGHT_TIMEOUT_MS):db('rpc/doa_capture_rpc',{p_action:action,p_body:body},DB_RPC_TIMEOUT_MS),
  maintenance:async()=>{
   const run=()=>maintainArchive({rpc:(action:string,body:unknown)=>db('rpc/leader20_archive_maintenance',{p_action:action,p_body:body},DB_HEAVY_TIMEOUT_MS),storage});
   const first=await run();return first.state==='DELETED'?await run():first;
