@@ -56,6 +56,7 @@ test('synthetic depth-only recovery preserves trade state and bucket clock',()=>
  s.flow.event({a:1,T:1000,E:1000,p:100,q:1,m:false},1000);s.flow.reset();
  s.flow.event({a:2,T:6000,E:6000,p:100,q:1,m:false},6000);
  retireBookCapture(s,7000);
+ assert.equal(s.bookReconnectAt,7250,'depth gap reconnect is symbol-local and bounded below one bucket');
  assert.equal(s.lastBucket,5000);assert.equal(s.flow.last,2);assert.equal(s.flow.count,1);
  assert.equal(completeCaptureInterval(s,10000,true),false,'broken book stays invalid');
  s.book.snapshot({lastUpdateId:20,bids:[[99,10]],asks:[[101,10]]},7100);
