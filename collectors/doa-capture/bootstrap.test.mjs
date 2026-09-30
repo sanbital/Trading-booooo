@@ -1,9 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {exchangeMinuteWeight,restWeightLimit,recoveryOrder} from './bootstrap.mjs';
+import {captureDisposition} from './clock.mjs';
+
 import {WeightBudget,Book,completeCaptureInterval,captureBucketDue,initialBucketBoundary} from './core.mjs';
 const slot=1800000,window={version:'TOP20_CLOCK_CAPTURE_1',slot_ms:slot};
 const candidates=Array.from({length:20},(_,i)=>({symbol:`C${i}USDT`,roles:['SCANNER_LEADER'],book:new Book()}));
+test('clock candidates stream through the bounded BUY validity tail only',()=>{
+ const roles=['SCANNER_LEADER'];
+ assert.deepEqual(captureDisposition(roles,window,slot+119999),{connect:true,persist:true});
+ assert.deepEqual(captureDisposition(roles,window,slot+120000),{connect:false,persist:false});
+});
+
 
 test('new sockets at every timer phase align before capture without certifying a partial first interval',()=>{
  for(let phase=1;phase<5000;phase+=137){
