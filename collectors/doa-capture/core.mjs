@@ -1,4 +1,4 @@
-export const VERSION = 'DOA-CAPTURE-8-CLOCK-BOOTSTRAP';
+export const VERSION = 'DOA-CAPTURE-9-SYMBOL-RESYNC';
 export function transportFresh(e,receivedAt){const at=Number(e.E??e.T);return Number.isSafeInteger(at)&&Number.isSafeInteger(receivedAt)&&at<=receivedAt+1000&&receivedAt-at<=10000;}
 export const normalizeSymbol=value=>{const s=String(value??'').trim().toUpperCase();return /^[\p{L}\p{N}]{1,24}USDT$/u.test(s)?s:null;};
 export const iso = n => new Date(n).toISOString();
@@ -92,7 +92,11 @@ export class Flow {
 // Keep exchange streams independent: a depth reconnect must not erase a
 // still continuous trade stream or move the five-second bucket boundary.
 export function retireBookCapture(s,now){
-  s.book.reset();s.bookGeneration++;s.bookReconnectAt=now+5000;
+  // Depth continuity failure is symbol-local. Drop only this book generation and
+  // reconnect quickly enough to obtain a fresh REST snapshot before the next 5s
+  // bucket when possible. The broken interval remains invalid; trade flow, other
+  // symbols and the shared bucket clock are untouched.
+  s.book.reset();s.bookGeneration++;s.bookReconnectAt=now+250;
 }
 export function retireMarketCapture(s,now){
   s.flow.complete=false;s.marketSequenceVerified=false;
