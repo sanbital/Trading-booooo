@@ -1,0 +1,346 @@
+diff --git a/.github/workflows/pre-execution-validity-release-20260930.yml b/.github/workflows/pre-execution-validity-release-20260930.yml
+new file mode 100644
+index 00000000..736fa273
+--- /dev/null
++++ b/.github/workflows/pre-execution-validity-release-20260930.yml
+@@ -0,0 +1,196 @@
++name: Pre-execution BUY validity production release
++on:
++  workflow_dispatch:
++  push:
++    branches: [main]
++    paths: [deployment-evidence/pre-execution-validity-release-20260930.json]
++permissions:
++  contents: read
++concurrency:
++  group: deploy-v10-lane-executor
++  cancel-in-progress: false
++jobs:
++  release:
++    runs-on: ubuntu-latest
++    timeout-minutes: 80
++    steps:
++      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
++        with:
++          ref: ${{ github.sha }}
++          fetch-depth: 0
++          persist-credentials: false
++      - uses: actions/setup-node@v4
++        with:
++          node-version: 22
++      - uses: denoland/setup-deno@v2
++        with:
++          deno-version: v2.5.6
++      - name: Verify scope, MOVR replay, and full regression
++        shell: bash
++        run: |
++          set -euo pipefail
++          mkdir -p release-evidence "$RUNNER_TEMP/pre-execution-pglite"
++          request=deployment-evidence/pre-execution-validity-release-20260930.json
++          baseline=$(node -p "require('./$request').baseline_main")
++          git merge-base --is-ancestor "$baseline" HEAD
++          git diff --check
++          git diff --quiet "$baseline" HEAD -- \
++            supabase/functions/_shared/gpt-final-decision/api.mjs \
++            supabase/functions/_shared/gpt-final-decision/deepseek.mjs \
++            supabase/functions/_shared/gpt-final-decision/dual.mjs \
++            supabase/functions/_shared/leader-momentum-v17.mjs \
++            supabase/functions/_shared/leader-exit-review.mjs \
++            supabase/functions/_shared/leader-slot-sizing.mjs \
++            supabase/functions/_shared/leader-native-protection.mjs \
++            supabase/functions/_shared/leader-entry-protection.mjs \
++            supabase/functions/_shared/leader-entry-settlement.mjs \
++            supabase/functions/_shared/leader-exit-settlement.mjs
++          node -e 'const r=require("./deployment-evidence/pre-execution-validity-release-20260930.json");if(r.release_scope!=="PRE_EXECUTION_STALE_BUY_ONLY"||r.validation_orders||r.model_change||r.strategy_change||r.leverage_change||r.slot_change||r.stop_change)throw Error("RELEASE_SCOPE");'
++          npm install --prefix "$RUNNER_TEMP/pre-execution-pglite" --ignore-scripts --no-audit --no-fund @electric-sql/pglite@0.3.14 >/dev/null
++          export PGLITE_MODULE="$RUNNER_TEMP/pre-execution-pglite/node_modules/@electric-sql/pglite/dist/index.js"
++          node ops/dynamic-flow/run-tests.mjs > release-evidence/node-tests.tap
++          deno check supabase/functions/v10-lane-executor/index.ts \
++            supabase/functions/_shared/gpt-final-decision/pre-execution-validity.mjs \
++            supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs
++          deno task test > release-evidence/deno-tests.txt
++          node --test tests/pre-execution-validity.test.mjs > release-evidence/movr-and-validity.tap
++      - uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
++        with:
++          version: 2.109.1
++      - name: Snapshot production and wait for a safe deploy boundary
++        shell: bash
++        env:
++          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
++          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
++          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
++        run: |
++          set -euo pipefail
++          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
++          supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-before.json
++          node --input-type=module <<'NODE'
++          import fs from 'node:fs';let rows=JSON.parse(fs.readFileSync('release-evidence/functions-before.json'));
++          rows=rows.functions??rows;const f=rows.find(x=>x.slug==='v10-lane-executor');
++          if(!f||f.status!=='ACTIVE'||f.verify_jwt!==false)throw Error('EXECUTOR_BASELINE');
++          fs.writeFileSync('release-evidence/version-before.txt',String(f.version)+'\n');
++          NODE
++          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
++            "select jsonb_build_object('mode',mode,'pause_new_entries',pause_new_entries,'withdrawal_mode',withdrawal_mode,'manual_intervention_required',manual_intervention_required,'allocation',binance_futures_allocation_usdt,'leverage',binance_futures_leverage,'max_positions',max_open_positions_per_exchange) from public.trading_settings where id=1" \
++            > release-evidence/settings-before.json
++          for i in $(seq 1 24); do
++            pending=$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
++              "select count(*) from public.v11_long_regime_orders where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING')")
++            test "$pending" = 0 && break
++            test "$i" -lt 24 || { echo "pending order boundary=$pending"; exit 1; }
++            sleep 5
++          done
++          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
++            "select to_char(clock_timestamp() at time zone 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.MS')||'Z'" \
++            > release-evidence/deploy-started-at.txt
++      - name: Deploy only v10-lane-executor
++        shell: bash
++        env:
++          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
++          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
++        run: |
++          set -euo pipefail
++          supabase functions deploy v10-lane-executor --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
++          echo "$GITHUB_SHA" > release-evidence/source-sha.txt
++      - name: Verify deployed bundle, settings, and runtime health
++        shell: bash
++        env:
++          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
++          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
++          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
++        run: |
++          set -euo pipefail
++          for i in $(seq 1 24); do
++            supabase functions list --project-ref "$SUPABASE_PROJECT_REF" --output json > release-evidence/functions-after.json
++            if node --input-type=module <<'NODE'
++          import fs from 'node:fs';let rows=JSON.parse(fs.readFileSync('release-evidence/functions-after.json'));
++          rows=rows.functions??rows;const f=rows.find(x=>x.slug==='v10-lane-executor'),before=Number(fs.readFileSync('release-evidence/version-before.txt'));
++          process.exit(f&&f.status==='ACTIVE'&&f.verify_jwt===false&&Number(f.version)===before+1?0:1);
++          NODE
++            then break; fi
++            test "$i" -lt 24 || exit 1
++            sleep 5
++          done
++          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
++            "select to_char(clock_timestamp() at time zone 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.MS')||'Z'" \
++            > release-evidence/deployed-at.txt
++          mkdir -p release-evidence/download-executor
++          supabase functions download v10-lane-executor --project-ref "$SUPABASE_PROJECT_REF" --use-api --workdir "$PWD/release-evidence/download-executor"
++          node ops/gpt-final-review/verify-bundle-parity.mjs release-evidence/download-executor . v10-lane-executor > release-evidence/bundle-parity.json
++          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
++            "select jsonb_build_object('mode',mode,'pause_new_entries',pause_new_entries,'withdrawal_mode',withdrawal_mode,'manual_intervention_required',manual_intervention_required,'allocation',binance_futures_allocation_usdt,'leverage',binance_futures_leverage,'max_positions',max_open_positions_per_exchange) from public.trading_settings where id=1" \
++            > release-evidence/settings-after.json
++          cmp release-evidence/settings-before.json release-evidence/settings-after.json
++          token=$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c "select token from public.edge_internal_tokens where name='v10-lane-executor'")
++          curl -fsS --max-time 25 -H 'content-type: application/json' -H "x-v10-executor-token: $token" \
++            -d '{"mode":"ops-readiness"}' "https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/v10-lane-executor" \
++            > release-evidence/ops-readiness.json
++          node -e 'const r=require("./release-evidence/ops-readiness.json");if(!r.ok||!r.binance.positionsComplete||!r.binance.openOrdersComplete)throw Error("READINESS_FAILED")'
++          for i in $(seq 1 36); do
++            psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c \
++              "select jsonb_build_object('completed_at',last_cycle_completed_at,'circuit_open',circuit_open,'last_error',last_error) from public.v11_long_regime_runtime where singleton and last_cycle_completed_at>='$(cat release-evidence/deployed-at.txt)'::timestamptz and circuit_open=false and coalesce(last_error,'')=''" \
++              > release-evidence/runtime-cycle.json
++            test -s release-evidence/runtime-cycle.json && break
++            test "$i" -lt 36 || exit 1
++            sleep 5
++          done
++      - name: Observe one naturally occurring GPT BUY validity check
++        shell: bash
++        env:
++          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
++        run: |
++          set -euo pipefail
++          deployed=$(cat release-evidence/deployed-at.txt)
++          for i in $(seq 1 60); do
++            psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c "with d as (
++              select decided_at,reason,details from public.v11_long_regime_decisions
++              where decided_at>='$deployed'::timestamptz and details->>'stage'='PRE_EXECUTION_VALIDITY_CHECK'
++              order by decided_at desc limit 1)
++              select jsonb_build_object('decided_at',d.decided_at,'signal_id',d.details->>'signalId','symbol',d.details->>'symbol',
++                'reason',d.reason,'latest_capture_hash',d.details#>>'{validity,latest_capture_hash}',
++                'telemetry',d.details->'clockExecutionTelemetry','order',(
++                  select jsonb_build_object('state',o.state,'created_at',o.created_at,
++                    'order_sent_at',coalesce(o.response_payload#>>'{v22EntryFinality,clockExecutionTelemetry,order_sent_at}',o.response_payload#>>'{v22EntryFinality,sentAt}',o.response_payload#>>'{clockExecutionTelemetry,order_sent_at}'),
++                    'fill_at',coalesce(o.response_payload#>>'{v22EntryFinality,clockExecutionTelemetry,fill_at}',o.response_payload#>>'{clockExecutionTelemetry,fill_at}'))
++                  from public.v11_long_regime_orders o where o.signal_id=(d.details->>'signalId')::uuid and o.created_at>='$deployed'::timestamptz
++                  order by o.created_at desc limit 1)) from d" > release-evidence/natural-candidate.json
++            test -s release-evidence/natural-candidate.json && break
++            test "$i" -lt 60 || { echo 'NO_NATURAL_GPT_BUY_VALIDITY_CHECK_WITHIN_60_MINUTES'; exit 1; }
++            sleep 60
++          done
++          node --input-type=module <<'NODE'
++          import fs from 'node:fs';const x=JSON.parse(fs.readFileSync('release-evidence/natural-candidate.json'));
++          const t=x.telemetry??{},required=['gpt_buy_completed_at','pre_execution_check_at','decision_age_ms','original_snapshot_at',
++            'latest_snapshot_at','new_buckets_since_buy','price_drift_bps','spread_delta_bps','slippage_delta_bps','validity_result',
++            'validity_reasons','gpt_recheck_attempted','gpt_recheck_result','gpt_recheck_latency_ms','order_sent_at','fill_at'];
++          for(const k of required)if(!Object.hasOwn(t,k))throw Error('MISSING_TELEMETRY:'+k);
++          if(!['VALID','UNCERTAIN','INVALID'].includes(t.validity_result))throw Error('VALIDITY_RESULT');
++          if(!(Number.isFinite(t.decision_age_ms)&&Number.isInteger(t.new_buckets_since_buy)&&x.latest_capture_hash))throw Error('FRESHNESS_EVIDENCE');
++          if(t.validity_result==='VALID'&&t.gpt_recheck_attempted!==false)throw Error('VALID_CALLED_GPT');
++          if(t.validity_result==='INVALID'&&t.gpt_recheck_attempted!==false)throw Error('INVALID_CALLED_GPT');
++          fs.writeFileSync('release-evidence/production-verification.json',JSON.stringify(x,null,2)+'\n');
++          NODE
++          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c "select jsonb_build_object(
++            'samples',count(*),'p95_pre_execution_check_latency_ms',percentile_cont(.95) within group(order by (details#>>'{clockExecutionTelemetry,pre_execution_check_latency_ms}')::numeric))
++            from public.v11_long_regime_decisions where decided_at>='$deployed'::timestamptz
++              and details->>'stage'='PRE_EXECUTION_VALIDITY_CHECK' and details#>>'{clockExecutionTelemetry,pre_execution_check_latency_ms}' is not null" \
++            > release-evidence/latency-p95.json
++          echo 'PRODUCTION_VERIFICATION'
++          cat release-evidence/production-verification.json
++          echo 'PRE_EXECUTION_LATENCY'
++          cat release-evidence/latency-p95.json
++          echo 'EXECUTOR_VERSION'
++          node --input-type=module <<'NODE'
++          import fs from 'node:fs';let rows=JSON.parse(fs.readFileSync('release-evidence/functions-after.json'));
++          rows=rows.functions??rows;const f=rows.find(x=>x.slug==='v10-lane-executor');
++          console.log(JSON.stringify({version_before:Number(fs.readFileSync('release-evidence/version-before.txt')),version_after:Number(f.version),status:f.status,verify_jwt:f.verify_jwt}));
++          NODE
++      - uses: actions/upload-artifact@v4
++        if: always()
++        with:
++          name: pre-execution-validity-production-release
++          path: release-evidence
++          retention-days: 30
+diff --git a/deployment-evidence/pre-execution-validity-release-20260930.json b/deployment-evidence/pre-execution-validity-release-20260930.json
+new file mode 100644
+index 00000000..72a7a4ef
+--- /dev/null
++++ b/deployment-evidence/pre-execution-validity-release-20260930.json
+@@ -0,0 +1,17 @@
++{
++  "release_scope": "PRE_EXECUTION_STALE_BUY_ONLY",
++  "baseline_main": "7d06f6adf4d65ef13a5ba8eb4a74e7e9cf2bf7e6",
++  "validation_orders": false,
++  "model_change": false,
++  "strategy_change": false,
++  "leverage_change": false,
++  "slot_change": false,
++  "stop_change": false,
++  "movr_regression": {
++    "gpt_buy_completed_at": "2026-09-30T20:40:40+09:00",
++    "fill_at": "2026-09-30T20:41:32+09:00",
++    "decision_age_ms": 52000,
++    "original_mid": 1.83305,
++    "actual_entry_price": 1.81955
++  }
++}
+diff --git a/development/gpt-final-review/tests/reviewer.test.mjs b/development/gpt-final-review/tests/reviewer.test.mjs
+index 4224c952..81a133e0 100644
+--- a/development/gpt-final-review/tests/reviewer.test.mjs
++++ b/development/gpt-final-review/tests/reviewer.test.mjs
+@@ -57,7 +57,7 @@ test('unknown usage is not zero cost',()=>assert.equal(costOf({}).usd,null));
+ test('known token cost is kept in USD',()=>{const x=costOf(rawResponse({}));assert.ok(Math.abs(x.usd-.001425)<1e-12);assert.match(x.basis,/NOT_USDT/);});
+ test('budget stops additional distinct calls',async()=>{const {c,store}=service({config:{...config(),apiBudgetUsd:.1}});await completed(c);const r=await c.consider(candidate('second'));assert.equal(r.allowed,false);assert.equal(store.calls,1);});
+ test('adapter filters before signal CLAIMED and never orders',async()=>{const db={}, {c}=service();setTestCoordinator(db,c);const s=candidate();const first=await gptFilterExecutable(db,[s]);assert.equal(first.candidates.length,0);assert.equal(s.status,'NEW');await Promise.all([...c.pending.values()]);assert.equal((await gptFilterExecutable(db,[s])).candidates.length,1);assert.equal(gptFinalCheck(db,s).allowed,true);});
+-test('resumption waits outside original lease and reuses ordinary cycle',async()=>{const db={};let held=false,runs=0;setTestCoordinator(db,{config:{mode:'ENFORCE'},waitReady:async()=>{assert.equal(held,false);return true;}});const run=async()=>{held=true;runs++;held=false;return {ok:true,entry:{entered:runs===2,reason:'GPT_REVIEW_PENDING'}};};const r=await runWithGptReview(db,run);assert.equal(runs,2);assert.equal(r.entry.entered,true);});
++test('resumption waits outside original lease and reuses ordinary cycle',async()=>{const db={};let held=false,runs=0;setTestCoordinator(db,{config:{mode:'ENFORCE'},drainPending:async()=>{assert.equal(held,false);},waitReady:async()=>{assert.equal(held,false);return true;}});const run=async()=>{held=true;runs++;held=false;return {ok:true,entry:{entered:runs===2,reason:'GPT_REVIEW_PENDING'}};};const r=await runWithGptReview(db,run);assert.equal(runs,2);assert.equal(r.entry.entered,true);});
+ test('no GPT-triggered retry after an ordinary engine rejection',async()=>{const db={};let runs=0;setTestCoordinator(db,{config:{mode:'ENFORCE'},waitReady:()=>{throw Error('must not wait')}});await runWithGptReview(db,async()=>{runs++;return {ok:true,entry:{entered:false,reason:'ENTRY_MARGIN_INSUFFICIENT'}};});assert.equal(runs,1);});
+ test('local connector patch has five unique narrow regions',()=>{const fixture=replacements.map(r=>r.from).join('\n// untouched original segment\n');const out=transform(fixture);for(const r of replacements)assert.ok(out.includes(r.to));assert.equal((out.match(/untouched original segment/g)||[]).length,4);assert.throws(()=>transform(out),/ALREADY_PATCHED/);});
+ test('local installer refuses an unverified current source blob',()=>assert.throws(()=>checkedTransform('unknown source'),/BASELINE_CHANGED/));
+diff --git a/supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs b/supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs
+index d6790097..b8d955d0 100644
+--- a/supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs
++++ b/supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs
+@@ -33,6 +33,10 @@ const clockTraces=new WeakMap();
+ export function clockExecutionTrace(ticket){
+  if(!clockTraces.has(ticket))clockTraces.set(ticket,{gpt_completed_at:ticket.clockFinalAuthority?.completed_at_ms,
+   gpt_buy_completed_at:ticket.clockFinalAuthority?.completed_at_ms,
++  pre_execution_check_at:null,pre_execution_check_latency_ms:null,decision_age_ms:null,original_snapshot_at:ticket.initial?.snapshotAt??null,
++  latest_snapshot_at:null,new_buckets_since_buy:null,price_drift_bps:null,spread_delta_bps:null,
++  slippage_delta_bps:null,validity_result:null,validity_reasons:[],gpt_recheck_attempted:false,
++  gpt_recheck_result:'NOT_ATTEMPTED',gpt_recheck_latency_ms:null,order_sent_at:null,fill_at:null,
+   old_quote_used:false,quote_refresh_attempts:0,quote_requests:0});
+  return clockTraces.get(ticket);
+ }
+@@ -189,7 +193,7 @@ export async function clockExecutionStep(db,s,ticket,readQuote,{now=Date.now,seq
+   proceed=final.valid===true&&final.decision==='KEEP_BUY'&&now()<final.valid_until_ms;
+   reason=proceed?'PRE_EXECUTION_GPT_KEEP_BUY':'PRE_EXECUTION_GPT_CANCEL_OR_ERROR:'+gptResult;}
+  const record=clockExecutionRecord(ticket,quote,safety,at,sequence,validity,final),trace=clockExecutionTrace(ticket);
+- Object.assign(trace,{pre_execution_check_at:at,decision_age_ms:validity.decision_age_ms,
++ Object.assign(trace,{pre_execution_check_at:at,pre_execution_check_latency_ms:at-checkedAt,decision_age_ms:validity.decision_age_ms,
+   original_snapshot_at:validity.original_snapshot_at,latest_snapshot_at:validity.latest_snapshot_at,
+   new_buckets_since_buy:validity.new_buckets_since_buy,price_drift_bps:validity.price_drift_bps,
+   spread_delta_bps:validity.spread_delta_bps,slippage_delta_bps:validity.slippage_delta_bps,
+diff --git a/supabase/functions/v10-lane-executor/index.ts b/supabase/functions/v10-lane-executor/index.ts
+index 98bee173..9151ea6a 100644
+--- a/supabase/functions/v10-lane-executor/index.ts
++++ b/supabase/functions/v10-lane-executor/index.ts
+@@ -198,6 +198,8 @@ async function recordV24(db,signalId,symbol,d){
+   }catch{/* decision logging is best-effort; it must not affect the trade path */}
+ }
+ async function audit(db,p,b,a,action,reason,details={}){await db.from("v11_long_regime_decisions").insert({revision:REVISION,position_id:p?.id||null,observed_regime:details.marketRoute||null,active_lane_before:b||null,active_lane_after:a||null,action,reason,details:{...details,executorPatch:PATCH}})}
++function auditDetached(...args){const task=audit(...args).catch(error=>console.error("PRE_EXECUTION_AUDIT_FAILED",String(error?.message??error).slice(0,160)));
++  if(globalThis.EdgeRuntime?.waitUntil)EdgeRuntime.waitUntil(task);}
+ async function manualPositionAllowances(db){
+   const r=await db.from("trading_asset_locks").select("exchange,asset,state,metadata")
+     .eq("exchange","binance_futures").eq("state","LOCKED");
+@@ -306,7 +308,7 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
+     const dispatchClaim=typeof executionDispatchClaims==="undefined"?null:executionDispatchClaims.get(db);
+     if(dispatchClaim?.signalId===String(s.id)&&typeof transitionExecutionDispatch==="function")await transitionExecutionDispatch(db,{signalId:s.id,
+       owner:dispatchClaim.owner,state:EXECUTION_DISPATCH_STATE.SUBMITTING,orderId:oi.data.id});
+-    const sentAt=Date.now();if(clockTrace)clockTrace.order_sent_at??=sentAt;
++    const sentAt=Date.now();if(clockTrace)clockTrace.order_sent_at=sentAt;
+     const initialRaw=await gw(rp),respondedAt=Date.now(),initial=fill(initialRaw);
+     await verifyExecutionLease(db);
+     const pending=await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_PENDING",
+@@ -317,7 +319,8 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
+     // Always query this exact venue order before reconciling the actual position.
+     const finalRaw=await gw({action:"get_order",market:s.symbol,identifier:id,exchange_order_id:initial.exchangeOrderId},5000),
+       receipt=entryReceipt(finalRaw,oi.data),finalitySource="SAME_ORDER_QUERY";
+-    if(clockTrace&&receipt?.quantity>0&&Number.isSafeInteger(receipt.lastAt))clockTrace.fill_at??=receipt.lastAt;
++    const fillAt=Number.isSafeInteger(receipt?.lastAt)?receipt.lastAt:Number.isSafeInteger(receipt?.updateTime)?receipt.updateTime:null;
++    if(clockTrace&&receipt?.quantity>0)clockTrace.fill_at=fillAt;
+     const evidence={source:finalitySource,initialStatus:initial.status,confirmedAt:new Date().toISOString(),attemptNo,
+       sentAt,respondedAt,latencyMs:respondedAt-sentAt,finalStatus:receipt?.status??null,executedQty:receipt?.quantity??null,
+       avgPrice:receipt?.price??null,requestedQty:quantity,limitPrice,
+@@ -1329,10 +1332,11 @@ if(attempt.gptFinalReview?.clockFinalAuthority){
+     {quote:dispatchQuoteRead,capture:dispatchCapture,priorRecord:attempt.finalRecheck,
+       sequence:attempt.finalRecheck?.gpt_recheck_attempted?2:1});
+   attempt.finalRecheck=boundary.record;
+-  if(!boundary.proceed){
+-    await audit(db,null,"BULL","BULL","ENTRY_DEFER",boundary.reason,{signalId:s.id,symbol:s.symbol,
+-      stage:"PRE_EXECUTION_VALIDITY_CHECK",validity:boundary.record.pre_execution_validity,
++  auditDetached(db,null,"BULL","BULL",boundary.proceed?"ENTRY_ALLOW":"ENTRY_DEFER",boundary.reason,
++    {signalId:s.id,symbol:s.symbol,stage:"PRE_EXECUTION_VALIDITY_CHECK",validity:boundary.record.pre_execution_validity,
++      clockExecutionTelemetry:boundary.record.clock_execution_telemetry,
+       gptRecheckAttempted:boundary.record.gpt_recheck_attempted,gptRecheckResult:boundary.record.gpt_recheck_result});
++  if(!boundary.proceed){
+     return{entered:false,decision:"WAIT",reason:boundary.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,
+       finalRecheck:boundary.record};
+   }
+diff --git a/tests/pre-execution-validity.test.mjs b/tests/pre-execution-validity.test.mjs
+index af290764..9fb641a9 100644
+--- a/tests/pre-execution-validity.test.mjs
++++ b/tests/pre-execution-validity.test.mjs
+@@ -5,6 +5,7 @@ import {validateCapture120} from '../supabase/functions/_shared/gpt-final-decisi
+ import {classifyPreExecutionValidity,preExecutionDeltaPacket,preExecutionDeltaPayload,
+   VALIDITY_RESULT} from '../supabase/functions/_shared/gpt-final-decision/pre-execution-validity.mjs';
+ import {clockExecutionStep,setRecheckTestHooks} from '../supabase/functions/v10-lane-executor/gpt-final-recheck-adapter.mjs';
++import {gptBeginExecution,gptFinalCheck} from '../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
+ import {MemoryReviewStore} from '../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
+ import {MODEL} from '../supabase/functions/_shared/gpt-final-decision/api.mjs';
+ import {nmrClockFinal} from '../test-support/nmr-clock-final.mjs';
+@@ -69,6 +70,8 @@ test('4. mixed changed state => UNCERTAIN and compact packet contains no 24-buck
+     wire=JSON.stringify(preExecutionDeltaPayload(packet));
+   assert.equal(r.result,VALIDITY_RESULT.UNCERTAIN);assert.doesNotMatch(wire,/ordered_path|trajectory/);
+   assert.deepEqual(Object.keys(packet.current.horizons),['s5','s15','s30','s60','s120']);
++  assert.ok(Number.isFinite(packet.delta.current_price));assert.ok(Number.isFinite(packet.delta.original_price));
++  assert.ok(Object.hasOwn(packet.delta,'buy_share_5s_delta'));assert.ok(Object.hasOwn(packet.delta,'net_taker_flow_5s_delta'));
+ });
+ 
+ async function clockCase(decision,{providerError=null}={}){
+@@ -85,12 +88,13 @@ async function clockCase(decision,{providerError=null}={}){
+         usage:{input_tokens:100,output_tokens:10,input_tokens_details:{cached_tokens:0}}});
+     }});
+   const r=await clockExecutionStep(f.db,f.s,f.ticket,async()=>quote(latest,f.now()),{now:f.now});
+-  setRecheckTestHooks(null);return {r,calls};
++  setRecheckTestHooks(null);return {r,calls,f};
+ }
+ 
+ test('5. UNCERTAIN + GPT KEEP_BUY => order may proceed',async()=>{
+-  const {r,calls}=await clockCase('KEEP_BUY');assert.equal(calls,1,JSON.stringify(r.record.pre_execution_validity));assert.equal(r.proceed,true,r.reason);
++  const {r,calls,f}=await clockCase('KEEP_BUY');assert.equal(calls,1,JSON.stringify(r.record.pre_execution_validity));assert.equal(r.proceed,true,r.reason);
+   assert.equal(r.record.gpt_recheck_result,'KEEP_BUY');
++  assert.equal(gptFinalCheck(f.db,f.s,r.record).allowed,true);assert.ok(gptBeginExecution(f.db,f.s,r.record));
+ });
+ 
+ test('6. UNCERTAIN + GPT CANCEL_BUY => no order',async()=>{
