@@ -10,7 +10,7 @@ returns jsonb language plpgsql security definer set search_path to '' as $$
 declare out jsonb;l public.ai_call_ledger%rowtype;
 begin
  if p_http_status<200 or p_http_status>=300 or jsonb_typeof(p_response)<>'object' or octet_length(p_response::text)>=1000000 then raise exception 'AI_RECEIPT_INVALID';end if;
- out:=public.ai_call_transition(p_call_key,p_owner,'SETTLED',p_actual_usd,p_usage,p_request_id,p_latency_ms,null);
+ out:=public.ai_call_transition(p_call_key,p_owner,'SETTLED',p_usage,p_request_id,p_latency_ms::bigint,null);
  select * into l from public.ai_call_ledger where call_key=p_call_key;
  if l.call_key is null or l.state<>'SETTLED' then raise exception 'AI_RECEIPT_LEDGER_NOT_SETTLED';end if;
  insert into trading_internal.ai_provider_receipts(call_key,parent_key,provider,request_id,http_status,response)
