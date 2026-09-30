@@ -27,7 +27,15 @@ export class Book {
     if (+e.u<=this.last) return;
     if ((!this.ready && !(+e.U<=this.last+1 && +e.u>=this.last+1)) || (this.ready && +e.pu!==this.last)) throw Error('DEPTH_GAP');
     for(const [side,rows] of [[this.bids,e.b],[this.asks,e.a]]) for(const [p0,q0] of rows) {
-      const p=+p0,q=+q0,old=side.get(p)||0;
+      const p=+p0,q=+q0;
+      // The REST snapshot defines the finite trustworthy book boundary. Diff events can
+      // mention prices beyond that boundary; retaining those forever turns a long-lived
+      // local book into an unbounded map and causes DEPTH_MEMORY_CAP/resync thrash.
+      // Ignore only NEW out-of-bound levels. Existing in-bound levels and all removals
+      // remain exact; coverage drift is handled by needsCoverageRefresh().
+      if(side===this.bids&&p<this.bidBoundary&&!side.has(p))continue;
+      if(side===this.asks&&p>this.askBoundary&&!side.has(p))continue;
+      const old=side.get(p)||0;
       if(side===this.asks && this.ready) { this.add+=Math.max(0,q-old)*p; this.remove+=Math.max(0,old-q)*p; }
       if(side===this.bids && this.ready) { this.bidAdd+=Math.max(0,q-old)*p; this.bidRemove+=Math.max(0,old-q)*p; }
       if(q===0) side.delete(p); else side.set(p,q);
