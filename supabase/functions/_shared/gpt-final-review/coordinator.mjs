@@ -82,10 +82,11 @@ export class FinalReviewCoordinator {
   }
   consumeRetry(token){const life=this.retryLifecycles.get(token);if(!life||life.used||this.now()>=life.deadline)return false;life.used=true;return true;}
   constructor({config,store,apiKey=()=>'',fetchFn=fetch,market=collectMarket,now=Date.now,schedule=p=>{p.catch(()=>{});},
-    profile=DEFAULT_PROFILE,purpose='PRODUCTION',baseline=baselineAllowed,expiry=triggerExpiry,engine=null,onResolved=async()=>{}}){
+    profile=DEFAULT_PROFILE,purpose='PRODUCTION',baseline=baselineAllowed,expiry=triggerExpiry,engine=null,
+    onResolved=async()=>{},onDurableAllowed=async()=>{}}){
     this.config=config;this.store=store;this.apiKey=apiKey;this.fetchFn=fetchFn;this.market=market;this.now=now;this.schedule=schedule;
     this.baseline=baseline;this.expiry=expiry;this.engine=engine;this.identity=engine?.identity??decisionIdentity;
-    this.onResolved=onResolved;this.waitOutcomes=[];
+    this.onResolved=onResolved;this.onDurableAllowed=onDurableAllowed;this.waitOutcomes=[];
     // An engine (FD1 final decision) replaces the question and answer contract; the durable
     // claim/ledger/TTL/ticket machinery below is identical for every engine.
     this.profile=engine?engine.id:profile;this.purpose=purpose;const wire=engine?null:profileOf(profile).wire,promptText=engine?engine.promptText:promptFor(profileOf(profile).prompt??wire);
@@ -285,8 +286,21 @@ export class FinalReviewCoordinator {
     // This hint can shorten observation waiting, but a new lease cycle still
     // rereads and validates the journal before it creates an entry ticket.
     const checked=await this.validateStored({record},record.identity_json,record.expires_at_ms,record.binding).catch(()=>null);
-    if(checked?.allowed&&!checked.aged)this.readyHints.set(key,{signalId:record.identity.signal_id,validUntil:checked.ticket.validUntil,
-      clock:!!checked.ticket.clockFinalAuthority});
+    if(checked?.valid){
+      this.tickets.set(String(record.identity.signal_id),checked.ticket);
+      if(checked.allowed&&!checked.aged)this.readyHints.set(key,{signalId:record.identity.signal_id,validUntil:checked.ticket.validUntil,
+        clock:!!checked.ticket.clockFinalAuthority});
+    }
+    // Clock BUY fast path: the DB row and outbox trigger are already committed. Hand the
+    // durable signal to the caller immediately instead of waiting for all sibling reviews
+    // or for pg_net delivery. The callback is only a latency optimization; the durable
+    // outbox + sweeper remain the crash/restart fallback.
+    if(checked?.allowed&&!checked.aged&&checked.ticket?.clockFinalAuthority){
+      const tracked=this.tracked.get(key),review={signalId:record.identity.signal_id,jobKey:key,allowed:true,
+        decision:checked.decision,reason:checked.reason,storedDecision:record.result?.decision??null};
+      if(tracked?.s)this.schedule(this.onDurableAllowed(tracked.s,review)
+        .catch(()=>console.error('GPT_DURABLE_ALLOWED_WAKE_FAILED',record.identity.signal_id)));
+    }
     return record.result?.valid===true;
   }
   async validateStored(row,identityJson,expires,binding){
