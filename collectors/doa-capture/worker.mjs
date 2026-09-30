@@ -173,7 +173,10 @@ async function flush(){
     pending.metrics.live_contexts=Object.fromEntries([...states].map(([symbol,s])=>[symbol,summarizeCapture(s.ring,Date.now())]));
     pending.metrics.watch_roles=Object.fromEntries([...states].map(([symbol,s])=>[symbol,s.roles??[]]));
     pending.metrics.unavailable_symbols=unavailableSymbols;
-    pending.metrics.production_continuous=production&&!clockWindow;
+    // Persistence is continuous whenever production_enabled is true, even while a clock
+    // window is present. The previous telemetry incorrectly reported false in that case.
+    pending.metrics.production_continuous=production;
+    pending.metrics.clock_window_active=!!clockWindow;
     pending.metrics.entry_window=clockWindow;
     pending.metrics.rest_weight_limit=currentRestLimit();
     pending.metrics.exchange_weight_limit=exchangeWeightLimit;
