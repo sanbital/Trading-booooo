@@ -61,7 +61,7 @@ test('single-flight is acquired before loadSettings and never waits for the old 
 });
 
 test('E/F/G: DB degradation is bounded, fail-fast and does not amplify settings writes',()=>{
-  assert.ok(autotrader.includes('const DB_LIGHT_TIMEOUT_MS = 3_000'));
+  assert.ok(autotrader.includes('const DB_LIGHT_TIMEOUT_MS = 750'));
   assert.ok(autotrader.includes('status: "DB_DEGRADED"'));
   const catchAt=autotrader.lastIndexOf('const databaseFailure =');
   const dbBranch=autotrader.slice(catchAt,autotrader.indexOf('} else if (availabilityFailure)',catchAt));
