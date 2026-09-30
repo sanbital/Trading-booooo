@@ -198,6 +198,8 @@ async function recordV24(db,signalId,symbol,d){
   }catch{/* decision logging is best-effort; it must not affect the trade path */}
 }
 async function audit(db,p,b,a,action,reason,details={}){await db.from("v11_long_regime_decisions").insert({revision:REVISION,position_id:p?.id||null,observed_regime:details.marketRoute||null,active_lane_before:b||null,active_lane_after:a||null,action,reason,details:{...details,executorPatch:PATCH}})}
+function auditDetached(...args){const task=audit(...args).catch(error=>console.error("PRE_EXECUTION_AUDIT_FAILED",String(error?.message??error).slice(0,160)));
+  if(globalThis.EdgeRuntime?.waitUntil)EdgeRuntime.waitUntil(task);}
 async function manualPositionAllowances(db){
   const r=await db.from("trading_asset_locks").select("exchange,asset,state,metadata")
     .eq("exchange","binance_futures").eq("state","LOCKED");
@@ -306,7 +308,7 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
     const dispatchClaim=typeof executionDispatchClaims==="undefined"?null:executionDispatchClaims.get(db);
     if(dispatchClaim?.signalId===String(s.id)&&typeof transitionExecutionDispatch==="function")await transitionExecutionDispatch(db,{signalId:s.id,
       owner:dispatchClaim.owner,state:EXECUTION_DISPATCH_STATE.SUBMITTING,orderId:oi.data.id});
-    const sentAt=Date.now();if(clockTrace)clockTrace.order_sent_at??=sentAt;
+    const sentAt=Date.now();if(clockTrace)clockTrace.order_sent_at=sentAt;
     const initialRaw=await gw(rp),respondedAt=Date.now(),initial=fill(initialRaw);
     await verifyExecutionLease(db);
     const pending=await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_PENDING",
@@ -317,7 +319,8 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
     // Always query this exact venue order before reconciling the actual position.
     const finalRaw=await gw({action:"get_order",market:s.symbol,identifier:id,exchange_order_id:initial.exchangeOrderId},5000),
       receipt=entryReceipt(finalRaw,oi.data),finalitySource="SAME_ORDER_QUERY";
-    if(clockTrace&&receipt?.quantity>0&&Number.isSafeInteger(receipt.lastAt))clockTrace.fill_at??=receipt.lastAt;
+    const fillAt=Number.isSafeInteger(receipt?.lastAt)?receipt.lastAt:Number.isSafeInteger(receipt?.updateTime)?receipt.updateTime:null;
+    if(clockTrace&&receipt?.quantity>0)clockTrace.fill_at=fillAt;
     const evidence={source:finalitySource,initialStatus:initial.status,confirmedAt:new Date().toISOString(),attemptNo,
       sentAt,respondedAt,latencyMs:respondedAt-sentAt,finalStatus:receipt?.status??null,executedQty:receipt?.quantity??null,
       avgPrice:receipt?.price??null,requestedQty:quantity,limitPrice,
@@ -1329,11 +1332,13 @@ if(attempt.gptFinalReview?.clockFinalAuthority){
     {quote:dispatchQuoteRead,capture:dispatchCapture,priorRecord:attempt.finalRecheck,
       sequence:attempt.finalRecheck?.gpt_recheck_attempted?2:1});
   attempt.finalRecheck=boundary.record;
-  if(!boundary.proceed){
-    await audit(db,null,"BULL","BULL","ENTRY_DEFER",boundary.reason,{signalId:s.id,symbol:s.symbol,
-      stage:"PRE_EXECUTION_VALIDITY_CHECK",validity:boundary.record.pre_execution_validity,
+  auditDetached(db,null,"BULL","BULL",boundary.proceed?"ENTRY_ALLOW":"ENTRY_DEFER",boundary.reason,
+    {signalId:s.id,symbol:s.symbol,stage:"PRE_EXECUTION_VALIDITY_CHECK",validity:boundary.record.pre_execution_validity,
+      clockExecutionTelemetry:boundary.record.clock_execution_telemetry,
       gptRecheckAttempted:boundary.record.gpt_recheck_attempted,gptRecheckResult:boundary.record.gpt_recheck_result});
-    return{entered:false,decision:"WAIT",reason:boundary.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,
+  if(!boundary.proceed){
+    
+ return{entered:false,decision:"WAIT",reason:boundary.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,
       finalRecheck:boundary.record};
   }
   dispatchQuote=boundary.record.dispatch_quote;
