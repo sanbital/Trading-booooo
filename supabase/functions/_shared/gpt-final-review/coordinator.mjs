@@ -368,6 +368,15 @@ export class FinalReviewCoordinator {
     }
     return false;
   }
+  /** Drain only provider work already started by this invocation.
+   * This does not start a new review and does not extend any authority deadline.
+   * EdgeRuntime.waitUntil is not a durability boundary: the request must keep the
+   * worker alive until a started provider result has reached complete CAS. */
+  async drainPending(){
+    const tasks=[...this.pending.values()];
+    if(!tasks.length)return;
+    await Promise.allSettled(tasks);
+  }
   /** Called only AFTER runWithLease has returned, never from the order path. */
   async waitReady(){
     this.waitOutcomes=[];
