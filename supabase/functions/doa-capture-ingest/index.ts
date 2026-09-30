@@ -26,7 +26,7 @@ const storage={
  async download(path:string){const r=await bucket.download(path);if(r.error||!r.data)throw Error('ARCHIVE_DOWNLOAD');return new Uint8Array(await r.data.arrayBuffer());},
  async remove(path:string){const r=await bucket.remove([path]);if(r.error&&Number(('statusCode' in r.error?r.error.statusCode:undefined))!==404)throw Error('ARCHIVE_DELETE');},
 };
-const DB_LIGHT_TIMEOUT_MS=3000,DB_RPC_TIMEOUT_MS=5000,TOKEN_CACHE_MS=30000;
+const DB_LIGHT_TIMEOUT_MS=3000,DB_RPC_TIMEOUT_MS=5000,DB_HEAVY_TIMEOUT_MS=10000,TOKEN_CACHE_MS=30000;
 let tokenCache:{token:string|null,expires:number}|null=null;
 async function db(path:string,body?:unknown,timeoutMs=DB_RPC_TIMEOUT_MS) {
   const started=performance.now();
@@ -50,7 +50,7 @@ Deno.serve(createHandler({
  getToken,
  invoke:(action:string,body:unknown)=>db('rpc/doa_capture_rpc',{p_action:action,p_body:body},DB_RPC_TIMEOUT_MS),
  maintenance:async()=>{
-  const run=()=>maintainArchive({rpc:(action:string,body:unknown)=>db('rpc/leader20_archive_maintenance',{p_action:action,p_body:body}),storage});
+  const run=()=>maintainArchive({rpc:(action:string,body:unknown)=>db('rpc/leader20_archive_maintenance',{p_action:action,p_body:body},DB_HEAVY_TIMEOUT_MS),storage});
   const first=await run();return first.state==='DELETED'?await run():first;
  },
 }));
