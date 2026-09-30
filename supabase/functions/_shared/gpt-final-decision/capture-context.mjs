@@ -65,38 +65,56 @@ export async function readCaptureWithRecovery(symbol,asOf,{now=Date.now,read=rea
  * Never changes event timestamps and never substitutes a partial trajectory. */
 export async function captureForInference(symbol,capture,{now=Date.now,sleep=ms=>new Promise(r=>setTimeout(r,ms)),
  read=readCapture,deadlineMs=Infinity,maxWaitMs=6500,targetAgeMs=1500,afterEndMs=-Infinity,...options}={}){
- // Acquisition failures pause this attempt. A missing first read must receive
- // the same bounded refresh opportunity as a delayed, otherwise valid bucket.
+ // A frozen entry-window capture is authoritative until its unchanged clock expiry.
  if(capture?.entry_window&&entryCaptureSafety(capture,now()).ok)return capture;
- const started=now(),initialEnd=Number.isSafeInteger(capture?.end_ms)?capture.end_ms:afterEndMs,
-  until=Math.min(deadlineMs,started+maxWaitMs);
+ const started=now(),initialEnd=Number.isSafeInteger(capture?.end_ms)?capture.end_ms:afterEndMs;
  // The internal -Infinity sentinel must never enter a hashed/journaled packet.
- // Missing prior evidence is unknown; keep the acquisition comparisons unchanged.
  const previousEnd=Number.isFinite(initialEnd)?initialEnd:null,previousAge=previousEnd===null?null:started-previousEnd;
  const ready=c=>entryCaptureSafety(c,now()).ok&&c.end_ms>afterEndMs&&now()-c.end_ms<=targetAgeMs;
  if(ready(capture))return capture;
  const attempts=[];let current=capture;
- for(let i=0;i<12&&now()+600<until;i++){
-  // Stagger bounded reads around bucket arrival. Ten simultaneous candidates
-  // must not produce hundreds of 350ms RPCs against the same capture store.
-  const delay=Math.min(1000,Math.max(700,Number.isFinite(initialEnd)?initialEnd+6000-now():700),until-now()-600);
-  const before=now();await sleep(delay);
-  if(now()<=before)break; // A frozen replay/test clock must not start a live wait loop.
-  const at=now();current=await read(symbol,at,{...options,timeoutMs:Math.min(600,until-at)});
+ const fail=(mode,boundaryEnd=null)=>({...unavailable('INFERENCE_CAPTURE_NOT_READY'),pre_inference_refresh:{mode,
+  requested_at_ms:started,received_at_ms:now(),previous_end_ms:previousEnd,previous_age_ms:previousAge,
+  boundary_end_ms:boundaryEnd,
+  advanced:false,wait_ms:now()-started,latest_end_ms:current?.end_ms??null,attempts}});
+
+ // Boundary refresh is only for a sound current capture whose next complete
+ // five-second bucket has not advanced yet. Missing/noncausal/book-incomplete
+ // evidence is not reclassified as that race. Preserve the pre-existing bounded
+ // acquisition recovery for a transient missing first read; it still has no
+ // authority to pass an invalid trajectory and never changes a deadline.
+ if(!entryCaptureSafety(capture,started).ok||!Number.isSafeInteger(initialEnd)){
+  const until=Math.min(deadlineMs,started+maxWaitMs);
+  for(let i=0;i<12&&now()+600<until;i++){
+   const delay=Math.min(1000,Math.max(700,Number.isFinite(initialEnd)?initialEnd+6000-now():700),until-now()-600);
+   const before=now();await sleep(delay);if(now()<=before)break;
+   const at=now();current=await read(symbol,at,{...options,timeoutMs:Math.min(600,until-at)});
+   attempts.push({requested_at_ms:at,received_at_ms:now(),status:current?.status,end_ms:current?.end_ms??null});
+   const refreshed=entryCaptureSafety(current,now()).ok&&current.end_ms>afterEndMs;
+   if(now()<=until&&current?.end_ms>initialEnd&&(ready(current)||refreshed))return {...current,pre_inference_refresh:{
+    mode:'ACQUISITION_RECOVERY',requested_at_ms:started,received_at_ms:now(),previous_end_ms:previousEnd,
+    previous_age_ms:previousAge,boundary_end_ms:null,advanced:true,wait_ms:now()-started,attempts}};
+  }
+  return fail('ACQUISITION_RECOVERY');
+ }
+ const nextEnd=initialEnd+DYNAMIC_POLICY.bucketMs;
+ // Collector intervals retain their existing 4.5..5.5 s admission rule. Read
+ // just after the expected boundary, then once near the upper edge; RPC runtime
+ // is bounded separately and no sleep starts without enough authority remaining.
+ const readAt=[nextEnd+100,nextEnd+650],until=Math.min(deadlineMs,started+Math.min(maxWaitMs,6000),nextEnd+1100);
+ if(started>readAt[1]||readAt[0]+350>until)return fail('NEXT_COMPLETE_BUCKET',nextEnd);
+ for(let i=0;i<readAt.length&&now()+100<until;i++){
+  const delay=Math.max(0,readAt[i]-now());
+  if(delay>0){const before=now();await sleep(Math.min(delay,until-now()-100));if(now()<=before)break;}
+  const at=now();if(at+100>=until)break;
+  current=await read(symbol,at,{...options,timeoutMs:Math.min(450,until-at)});
   attempts.push({requested_at_ms:at,received_at_ms:now(),status:current?.status,end_ms:current?.end_ms??null});
-  // 1.5s is the preferred acquisition target, not a data-integrity limit.
-  // Real ingest can deliver a new complete bucket just beyond the 5s preferred
-  // refresh age. The existing entry safety check still rejects at 10s, missing
-  // buckets, noncausal timestamps and invalid book/flow. Current book is reread
-  // after a refresh by readSources before a model packet is frozen.
   const refreshed=entryCaptureSafety(current,now()).ok&&current.end_ms>afterEndMs;
   if(now()<=until&&current?.end_ms>initialEnd&&(ready(current)||refreshed))return {...current,pre_inference_refresh:{
-    requested_at_ms:started,received_at_ms:now(),previous_end_ms:previousEnd,previous_age_ms:previousAge,
+    mode:'NEXT_COMPLETE_BUCKET',requested_at_ms:started,received_at_ms:now(),previous_end_ms:previousEnd,previous_age_ms:previousAge,boundary_end_ms:nextEnd,
     advanced:true,wait_ms:now()-started,attempts}};
  }
- return {...unavailable('INFERENCE_CAPTURE_NOT_READY'),pre_inference_refresh:{requested_at_ms:started,received_at_ms:now(),
-  previous_end_ms:previousEnd,previous_age_ms:previousAge,advanced:false,wait_ms:now()-started,
-  latest_end_ms:current?.end_ms??null,attempts}};
+ return fail('NEXT_COMPLETE_BUCKET',nextEnd);
 }
 
 /** Minimal current evidence for OPEN positions only; explicitly not a full capture. */

@@ -1,6 +1,6 @@
 import {captureDisposition} from './clock.mjs';
 import {exchangeMinuteWeight,restWeightLimit,recoveryOrder} from './bootstrap.mjs';
-import {Book,Flow,WeightBudget,VERSION,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue,initialBucketBoundary,controlBackoffMs,controlDisposition} from './core.mjs';
+import {Book,Flow,WeightBudget,VERSION,BOOK_STATE,symbolSingleFlight,boundedSnapshotResync,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue,initialBucketBoundary,controlBackoffMs,controlDisposition} from './core.mjs';
 import {randomUUID} from 'node:crypto';
 import {summarizeCapture} from './context.mjs';
 const endpoint=process.env.CAPTURE_ENDPOINT;
@@ -8,7 +8,7 @@ const token=process.env.CAPTURE_TOKEN;
 const expected=process.env.PROTOCOL_SHA256;
 if(endpoint!=='https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/doa-capture-ingest' || !/^[a-f0-9]{64}$/.test(token||'') || !/^[a-f0-9]{64}$/.test(expected||'')) throw Error('INVALID_CONFIG');
 const worker_id=randomUUID(), states=new Map(), budget=new WeightBudget(), queue=new Map(), seen=new Map();
-let windows=[],deadline=0,lastControl=0,lastWatch=0,lastFlush=0,busyRest=false,stop=false,restFailures=0,wsGaps=0,coverageRefreshes=0,backoffUntil=0,bufferDrops=0;
+let windows=[],deadline=0,lastControl=0,lastWatch=0,lastFlush=0,busyBackfill=false,stop=false,restFailures=0,wsGaps=0,coverageRefreshes=0,backoffUntil=0,bufferDrops=0,resyncSuccesses=0,resyncFailures=0;
 // A transport failure is never fatal (see controlDisposition). `signalled` and `crashed` are the
 // only states that end the process; `disabled` idles and keeps polling so a re-enable recovers.
 let controlFailures=0,controlRetryAt=0,signalled=false,crashed=false,disabled=false,idleSince=0;
@@ -66,6 +66,54 @@ function connect(symbol,candles){
   const s={symbol,candles,book:new Book(),flow:new Flow(),ring:[],socket:null,marketSocket:null,started:now,lastBucket:initialBucketBoundary(now),marketResetAt:now,marketSequenceVerified:true,bookGeneration:0,lastTradeAt:0,lastCandle:null,needBackfill:candles,bookReconnectAt:0,marketReconnectAt:0};
   states.set(symbol,s);openSocket(s);return s;
 }
+function resyncTelemetry(s,success,failureReason=null,completedAt=Date.now(),bufferedCount=s.book.buffer.length){
+  const active=s.activeResync??{},incident=active.incident??s.book.lastIncident??{};
+  const row={symbol:s.symbol,gap_detected_at:Number.isSafeInteger(incident.gap_detected_at)?iso(incident.gap_detected_at):null,
+    reason:incident.reason??'INITIAL_SNAPSHOT',previous_last_update_id:incident.previous_last_update_id??null,
+    incoming_first_update_id:incident.incoming_first_update_id??null,incoming_final_update_id:incident.incoming_final_update_id??null,
+    snapshot_last_update_id:active.snapshot_last_update_id??null,
+    resync_started_at:Number.isSafeInteger(active.started_at)?iso(active.started_at):null,
+    resync_completed_at:success?iso(completedAt):null,
+    resync_duration_ms:Number.isSafeInteger(active.started_at)?Math.max(0,completedAt-active.started_at):null,
+    buffered_event_count:bufferedCount,recovery_success:success,recovery_failure_reason:failureReason};
+  s.lastResyncTelemetry=row;s.activeResync=null;
+  if(success){resyncSuccesses++;s.resyncFailures=0;log('BOOK_RESYNC_COMPLETED',row);}
+  else{resyncFailures++;s.resyncFailures=(s.resyncFailures??0)+1;log('BOOK_RESYNC_FAILED',row);}
+  return row;
+}
+function noteBookOutcome(s,outcome){
+  if(outcome?.status===BOOK_STATE.SYNCED&&outcome.resync_completed_at&&s.activeResync)
+    resyncTelemetry(s,true,null,outcome.resync_completed_at,outcome.buffered_event_count);
+  else if(outcome?.status===BOOK_STATE.UNSYNCED&&outcome.resync&&s.activeResync){
+    resyncTelemetry(s,false,outcome.reason??outcome.incident?.reason??'RESYNC_SEQUENCE_FAILED');
+    s.resyncRetryAt=Date.now()+Math.min(5000,500*2**Math.min(s.resyncFailures??0,4));
+  }
+}
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function resyncSymbol(s){
+  if(s.resyncPromise||s.book.state===BOOK_STATE.SYNCED||s.socket?.readyState!==WebSocket.OPEN||Date.now()<(s.resyncRetryAt??0))return s.resyncPromise??false;
+  const generation=s.bookGeneration,socket=s.socket,started=Date.now(),incident={...(s.book.lastIncident??{})};
+  s.book.beginResync(started);s.activeResync={started_at:started,incident,snapshot_last_update_id:null};
+  log('BOOK_RESYNC_STARTED',{symbol:s.symbol,gap_detected_at:Number.isSafeInteger(incident.gap_detected_at)?iso(incident.gap_detected_at):null,
+    reason:incident.reason??'INITIAL_SNAPSHOT',previous_last_update_id:incident.previous_last_update_id??null,
+    incoming_first_update_id:incident.incoming_first_update_id??null,incoming_final_update_id:incident.incoming_final_update_id??null,
+    resync_started_at:iso(started),single_flight:true});
+  return symbolSingleFlight(s,async()=>{
+    const result=await boundedSnapshotResync({
+      fetchSnapshot:()=>publicGet('/fapi/v1/depth?symbol='+s.symbol+'&limit=1000',20),
+      stillCurrent:()=>snapshotStillCurrent(s,generation,socket),sleep:pause,
+      applySnapshot:snap=>{s.depthSnapshots=(s.depthSnapshots??0)+1;s.activeResync.snapshot_last_update_id=+snap.lastUpdateId;
+        return s.book.snapshot(snap,Date.now());}
+    });
+    if(result.stale_generation)return false;
+    if(result.ok){if(result.outcome.status===BOOK_STATE.SYNCED)noteBookOutcome(s,result.outcome);return true;}
+    if(snapshotStillCurrent(s,generation,socket)){
+      s.book.failResync(result.failure_reason);restFailures++;resyncTelemetry(s,false,result.failure_reason);
+      s.resyncRetryAt=Date.now()+Math.min(5000,500*2**Math.min(s.resyncFailures??0,4));
+    }
+    return false;
+  });
+}
 function openSocket(s){
   const urls=streamURLs(s.symbol);
   if(!s.socket){
@@ -78,7 +126,11 @@ function openSocket(s){
       if(!e || (e.st!==undefined && +e.st!==1) || e.s && e.s!==s.symbol)return;
       eventIds={U:e.U,u:e.u,pu:e.pu,previous_u:s.book.last,event_ms:e.E,received_ms:now};
       if(!transportFresh(e,now))throw Error('TRANSPORT_EVENT_STALE_OR_FUTURE');
-      if(e.e==='depthUpdate')s.book.event(e,now);
+      if(e.e==='depthUpdate'){
+        const outcome=s.book.event(e,now);noteBookOutcome(s,outcome);
+        if(outcome?.resync&&outcome.incident){wsGaps++;s.resyncRetryAt=0;
+          log('STREAM_GAP',{symbol:s.symbol,stream:'book',reason:outcome.incident.reason,event_ids});void resyncSymbol(s);}
+      }
     }catch(e){wsGaps++;retire();log('STREAM_GAP',{symbol:s.symbol,stream:'book',reason:e.message,event_ids:eventIds});}});
     ws.addEventListener('error',retire);ws.addEventListener('close',retire);
   }
@@ -128,22 +180,32 @@ async function watch(){
   for(const s of states.values())for(const row of s.ring)if((production||inWindow(Date.parse(row.at),windows,s.symbol))&&captureDisposition(s.roles,clockWindow,Date.parse(row.at)).persist)enqueue(row);
 }
 async function recover(){
-  if(busyRest || stop)return;busyRest=true;
-  try{
-    for(const s of recoveryOrder(states.values())){
-      if(s.socket?.readyState!==WebSocket.OPEN)continue;
-      if(Date.now()-(s.lastRestAttemptAt??0)<1000)continue;
-      if(s.book.needsCoverageRefresh(Date.now())){
-        s.book.reset();s.bookGeneration++;coverageRefreshes++;log('COVERAGE_BOUNDARY_RESYNC',{symbol:s.symbol});
-      }
-      if(s.book.last===null){const generation=s.bookGeneration,socket=s.socket;
-        s.lastRestAttemptAt=Date.now();
-        const snap=await publicGet('/fapi/v1/depth?symbol='+s.symbol+'&limit=1000',20);
-        if(snap)s.depthSnapshots=(s.depthSnapshots??0)+1;
-        if(snap && snapshotStillCurrent(s,generation,socket)){try{s.book.snapshot(snap,Date.now());}catch(e){s.book.reset();s.bookGeneration++;throw e;}return;}}
-      if(s.needBackfill&&captureDisposition(s.roles,clockWindow,Date.now()).persist){const rows=await publicGet('/fapi/v1/klines?symbol='+s.symbol+'&interval=1m&limit=65',2);if(rows){for(const k of rows)if(+k[6]<Date.now() && +k[0]>=boot-120000)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k[0]),payload:{open:+k[1],high:+k[2],low:+k[3],close:+k[4],quote_volume:+k[7],taker_buy_quote:+k[10],available_at:iso(Date.now()),source:'REST_CLOSED_BACKFILL',complete:true}});s.needBackfill=false;return;}}
+  if(stop)return;const now=Date.now(),ordered=recoveryOrder(states.values());
+  for(const s of ordered){
+    if(s.socket?.readyState!==WebSocket.OPEN)continue;
+    if(s.book.needsStaleResync(now)){
+      const lastReceived=s.book.received;
+      const outcome=s.book.markUnsynced('DEPTH_EVENT_STALE',null,now);
+      log('STREAM_STALE',{symbol:s.symbol,stream:'book',last_received_at:lastReceived?iso(lastReceived):null});noteBookOutcome(s,outcome);
     }
-  }catch(e){restFailures++;log('RECOVERY_ERROR',{reason:e.message});}finally{busyRest=false;}
+    if(s.book.state===BOOK_STATE.SYNCED&&s.book.needsCoverageRefresh(now)){
+      const outcome=s.book.markUnsynced('DEPTH_COVERAGE_STALE',null,now);coverageRefreshes++;
+      log('COVERAGE_BOUNDARY_RESYNC',{symbol:s.symbol});noteBookOutcome(s,outcome);
+    }
+    const bridgeStarted=s.book.snapshotLoaded?s.book.snapshotAt:s.book.resyncStartedAt;
+    if(s.book.state===BOOK_STATE.RESYNCING&&now-(bridgeStarted??now)>3000&&!s.resyncPromise){
+      s.book.failResync('SNAPSHOT_BRIDGE_TIMEOUT');
+      if(s.activeResync)resyncTelemetry(s,false,'SNAPSHOT_BRIDGE_TIMEOUT');
+      s.resyncRetryAt=now+500;
+    }
+    if(s.book.state===BOOK_STATE.UNSYNCED)void resyncSymbol(s);
+  }
+  if(busyBackfill)return;busyBackfill=true;
+  try{
+    for(const s of ordered)if(s.needBackfill&&captureDisposition(s.roles,clockWindow,Date.now()).persist){
+      const rows=await publicGet('/fapi/v1/klines?symbol='+s.symbol+'&interval=1m&limit=65',2);if(rows){for(const k of rows)if(+k[6]<Date.now() && +k[0]>=boot-120000)enqueue({kind:'candle',symbol:s.symbol,at:iso(+k[0]),payload:{open:+k[1],high:+k[2],low:+k[3],close:+k[4],quote_volume:+k[7],taker_buy_quote:+k[10],available_at:iso(Date.now()),source:'REST_CLOSED_BACKFILL',complete:true}});s.needBackfill=false;}return;
+    }
+  }catch(e){restFailures++;log('RECOVERY_ERROR',{reason:e.message});}finally{busyBackfill=false;}
 }
 function bucket(now){
   let emitted=false;
@@ -169,7 +231,7 @@ async function flush(){
   if(!pending){
     const selected=[];let size=0;
     for(const [k,row] of [...queue].sort((a,b)=>Number(!states.get(a[1].symbol)?.roles?.includes('OPEN_POSITION'))-Number(!states.get(b[1].symbol)?.roles?.includes('OPEN_POSITION')))){const bytes=Buffer.byteLength(JSON.stringify(row));if(selected.length>=300||size+bytes>350000)break;selected.push([k,row]);size+=bytes;}
-    pending={batch_id:randomUUID(),rows:selected.map(x=>x[1]),metrics:{version:VERSION,source_commit:process.env.SOURCE_COMMIT??null,watched:states.size,synced:[...states.values()].filter(s=>s.book.ready).length,trade_streams_seen:[...states.values()].filter(s=>s.lastTradeAt>0).length,candle_streams_seen:[...states.values()].filter(s=>s.lastCandle!==null).length,queue:queue.size,buffer_dropped_rows:bufferDrops,queue_cap:PERSIST_QUEUE_CAP,ws_gaps:wsGaps,coverage_refreshes:coverageRefreshes,rest_failures:restFailures,rss_bytes:process.memoryUsage().rss,last_bucket_at:iso(Date.now()),order_calls:0,llm_calls:0}};
+    pending={batch_id:randomUUID(),rows:selected.map(x=>x[1]),metrics:{version:VERSION,source_commit:process.env.SOURCE_COMMIT??null,watched:states.size,synced:[...states.values()].filter(s=>s.book.state===BOOK_STATE.SYNCED).length,trade_streams_seen:[...states.values()].filter(s=>s.lastTradeAt>0).length,candle_streams_seen:[...states.values()].filter(s=>s.lastCandle!==null).length,queue:queue.size,buffer_dropped_rows:bufferDrops,queue_cap:PERSIST_QUEUE_CAP,ws_gaps:wsGaps,coverage_refreshes:coverageRefreshes,rest_failures:restFailures,resync_successes:resyncSuccesses,resync_failures:resyncFailures,rss_bytes:process.memoryUsage().rss,last_bucket_at:iso(Date.now()),order_calls:0,llm_calls:0}};
     pending.metrics.live_contexts=Object.fromEntries([...states].map(([symbol,s])=>[symbol,summarizeCapture(s.ring,Date.now())]));
     pending.metrics.watch_roles=Object.fromEntries([...states].map(([symbol,s])=>[symbol,s.roles??[]]));
     pending.metrics.unavailable_symbols=unavailableSymbols;
@@ -182,6 +244,8 @@ async function flush(){
     pending.metrics.exchange_weight_limit=exchangeWeightLimit;
     pending.metrics.rest_weight_used_60s=budget.used.filter(x=>x[0]>Date.now()-60000).reduce((sum,x)=>sum+x[1],0);
     pending.metrics.depth_snapshots=Object.fromEntries([...states].map(([symbol,s])=>[symbol,s.depthSnapshots??0]));
+    pending.metrics.book_states=Object.fromEntries([...states].map(([symbol,s])=>[symbol,s.book.state]));
+    pending.metrics.book_resync=Object.fromEntries([...states].filter(([,s])=>s.lastResyncTelemetry).map(([symbol,s])=>[symbol,s.lastResyncTelemetry]));
     for(const [k] of selected)queue.delete(k);
   }
   const out=await api('ingest',pending);lastControl=Date.now();pending=null;

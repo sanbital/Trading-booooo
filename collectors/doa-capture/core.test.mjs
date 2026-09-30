@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Book,Flow,WeightBudget,vwap,inWindow,streamURLs,transportFresh,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue} from './core.mjs';
+import {Book,BOOK_STATE,Flow,WeightBudget,symbolSingleFlight,boundedSnapshotResync,vwap,inWindow,streamURLs,transportFresh,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue} from './core.mjs';
 test('Binance public book and market trade/kline routes are separated',()=>{const u=streamURLs('BTCUSDT');assert.equal(new URL(u.book).pathname,'/public/stream');assert.equal(new URL(u.market).pathname,'/market/stream');assert.equal(new URL(u.market).searchParams.get('streams'),'btcusdt@aggTrade/btcusdt@kline_1m/btcusdt@forceOrder');});
-test('bounded pre-snapshot buffer discards old events without declaring continuity',()=>{const b=new Book();for(let i=1;i<=300;i++)b.event({U:i,u:i,pu:i-1,b:[],a:[],E:i},i);assert.equal(b.buffer.length,200);assert.equal(b.ready,false);assert.throws(()=>b.snapshot(snap),/GAP/);});
+test('bounded pre-snapshot buffer discards old events without declaring continuity',()=>{const b=new Book();for(let i=1;i<=300;i++)b.event({U:i,u:i,pu:i-1,b:[],a:[],E:i},i);assert.equal(b.buffer.length,200);assert.equal(b.ready,false);const out=b.snapshot(snap);assert.equal(out.status,BOOK_STATE.UNSYNCED);assert.equal(out.reason,'SNAPSHOT_BRIDGE_MISSING');});
 const snap={lastUpdateId:10,bids:[[99,10],[98,10]],asks:[[101,10],[102,10]]};
 const event=(u,pu=10)=>({U:u,u,pu,b:[],a:[],E:1000});
 
@@ -35,9 +35,9 @@ test('bucket admission keeps delayed clocks, stream gaps and new-symbol warmup f
  assert.equal(captureBucketDue(14900,15000),false,'new-symbol warmup does not advance other symbol clocks');
  assert.equal(captureBucketDue(s.lastBucket,15000),true);
 });
-test('snapshot is unusable until bridging event; loss of sequence rejects',()=>{const b=new Book();b.snapshot(snap);assert.equal(b.metrics(1000).book_complete,false);b.event({...event(11),U:10},1000);assert.equal(b.metrics(1000).book_complete,true);assert.throws(()=>b.event(event(14,12),1100),/GAP/);});
-test('synthetic USD-M snapshot boundary: first diff U=lastUpdateId+1 bridges without resync',()=>{
- const b=new Book();b.event({U:11,u:12,pu:10,E:1000,b:[],a:[]},1000);
+test('snapshot is unusable until bridging event; loss of sequence rejects',()=>{const b=new Book();b.snapshot(snap);assert.equal(b.metrics(1000).book_complete,false);b.event({...event(11),U:10},1000);assert.equal(b.metrics(1000).book_complete,true);const gap=b.event(event(14,12),1100);assert.equal(gap.status,BOOK_STATE.UNSYNCED);assert.equal(gap.incident.reason,'DEPTH_SEQUENCE_MISMATCH');});
+test('synthetic USD-M snapshot boundary follows the documented U <= lastUpdateId <= u bridge',()=>{
+ const b=new Book();b.event({U:10,u:12,pu:9,E:1000,b:[],a:[]},1000);
  b.snapshot(snap,900);
  assert.equal(b.last,12);assert.equal(b.ready,true);
  b.event({U:13,u:14,pu:12,E:1100,b:[],a:[]},1100);
@@ -45,10 +45,11 @@ test('synthetic USD-M snapshot boundary: first diff U=lastUpdateId+1 bridges wit
 });
 test('synthetic USD-M duplicate and genuine gap stay distinct',()=>{
  const b=new Book();b.snapshot(snap,900);
- b.event({U:11,u:12,pu:10,E:1000,b:[],a:[]},1000);
- b.event({U:11,u:12,pu:10,E:1000,b:[],a:[]},1001);
+ b.event({U:10,u:12,pu:9,E:1000,b:[],a:[]},1000);
+ b.event({U:10,u:12,pu:9,E:1000,b:[],a:[]},1001);
  assert.equal(b.last,12);
- assert.throws(()=>b.event({U:15,u:16,pu:14,E:1100,b:[],a:[]},1100),/DEPTH_GAP/);
+ const gap=b.event({U:15,u:16,pu:14,E:1100,b:[],a:[]},1100);
+ assert.equal(gap.status,BOOK_STATE.UNSYNCED);assert.equal(gap.incident.previous_last_update_id,12);
 });
 test('synthetic depth-only recovery preserves trade state and bucket clock',()=>{
  const s={book:new Book(),flow:new Flow(),bookGeneration:1,started:0,lastBucket:5000,marketResetAt:0,marketSequenceVerified:true};
@@ -60,7 +61,7 @@ test('synthetic depth-only recovery preserves trade state and bucket clock',()=>
  assert.equal(s.lastBucket,5000);assert.equal(s.flow.last,2);assert.equal(s.flow.count,1);
  assert.equal(completeCaptureInterval(s,10000,true),false,'broken book stays invalid');
  s.book.snapshot({lastUpdateId:20,bids:[[99,10]],asks:[[101,10]]},7100);
- s.book.event({U:21,u:21,pu:20,E:7200,b:[],a:[]},7200);
+ s.book.event({U:20,u:21,pu:19,E:7200,b:[],a:[]},7200);
  assert.equal(completeCaptureInterval(s,10000,true),false,'bucket spanning book recovery stays invalid');
  s.lastBucket=10000;
  assert.equal(completeCaptureInterval(s,15000,true),true,'next uninterrupted interval is eligible');
@@ -75,11 +76,51 @@ test('synthetic delayed snapshot cannot overwrite a newer socket generation',()=
  assert.equal(snapshotStillCurrent(s,1,oldSocket),false);
  assert.equal(s.book.ready,false);
 });
-test('buffer applies in order and stale snapshot cannot silently skip data',()=>{const b=new Book();b.event({...event(11),U:10},1000);b.snapshot(snap);assert.equal(b.last,11);assert.throws(()=>{const c=new Book();c.event(event(20),1000);c.snapshot(snap);},/GAP/);});
+test('buffer applies in order and stale snapshot cannot silently skip data',()=>{const b=new Book();b.event({...event(11),U:10},1000);b.snapshot(snap);assert.equal(b.last,11);const c=new Book();c.event(event(20),1000);const out=c.snapshot(snap);assert.equal(out.status,BOOK_STATE.UNSYNCED);assert.equal(c.ready,false);});
+
+test('one-symbol sequence gap is isolated from a healthy symbol',()=>{
+ const broken=new Book(),healthy=new Book();
+ for(const b of [broken,healthy]){b.snapshot(snap,900);b.event({...event(11),U:10},1000);}
+ const out=broken.event({U:14,u:14,pu:13,E:1100,b:[],a:[]},1100);
+ healthy.event({U:12,u:12,pu:11,E:1100,b:[],a:[]},1100);
+ assert.equal(out.status,BOOK_STATE.UNSYNCED);assert.equal(broken.metrics(1100).reason,'BOOK_UNSYNCED_OR_STALE');
+ assert.equal(healthy.state,BOOK_STATE.SYNCED);assert.equal(healthy.metrics(1100).book_complete,true);
+});
+
+test('gap snapshot reconnects buffered events and only a future bucket becomes eligible',()=>{
+ const s={book:new Book(),started:0,lastBucket:5000,marketResetAt:0,marketSequenceVerified:true};
+ s.book.snapshot(snap,900);s.book.event({...event(11),U:10},1000);
+ s.book.event({U:13,u:13,pu:12,E:7000,b:[],a:[]},7000);
+ s.book.event({U:14,u:14,pu:13,E:7100,b:[],a:[]},7100);
+ s.book.beginResync(7200);
+ const out=s.book.snapshot({lastUpdateId:13,bids:[[99,10]],asks:[[101,10]]},8000);
+ assert.equal(out.status,BOOK_STATE.SYNCED);assert.equal(s.book.last,14);assert.equal(s.book.syncAt,8000);
+ assert.equal(completeCaptureInterval(s,10000,true),false,'bucket spanning recovery remains invalid');
+ s.lastBucket=10000;assert.equal(completeCaptureInterval(s,15000,true),true,'first full future bucket is eligible');
+});
+
+test('bounded REST snapshot failure keeps only that symbol fail-closed',async()=>{
+ const failed=new Book(),healthy=new Book();
+ healthy.snapshot(snap,900);healthy.event({...event(11),U:10},1000);
+ failed.beginResync(1000);let calls=0;
+ const result=await boundedSnapshotResync({fetchSnapshot:async()=>{calls++;throw Error('PUBLIC_HTTP_503');},
+  applySnapshot:x=>failed.snapshot(x,1100),sleep:async()=>{}});
+ failed.failResync(result.failure_reason);
+ assert.equal(result.ok,false);assert.equal(result.failure_reason,'PUBLIC_HTTP_503');assert.equal(calls,2);
+ assert.equal(failed.metrics(1100).book_complete,false);
+ assert.equal(healthy.metrics(1100).book_complete,true);
+});
+
+test('concurrent symbol resync requests are single-flight',async()=>{
+ const target={resyncPromise:null};let snapshots=0;
+ const work=async()=>{snapshots++;await Promise.resolve();return 'SYNCED';};
+ const [a,b,c]=await Promise.all([symbolSingleFlight(target,work),symbolSingleFlight(target,work),symbolSingleFlight(target,work)]);
+ assert.deepEqual([a,b,c],['SYNCED','SYNCED','SYNCED']);assert.equal(snapshots,1);assert.equal(target.resyncPromise,null);
+});
 test('depth bands incomplete stay flagged; stale book rejected',()=>{const b=new Book();b.snapshot({lastUpdateId:10,bids:[[99.99,10]],asks:[[100.01,10]]});b.event({...event(11),U:10},1000);assert.equal(b.metrics(1000).coverage_50,false);assert.equal(b.metrics(5000).book_complete,false);});
 test('diff levels outside the finite snapshot boundary do not grow the local book',()=>{
  const b=new Book();b.snapshot({lastUpdateId:10,bids:[[99,10],[98,10]],asks:[[101,10],[102,10]]},900);
- b.event({U:11,u:11,pu:10,E:1000,b:[],a:[]},1000);
+ b.event({U:10,u:11,pu:9,E:1000,b:[],a:[]},1000);
  const before=b.bids.size+b.asks.size;
  b.event({U:12,u:12,pu:11,E:1100,b:[['50','1'],['99.5','1']],a:[['150','1'],['100.5','1']]},1100);
  assert.equal(b.bids.has(50),false);assert.equal(b.asks.has(150),false);

@@ -82,7 +82,7 @@ test('budget prevents a second paid call; invalid schema is never treated as tim
 test('fresh retry refuses the original bucket even when it is only 200 ms old',async()=>{
  let at=T+200;const old=validCapture(at);
  const fresh=await captureForInference('XVGUSDT',old,{now:()=>at,sleep:async ms=>{at+=ms;},afterEndMs:old.end_ms,
-   read:async()=>at>=T+6000?validCapture(at):old});
+   read:async()=>at>=T+5200?validCapture(at):old});
  assert.equal(fresh.status,'AVAILABLE');assert.ok(fresh.end_ms>old.end_ms);assert.equal(fresh.pre_inference_refresh.advanced,true);
 });
 test('RECHECK timeout releases its failed attempt; next call retries with fresh capture, same sequence, new key',async()=>{
@@ -101,7 +101,7 @@ test('RECHECK timeout releases its failed attempt; next call retries with fresh 
 });
 test('a recheck retry re-enters through a new ordinary lease cycle and stops on SKIP/safety/busy',async()=>{
  for(const last of [{ok:true,entry:{entered:true}},{ok:true,entry:{entered:false,reason:'GPT_SKIP'}},{ok:false,skipped:true}]){
-  const db={};let runs=0,held=false;setTestCoordinator(db,{config:{mode:'ENFORCE'},now:()=>0});
+  const db={};let runs=0,held=false;setTestCoordinator(db,{config:{mode:'ENFORCE'},now:()=>0,pending:new Map(),drainPending:async()=>{}});
   const result=await runWithGptReview(db,async()=>{assert.equal(held,false);held=true;runs++;held=false;
    return runs===1?{ok:true,entry:{entered:false,reviewRetryPending:true}}:last;});
   assert.equal(runs,2);assert.deepEqual(result,last);
@@ -110,7 +110,7 @@ test('a recheck retry re-enters through a new ordinary lease cycle and stops on 
 test('ordinary invalid answers are single-use and repeated recheck scheduling is bounded',async()=>{
  const h=harness(['FD_EV_SKIP_REQUIRES_BEARISH_FACTS']);await h.c.consider(h.signal);await drain(h.c);
  assert.equal(h.calls,1);assert.equal((await h.c.consider(h.signal)).reason,'GPT_NO_VALID_API_RESPONSE');
- const db={};let runs=0;setTestCoordinator(db,{config:{mode:'ENFORCE'},now:()=>0});
+ const db={};let runs=0;setTestCoordinator(db,{config:{mode:'ENFORCE'},now:()=>0,pending:new Map(),drainPending:async()=>{}});
  await runWithGptReview(db,async()=>{runs++;return {ok:true,entry:{reviewRetryPending:true}};});
  assert.equal(runs,TIMEOUT_RECOVERY.maxAttempts);
 });
