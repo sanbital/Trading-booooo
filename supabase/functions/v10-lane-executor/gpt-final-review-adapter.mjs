@@ -211,6 +211,13 @@ async function runReviewCycle(db,runWithLease,switches){
   if(c.config.mode!=='ENFORCE'||first?.ok===false||first?.skipped)return first;
   if(first?.entry?.entered||first?.entry?.followUpArmed)return await followUp(first,[]);
   if(first?.entry?.reason!=='GPT_REVIEW_PENDING')return first;
+  // A started provider call is part of this request's durability contract. Production
+  // showed the request returning while four successful OpenAI responses were still
+  // completing, leaving their review rows RUNNING until TTL recovery. Keep the request
+  // alive through provider ledger settlement + gpt_final_review_complete CAS; this does
+  // not wait for or create unrelated work and does not widen the clock deadline.
+  await c.drainPending();
+
   let ready=false;try{ready=await c.waitReady();}catch{/* GPT errors are candidate-scoped. */}
   if(!ready){
     const outcomes=c.waitOutcomes??[];
