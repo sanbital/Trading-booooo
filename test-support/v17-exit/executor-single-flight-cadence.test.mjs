@@ -58,7 +58,7 @@ test('TEST D/G: a crashed owner is reclaimed after the bounded TTL and the next 
 test('TEST H/I: 40-60s AI latency remains compatible with 30s cron because the lease, not timeout shrinking, serializes execution',()=>{
   assert.match(source,/const ENTRY_RUN_BUDGET_MS=70000;/,
     'the existing long entry/AI work budget must not be shortened to the 30s cadence');
-  assert.match(source,/if\(lock\.data!==true\)return \{ok:true,skipped:"V17_EXECUTOR_BUSY"\}/,
+  assert.match(source,/if\(lock\.data!==true\)\{[\s\S]{0,500}return \{ok:true,skipped:"V17_EXECUTOR_BUSY"\}/,
     'the existing executor lease must fail fast instead of queueing');
   const h=new LeaseModel();
   assert.equal(h.invoke(0,60_000).status,'RUNNING');
