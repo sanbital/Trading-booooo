@@ -1,0 +1,216 @@
+name: Temporary direct DB runtime recovery 20260930
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/tmp-direct-db-runtime-recovery-20260930.yml'
+permissions:
+  contents: read
+concurrency:
+  group: direct-db-runtime-recovery-20260930
+  cancel-in-progress: false
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out production main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.34.3
+
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: 0.4.108
+
+      - name: Select a bounded production DB path
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PGCONNECT_TIMEOUT=5 PGOPTIONS='-c statement_timeout=8000 -c lock_timeout=1000'
+          if timeout 12s psql "$SUPABASE_DB_URL" -XAt -v ON_ERROR_STOP=1 -c 'select 1' >/dev/null 2>&1; then
+            printf '%s' "$SUPABASE_DB_URL" > /tmp/prod-db-url
+            echo "db_path=POOLER" >> "$GITHUB_ENV"
+          else
+            python - <<'PY'
+          import os, urllib.parse
+          src=urllib.parse.urlparse(os.environ['SUPABASE_DB_URL'])
+          if not src.password:
+              raise SystemExit('DB_PASSWORD_MISSING')
+          password=urllib.parse.quote(urllib.parse.unquote(src.password),safe='')
+          direct=f"postgresql://postgres:{password}@db.etaajwpernzrcdrifdnw.supabase.co:5432/postgres?sslmode=require&connect_timeout=5"
+          open('/tmp/prod-db-url','w').write(direct)
+          PY
+            chmod 600 /tmp/prod-db-url
+            if ! timeout 12s psql "$(cat /tmp/prod-db-url)" -XAt -v ON_ERROR_STOP=1 -c 'select 1' >/dev/null 2>&1; then
+              echo "::error::Neither pooler nor direct database path is reachable"
+              exit 1
+            fi
+            echo "db_path=DIRECT" >> "$GITHUB_ENV"
+          fi
+
+      - name: Capture production safety state before migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB_URL="$(cat /tmp/prod-db-url)"
+          export PGCONNECT_TIMEOUT=5 PGOPTIONS='-c statement_timeout=8000 -c lock_timeout=1000'
+          mkdir -p release-evidence
+          psql "$DB_URL" -XAt -F '|' -v ON_ERROR_STOP=1 <<'SQL' | tee release-evidence/db-before.txt
+          select 'SERVER_TIME',clock_timestamp();
+          select 'CRON50',jobid,jobname,schedule,active,
+                 position('timeout_milliseconds := 110000' in command)>0
+            from cron.job where jobid=50;
+          select 'OPEN_POSITION',id,symbol,state,side,remaining_quantity,entry_price,hard_stop_price,last_evaluated_at,updated_at
+            from public.v11_long_regime_positions where state='OPEN' order by entry_at;
+          select 'UNRESOLVED_ORDER',id,symbol,state,intent,requested_quantity,coalesce(exchange_order_id::text,''),created_at,updated_at
+            from public.v11_long_regime_orders
+           where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED')
+           order by created_at;
+          select 'LEASE_BEFORE',owner,expires_at from public.v17_execution_lease where singleton=true;
+          SQL
+          cron="$(grep '^CRON50|' release-evidence/db-before.txt || true)"
+          test -n "$cron" || { echo "::error::cron job 50 missing"; exit 1; }
+          echo "$cron" | grep -F '|30 seconds|t|t' >/dev/null || {
+            echo "::error::cron50 contract is not 30 seconds / active / 110000ms"; exit 1; }
+
+      - name: Apply the bounded 150s execution lease migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB_URL="$(cat /tmp/prod-db-url)"
+          export PGCONNECT_TIMEOUT=5 PGOPTIONS='-c statement_timeout=8000 -c lock_timeout=1000'
+          psql "$DB_URL" -X -v ON_ERROR_STOP=1 -1             -f supabase/migrations/20260930075500_v17_execution_lease_single_flight_150s.sql
+          psql "$DB_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          insert into supabase_migrations.schema_migrations(version,name,statements)
+          values(
+            '20260930075500',
+            'v17_execution_lease_single_flight_150s',
+            array['CREATE OR REPLACE v17 execution lease functions; see repository migration 20260930075500']
+          )
+          on conflict (version) do nothing;
+          SQL
+          psql "$DB_URL" -XAt -v ON_ERROR_STOP=1 <<'SQL' | tee release-evidence/lease-after.txt
+          select position('150 seconds' in pg_get_functiondef(p.oid))>0
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+           where n.nspname='public' and p.proname='v17_acquire_execution_lease';
+          select position('30 seconds' in pg_get_functiondef(p.oid))>0
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+           where n.nspname='public' and p.proname='v17_verify_execution_lease';
+          SQL
+          test "$(sed -n '1p' release-evidence/lease-after.txt)" = "t"
+          test "$(sed -n '2p' release-evidence/lease-after.txt)" = "t"
+
+      - name: Deploy production v10 executor from main
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions"             > release-evidence/functions-before.json
+          python - <<'PY'
+          import json
+          x=json.load(open('release-evidence/functions-before.json'))
+          rows=x.get('functions',x) if isinstance(x,dict) else x
+          row=next(r for r in rows if r.get('slug')=='v10-lane-executor')
+          assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False,row
+          open('release-evidence/v10-before.txt','w').write(str(row['version']))
+          PY
+          supabase functions deploy v10-lane-executor --project-ref "$SUPABASE_PROJECT_REF"             --no-verify-jwt --use-api
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions"             > release-evidence/functions-after.json
+          python - <<'PY'
+          import json
+          b=int(open('release-evidence/v10-before.txt').read())
+          x=json.load(open('release-evidence/functions-after.json'))
+          rows=x.get('functions',x) if isinstance(x,dict) else x
+          row=next(r for r in rows if r.get('slug')=='v10-lane-executor')
+          assert row.get('status')=='ACTIVE' and int(row['version'])==b+1,(b,row)
+          open('release-evidence/v10-after.txt','w').write(str(row['version']))
+          PY
+
+      - name: Build and deploy the tested collector bundle
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP='sanbital-doa-capture-20260925'
+          SHA="$(git rev-parse HEAD)"
+          IMAGE="registry.fly.io/$APP:$SHA"
+          flyctl auth docker
+          docker build --build-arg SOURCE_COMMIT="$SHA" -t "$IMAGE" collectors/doa-capture
+          docker push "$IMAGE"
+          export IMAGE SHA APP
+          node --input-type=module <<'NODE'
+          const {APP:app,IMAGE:image,SHA:sha}=process.env;
+          const api=async(path='',method='GET',body,nonce)=>{
+            const r=await fetch(`https://api.machines.dev/v1/apps/${app}/machines${path}`,{
+              method,headers:{authorization:'Bearer '+process.env.FLY_API_TOKEN,'content-type':'application/json',
+                ...(nonce?{'fly-machine-lease-nonce':nonce}:{})},
+              ...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(60000)});
+            const text=await r.text();if(!r.ok)throw Error(`MACHINE_HTTP_${r.status}:${text.slice(0,200)}`);
+            return text?JSON.parse(text):null;
+          };
+          const list=await api();if(!Array.isArray(list)||list.length!==1)throw Error('EXPECTED_ONE_COLLECTOR');
+          const before=await api('/'+list[0].id),cfg=before.config??{};
+          if(!/^[a-f0-9]{64}$/.test(cfg.env?.PROTOCOL_SHA256??''))throw Error('PROTOCOL_ENV_INVALID');
+          const lease=await api('/'+before.id+'/lease','POST',{description:'db-isolation-'+sha.slice(0,12),ttl:60});
+          const nonce=lease?.data?.nonce;if(!nonce)throw Error('MACHINE_LEASE_MISSING');
+          try{
+            const current=await api('/'+before.id);
+            if(current.instance_id!==before.instance_id)throw Error('CONCURRENT_COLLECTOR_DEPLOY');
+            await api('/'+before.id,'POST',{current_version:before.instance_id,
+              config:{...cfg,image,auto_destroy:false,restart:{policy:'always'}}},nonce);
+          }finally{await api('/'+before.id+'/lease','DELETE',undefined,nonce).catch(()=>null);}
+          await new Promise(r=>setTimeout(r,15000));
+          const after=await api('/'+before.id);
+          if(after.state!=='started'||after.config?.image!==image)throw Error('COLLECTOR_NOT_ACTIVE');
+          if(after.config?.restart?.policy!=='always'||after.config?.auto_destroy===true)throw Error('COLLECTOR_SUPERVISION');
+          console.log(JSON.stringify({id:after.id,state:after.state,image:after.config.image,
+            restart:after.config.restart,auto_destroy:after.config.auto_destroy}));
+          NODE
+
+      - name: Verify DB state after deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB_URL="$(cat /tmp/prod-db-url)"
+          export PGCONNECT_TIMEOUT=5 PGOPTIONS='-c statement_timeout=8000 -c lock_timeout=1000'
+          sleep 35
+          psql "$DB_URL" -XAt -F '|' -v ON_ERROR_STOP=1 <<'SQL' | tee release-evidence/db-after.txt
+          select 'CRON50',jobid,jobname,schedule,active,
+                 position('timeout_milliseconds := 110000' in command)>0
+            from cron.job where jobid=50;
+          select 'OPEN_POSITION',id,symbol,state,remaining_quantity,hard_stop_price,last_evaluated_at
+            from public.v11_long_regime_positions where state='OPEN' order by entry_at;
+          select 'UNRESOLVED_ORDER',id,symbol,state,intent,coalesce(exchange_order_id::text,'')
+            from public.v11_long_regime_orders
+           where state in ('PLANNED','DISPATCHED','RECONCILIATION_PENDING','RECONCILIATION_FAILED')
+           order by created_at;
+          select 'LEASE',owner,expires_at,round(extract(epoch from (expires_at-clock_timestamp())))
+            from public.v17_execution_lease where singleton=true;
+          select 'RUNTIME',last_cycle_started_at,last_cycle_completed_at,protection_health,last_error
+            from public.v11_long_regime_runtime where singleton=true;
+          select 'CAPTURE',heartbeat_at,round(extract(epoch from (clock_timestamp()-heartbeat_at))),
+                 metrics->>'watched',metrics->>'production_continuous',metrics->>'source_commit'
+            from doa_capture.control where id=1;
+          select 'LIVE_MICRO',count(*),max(at)
+            from doa_capture.live_micro where kind='micro' and at>clock_timestamp()-interval '3 minutes';
+          SQL
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: direct-db-runtime-recovery-evidence
+          path: release-evidence
+          retention-days: 14
