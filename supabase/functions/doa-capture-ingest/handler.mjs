@@ -14,7 +14,7 @@ export function createHandler({getToken,invoke,maintenance}) {return async req=>
   const data=new Uint8Array(bytes);let off=0;for(const c of chunks){data.set(c,off);off+=c.length;}
   const body=JSON.parse(new TextDecoder().decode(data));
   if(body.action==='archive-maintenance'&&maintenance)return respond(await maintenance());
-  if(!['watch','ingest','status'].includes(body.action))return respond({error:'ACTION'},400);
+  if(!['watch','ingest','status','release'].includes(body.action))return respond({error:'ACTION'},400);
   return respond(await invoke(body.action,body));
  }catch{return respond({error:'CAPTURE_REQUEST_FAILED'},503);}
 };}
