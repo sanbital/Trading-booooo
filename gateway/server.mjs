@@ -2564,7 +2564,14 @@ function autotraderDbFailure(error) {
 async function schedulerTick(kind) {
   const key = kind === "scan" ? "scanRunning" : "monitorRunning";
   const now = Date.now();
-  if (autotraderDbCircuitSuppresses(now, autotraderDbRetryAt, autotraderDbFailures, autotraderDbProbeRunning)) {
+  if (
+    autotraderDbCircuitSuppresses(
+      now,
+      autotraderDbRetryAt,
+      autotraderDbFailures,
+      autotraderDbProbeRunning,
+    )
+  ) {
     schedulerState.dbCircuitSkips += 1;
     schedulerState[kind === "scan" ? "lastScanResult" : "lastMonitorResult"] = "DB_CIRCUIT_OPEN";
     return;
@@ -2724,6 +2731,8 @@ if (isMain) {
 }
 
 export {
+  autotraderDbBackoffMs,
+  autotraderDbCircuitSuppresses,
   assertOrderEngineVersion,
   binanceFuturesCreateOrder,
   binanceQueryString,
@@ -2741,8 +2750,6 @@ export {
   FUTURES_MIN_ENTRY_MARGIN_USDT,
   GATEWAY_BUILD,
   localRateLimit,
-  autotraderDbBackoffMs,
-  autotraderDbCircuitSuppresses,
   monitorCadenceDelayMs,
   neverPlacedVerdict,
   normalizeBinanceOrder,
