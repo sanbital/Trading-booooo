@@ -1,0 +1,134 @@
+name: Hotfix V10 live capacity snapshot fallback
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version_before:
+        description: Expected current v10-lane-executor production version
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-v10-lane-executor
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact hotfix SHA
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify scoped source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          grep -Fq 'LIVE_PORTFOLIO_FALLBACK' supabase/functions/v10-lane-executor/index.ts
+          grep -Fq "coalesce(cap->>'certain','false')='true'" supabase/migrations/20261001192000_live_capacity_snapshot_fallback.sql
+          npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/v10-lane-executor/index.ts
+          node --test supabase/functions/v10-lane-executor/entry-capacity.test.mjs
+          npm exec --yes --package=deno@2.5.6 -- deno test --allow-read supabase/functions/v10-lane-executor/margin-config.test.ts
+
+      - name: Install pinned Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf
+        with:
+          version: 2.109.1
+
+      - name: Pin production version
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions" > /tmp/functions-before.json
+          python - <<'PY'
+          import json
+          rows=json.load(open('/tmp/functions-before.json'))
+          rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
+          row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
+          expected=int("${{ inputs.expected_version_before }}")
+          assert int(row['version'])==expected,(expected,row)
+          assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False,row
+          print('production version pinned:',row['version'])
+          PY
+
+      - name: Apply exact DB gate migration
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          version=20261001192000
+          applied="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c "select count(*) from supabase_migrations.schema_migrations where version='$version'" || echo ERR)"
+          if [ "$applied" = "0" ]; then
+            ok=false
+            for _ in 1 2 3; do
+              if psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 --single-transaction                 -f supabase/migrations/20261001192000_live_capacity_snapshot_fallback.sql; then
+                ok=true
+                break
+              fi
+              sleep 2
+            done
+            test "$ok" = true
+            supabase migration repair "$version" --status applied --db-url "$SUPABASE_DB_URL"
+          elif [ "$applied" = "1" ]; then
+            psql "$SUPABASE_DB_URL" --set=ON_ERROR_STOP=1 --single-transaction               -f supabase/migrations/20261001192000_live_capacity_snapshot_fallback.sql
+          else
+            echo "unexpected migration history state: $applied" >&2
+            exit 1
+          fi
+          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c             "select position('coalesce(cap->>''''certain'''',''''false'''')=''''true'''' ' in replace(pg_get_functiondef(p.oid),E'\n',' '))>0 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='ai_call_reserve' limit 1"
+
+      - name: Deploy v10-lane-executor only
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set -euo pipefail
+          supabase functions deploy v10-lane-executor             --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt --use-api
+
+      - name: Verify deployed bundle and read-only preflight
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions" > /tmp/functions-after.json
+          python - <<'PY'
+          import json
+          rows=json.load(open('/tmp/functions-after.json'))
+          rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
+          row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
+          before=int("${{ inputs.expected_version_before }}")
+          assert int(row['version'])>before,(before,row)
+          assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False,row
+          print('deployed version:',row['version'])
+          PY
+
+          rm -rf /tmp/v10-download
+          mkdir -p /tmp/v10-download
+          supabase functions download v10-lane-executor             --project-ref "$SUPABASE_PROJECT_REF" --use-api --workdir /tmp/v10-download
+          grep -R -Fq 'LIVE_PORTFOLIO_FALLBACK' /tmp/v10-download
+
+          token="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1             -c "select token from public.edge_internal_tokens where name='v10-lane-executor' limit 1")"
+          test -n "$token"
+          curl -fsS --max-time 20             -H 'content-type: application/json'             -H "x-v10-executor-token: $token"             -d '{"mode":"preflight","symbol":"BTCUSDT"}'             "https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/v10-lane-executor"             > /tmp/preflight.json
+          python - <<'PY'
+          import json
+          x=json.load(open('/tmp/preflight.json'))
+          assert x.get('ok') is True,x
+          print('read-only preflight ok; snapshotAgeMs=',x.get('snapshotAgeMs'))
+          PY
