@@ -39,7 +39,7 @@ jobs:
           set -euo pipefail
           git diff --check
           grep -Fq 'LIVE_PORTFOLIO_FALLBACK' supabase/functions/v10-lane-executor/index.ts
-          grep -Fq "coalesce(cap->>'certain','false')='true'" supabase/migrations/20261001192000_live_capacity_snapshot_fallback.sql
+          grep -Fq "coalesce(cap->>''certain'',''false'')=''true''" supabase/migrations/20261001192000_live_capacity_snapshot_fallback.sql
           npm exec --yes --package=deno@2.5.6 -- deno check supabase/functions/v10-lane-executor/index.ts
           node --test supabase/functions/v10-lane-executor/entry-capacity.test.mjs
           npm exec --yes --package=deno@2.5.6 -- deno test --allow-read supabase/functions/v10-lane-executor/margin-config.test.ts
