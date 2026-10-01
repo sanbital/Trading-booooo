@@ -1,11 +1,16 @@
 name: Hotfix V10 live capacity snapshot fallback
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".v10-live-capacity-hotfix-trigger"
   workflow_dispatch:
     inputs:
       expected_version_before:
         description: Expected current v10-lane-executor production version
-        required: true
+        required: false
+        default: "175"
 
 permissions:
   contents: read
@@ -18,6 +23,8 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      EXPECTED_VERSION_BEFORE: ${{ github.event.inputs.expected_version_before || '175' }}
     steps:
       - name: Checkout exact hotfix SHA
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -52,11 +59,11 @@ jobs:
           test "$SUPABASE_PROJECT_REF" = etaajwpernzrcdrifdnw
           curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions" > /tmp/functions-before.json
           python - <<'PY'
-          import json
+          import json,os
           rows=json.load(open('/tmp/functions-before.json'))
           rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
           row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
-          expected=int("${{ inputs.expected_version_before }}")
+          expected=int(os.environ['EXPECTED_VERSION_BEFORE'])
           assert int(row['version'])==expected,(expected,row)
           assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False,row
           print('production version pinned:',row['version'])
@@ -87,7 +94,8 @@ jobs:
             echo "unexpected migration history state: $applied" >&2
             exit 1
           fi
-          psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c             "select position('coalesce(cap->>''''certain'''',''''false'''')=''''true'''' ' in replace(pg_get_functiondef(p.oid),E'\n',' '))>0 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='ai_call_reserve' limit 1"
+          verify="$(psql "$SUPABASE_DB_URL" -XAt --set=ON_ERROR_STOP=1 -c             "select case when position('coalesce(cap->>''certain'',''false'')=''true''' in pg_get_functiondef(p.oid))>0 then 'OK' else 'BAD' end from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='ai_call_reserve' limit 1")"
+          test "$verify" = "OK"
 
       - name: Deploy v10-lane-executor only
         shell: bash
@@ -108,11 +116,11 @@ jobs:
           set -euo pipefail
           curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"             "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/functions" > /tmp/functions-after.json
           python - <<'PY'
-          import json
+          import json,os
           rows=json.load(open('/tmp/functions-after.json'))
           rows=rows.get('functions',rows) if isinstance(rows,dict) else rows
           row=next(x for x in rows if x.get('slug')=='v10-lane-executor')
-          before=int("${{ inputs.expected_version_before }}")
+          before=int(os.environ['EXPECTED_VERSION_BEFORE'])
           assert int(row['version'])>before,(before,row)
           assert row.get('status')=='ACTIVE' and row.get('verify_jwt') is False,row
           print('deployed version:',row['version'])
