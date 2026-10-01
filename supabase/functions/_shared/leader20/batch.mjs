@@ -2,7 +2,8 @@ import {validateCapture120} from '../gpt-final-decision/capture-context.mjs';
 import {entryCaptureSafety} from '../gpt-final-decision/dynamic-flow.mjs';
 import {hash} from '../gpt-final-decision/snapshot-hash.mjs';
 
-export const BATCH_VERSION = 'TOP20_DEEPSEEK_BATCH_1';
+export const BATCH_VERSION = 'TOP20_DEEPSEEK_BATCH_1'; // historical compatibility only
+export const CLOCK_BATCH_VERSION = 'TOP10_CLOCK_DEEPSEEK_BATCH_1';
 export const LEGACY_BATCH_VERSION = 'TOP10_DEEPSEEK_BATCH_3';
 export const EVIDENCE_FORMAT = 'ROW_COLUMN_ZERO_BASED_V1';
 export const BATCH_MODEL = 'deepseek-flash';
@@ -61,8 +62,10 @@ export function checkGrounding(result,batch,symbol){
 /** @param {any[]} rows @param {{asOf:number,epochId:string,generation:number,held?:string[]}} options */
 export async function buildBatch(rows, {asOf, epochId, generation, held = []}) {
   if (!Number.isSafeInteger(asOf) || !Array.isArray(rows) || ![10,20].includes(rows.length) ||
-      new Set(rows.map(r => r.symbol)).size !== rows.length) throw Error('BATCH_TOP20_IDENTITY');
-  const version=rows.length===20?BATCH_VERSION:LEGACY_BATCH_VERSION;
+      new Set(rows.map(r => r.symbol)).size !== rows.length) throw Error('BATCH_IDENTITY');
+  const clockBatch=rows.some(r=>r.capture?.entry_window?.version==='TOP20_CLOCK_CAPTURE_1');
+  if(clockBatch&&rows.length!==10)throw Error('CLOCK_BATCH_TOP10_IDENTITY');
+  const version=clockBatch?CLOCK_BATCH_VERSION:rows.length===20?BATCH_VERSION:LEGACY_BATCH_VERSION;
   const checked = rows.map(row => {
     const c = validateCapture120(row.capture, asOf), safety = entryCaptureSafety(c, asOf);
     return {row, c, safety};
