@@ -46,3 +46,7 @@ This prerequisite does not change production execution. Revert its source-sync c
 No compute change was made. CPU, memory, I/O and connection peaks preceding restarts are unavailable. Nineteen observed interrupted/startup pairs do not prove OOM or undersizing. The support packet records the observed timeline and requests platform maintenance, process-exit, OOM and resource telemetry before making a cost-bearing recommendation.
 
 The first new baseline CI run used a shallow checkout, which broke five historical-harness files that read the preserved historical Git revision. The checkout now fetches full history; this changes neither fixtures nor runtime policy.
+
+## Historical automatic trigger retired
+
+Source synchronization PR #276 was merged at 2026-10-01 22:55:36 UTC / 2026-10-02 07:55:36 KST, commit `6b83c4dc009306fe48bc0e90f80b410a61d9154f`. The corrected campaign test also matched the old `release-db-singleflight-collector-20260930.yml` push trigger. Run 36937935723 stopped at its exact-scope guard at 22:55:54 UTC / 07:55:54 KST; Edge deployment, image build/push and machine replacement were all skipped. The workflow was disabled through the Actions API. Its YAML now has workflow_dispatch only, a retired version marker and a false job guard; re-enabling the workflow cannot replay the release. Classification: migration/one-shot, historical collector release, original successful run 36730311882 at 2026-09-30 14:35:50 UTC / 23:35:50 KST. No other function/workflow was deleted or disabled.
