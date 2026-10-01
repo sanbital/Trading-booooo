@@ -1,6 +1,6 @@
 import { readFuturesModeEvidence } from "./futures-mode-evidence.mjs";
 import { createV17StopCommands } from "./v17-stop-commands.mjs";
-import { createOrderWriterFence, createGatewayAuthorizer } from "./order-writer-fence.mjs";
+import { createGatewayAuthorizer, createOrderWriterFence } from "./order-writer-fence.mjs";
 import http from "node:http";
 import crypto from "node:crypto";
 import dns from "node:dns";
@@ -59,8 +59,10 @@ const MONITOR_INTERVAL_MS = integerEnv("AUTO_MONITOR_INTERVAL_SECONDS", 2, 1, 30
 // Expand deployment is inert. Activate only after all side-effect callers have
 // durable writer envelopes and the legacy account writer is stopped.
 const ORDER_WRITER_REQUIRED = boolEnv("ORDER_WRITER_REQUIRED", false);
-const orderWriterFence = createOrderWriterFence({required:ORDER_WRITER_REQUIRED,
-  authorize:createGatewayAuthorizer({url:SUPABASE_URL,key:env("SUPABASE_SERVICE_ROLE_KEY")})});
+const orderWriterFence = createOrderWriterFence({
+  required: ORDER_WRITER_REQUIRED,
+  authorize: createGatewayAuthorizer({ url: SUPABASE_URL, key: env("SUPABASE_SERVICE_ROLE_KEY") }),
+});
 const AUTOTRADER_DB_BREAKER_BASE_MS = 30_000;
 const AUTOTRADER_DB_BREAKER_MAX_MS = 60_000;
 // v5.10.1: 60 -> 180 seconds.
@@ -2655,7 +2657,10 @@ function createServer() {
             binance_futures: Boolean(BINANCE_API_KEY && BINANCE_SECRET_KEY),
           },
           scheduler_enabled: SCHEDULER_ENABLED,
-          order_writer: {required:ORDER_WRITER_REQUIRED,active_accounts:orderWriterFence.activeAccounts()},
+          order_writer: {
+            required: ORDER_WRITER_REQUIRED,
+            active_accounts: orderWriterFence.activeAccounts(),
+          },
           scheduler: schedulerState,
           intervals: {
             scan_seconds: SCAN_INTERVAL_MS / 1000,
