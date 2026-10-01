@@ -155,7 +155,30 @@ function active(p){return(Array.isArray(p?.positions)?p.positions:[]).filter(x=>
 async function auth(db,req){const p=(req.headers.get("x-v10-executor-token")||"").trim();const t=await db.from("edge_internal_tokens").select("token").eq("name","v10-lane-executor").maybeSingle();return!t.error&&p&&t.data?.token&&eq(p,String(t.data.token))}
 function route(v){const x=String(v||"").toUpperCase();return x==="RISK_OFF"?"BEAR":x==="NEUTRAL"?"RANGE":x==="BULL"||x==="STRONG_BULL"?"BULL":"CASH"}
 async function market(db){const o=await db.from("market_regime_observations").select("id,observed_at,predicted_regime,bull_score,confidence").eq("model_revision",OBSERVER_REVISION).eq("trading_influence",true).order("observed_at",{ascending:false}).limit(1).maybeSingle();if(o.error)throw new Error(`OBSERVER:${o.error.message}`);const age=o.data?Date.now()-Date.parse(o.data.observed_at):Infinity;return{route:age<=12*60000?route(o.data?.predicted_regime):"CASH",ageMs:age,observer:o.data||null}}
-async function snap(db){const s=await db.from("trading_account_snapshots").select("captured_at,available_quote,positions,positions_complete").eq("exchange","binance_futures").order("captured_at",{ascending:false}).limit(1).maybeSingle();if(s.error||!s.data)throw new Error("SNAPSHOT_MISSING");const age=Date.now()-Date.parse(s.data.captured_at);if(s.data.positions_complete!==true||!Number.isFinite(age)||age<0||age>SNAP_MAX)throw new Error(`SNAPSHOT_INVALID:${age}`);return{...s.data,ageMs:age}}
+function livePortfolioSnapshot(pf,dbSnapshotAgeMs){
+  const available=N(pf?.available_quote,NaN),positions=pf?.positions;
+  if(pf?.positions_complete!==true||!Number.isFinite(available)||!Array.isArray(positions))return null;
+  return {captured_at:new Date().toISOString(),available_quote:available,positions,
+    positions_complete:true,ageMs:0,source:"LIVE_PORTFOLIO_FALLBACK",
+    dbSnapshotAgeMs:Number.isFinite(dbSnapshotAgeMs)?dbSnapshotAgeMs:null};
+}
+async function snap(db){
+  const s=await db.from("trading_account_snapshots")
+    .select("captured_at,available_quote,positions,positions_complete")
+    .eq("exchange","binance_futures").order("captured_at",{ascending:false}).limit(1).maybeSingle();
+  const age=s.data?Date.now()-Date.parse(s.data.captured_at):Infinity;
+  if(!s.error&&s.data&&s.data.positions_complete===true&&Number.isFinite(age)&&age>=0&&age<=SNAP_MAX)
+    return {...s.data,ageMs:age,source:"DB_SNAPSHOT"};
+  // A delayed DB snapshot is not proof that the account lacks capacity. Re-read the
+  // authoritative Binance futures portfolio immediately. This is read-only and cannot
+  // submit an order. If the live read is incomplete/unreadable, fail closed as before.
+  try{
+    const pf=await gateway({action:"p10_portfolio"},3000),live=livePortfolioSnapshot(pf,age);
+    if(live)return live;
+  }catch{}
+  if(s.error||!s.data)throw new Error("SNAPSHOT_MISSING");
+  throw new Error(`SNAPSHOT_INVALID:${age}:LIVE_REFRESH_FAILED`);
+}
 async function incident(db,{reason,kind="UNKNOWN_ORDER_OUTCOME",controlScope=CONTROL_SCOPE.ACCOUNT_RISK_BLOCK,
   symbol=null,state={},evidence={}}){
   await verifyExecutionLease(db);
