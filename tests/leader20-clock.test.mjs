@@ -45,16 +45,16 @@ test('fixed entry path survives AI latency only until the slot deadline, while l
   const x=fixed();change(x);assert.equal(validateCapture120(x,slot+60000).status,'UNAVAILABLE');
  }
 });
-test('Top20 sends all 480 original rows in one request and preserves independent held/data blocks',async()=>{
- const rows=Array.from({length:20},(_,i)=>({symbol:`C${i}USDT`,rank:i+1,capture:fixed()}));
+test('Top10 clock batch sends 240 original rows and preserves independent held/data blocks',async()=>{
+ const rows=Array.from({length:10},(_,i)=>({symbol:`C${i}USDT`,rank:i+1,capture:fixed()}));
  const b=await buildBatch(rows,{asOf:slot+10000,epochId:'e',generation:1});
- assert.equal(b.version,'TOP20_DEEPSEEK_BATCH_1');assert.equal(b.symbols.length,20);
- assert.equal(b.symbols.reduce((n,s)=>n+s.matrix.length,0),480);
- for(let i=0;i<20;i++)assert.deepEqual(unpackSymbol(b,b.symbols[i]),rows[i].capture.trajectory);
- assert.equal(batchPayload(b).max_tokens,4800);
+ assert.equal(b.version,'TOP10_CLOCK_DEEPSEEK_BATCH_1');assert.equal(b.symbols.length,10);
+ assert.equal(b.symbols.reduce((n,s)=>n+s.matrix.length,0),240);
+ for(let i=0;i<10;i++)assert.deepEqual(unpackSymbol(b,b.symbols[i]),rows[i].capture.trajectory);
+ assert.equal(batchPayload(b).max_tokens,2400);
  rows[0].capture.trajectory.pop();
  const blocked=await buildBatch(rows,{asOf:slot+10000,epochId:'e',generation:1,held:['C1USDT']});
- assert.equal(blocked.symbols.filter(s=>s.state==='READY').length,18);
+ assert.equal(blocked.symbols.filter(s=>s.state==='READY').length,8);
 });
 test('each capture preparation ranks current rolling24h Top20 and cannot refresh mid-window',async()=>{
  const symbols=Array.from({length:25},(_,i)=>({symbol:`C${i}USDT`,status:'TRADING',contractType:'PERPETUAL',quoteAsset:'USDT',marginAsset:'USDT',underlyingType:'COIN'}));
