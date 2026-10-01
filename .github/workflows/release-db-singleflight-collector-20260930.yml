@@ -1,23 +1,12 @@
 name: Release dynamic capture recovery 20260930
 # One release for the symbol-scoped collector recovery and its bounded inference refresh.
+# Retired one-shot release. Its original release completed on 2026-09-30.
+# A test-file edit must never restart this historical production deploy.
+# Reactivation requires a new reviewed workflow/version and a new live DB baseline.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'collectors/doa-capture/core.mjs'
-      - 'collectors/doa-capture/core.test.mjs'
-      - 'collectors/doa-capture/bootstrap.test.mjs'
-      - 'collectors/doa-capture/worker.mjs'
-      - 'collectors/doa-capture/bootstrap.mjs'
-      - 'collectors/doa-capture/Dockerfile'
-      - 'ops/leader20/book-bootstrap-release.mjs'
-      - 'supabase/functions/_shared/gpt-final-decision/capture-context.mjs'
-      - 'tests/capture-recovery-finite.test.mjs'
-      - 'tests/dynamic-capture-recovery-scope.test.mjs'
-      - 'tests/inference-acquisition.test.mjs'
-      - 'tests/leader20-campaign-lifecycle.test.mjs'
-      - 'tests/timeout-recovery.test.mjs'
-      - '.github/workflows/release-db-singleflight-collector-20260930.yml'
+  workflow_dispatch:
+env:
+  ONE_SHOT_RELEASE_VERSION: DYNAMIC_CAPTURE_RECOVERY_20260930_RETIRED_1
 permissions:
   contents: read
 concurrency:
@@ -25,6 +14,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
+    # Fence this archived workflow by its immutable file identity, even if re-enabled.
+    if: github.event_name == 'workflow_dispatch' && !contains(github.workflow_ref, '/release-db-singleflight-collector-20260930.yml@')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
