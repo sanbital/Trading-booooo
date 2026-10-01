@@ -96,7 +96,7 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sle
  // `available` is the ACCOUNT's capture/review admission bound; `available_for_new_entry` is how
  // many MORE positions may be opened right now (open positions, live entry orders and slot
  // reservations already taken off). Holding one position never closes the other slots, so the
- // Top20 entry capture is admitted on `available` and only the ORDER count uses the narrower bound.
+ // Top10 entry capture is admitted on `available` and only the ORDER count uses the narrower bound.
  const remaining=cap.available_for_new_entry??cap.available;
  Object.assign(stats,{available_slots:remaining,available_slots_before:remaining,
   open_position_count:cap.open_positions??null,reserved_slots:cap.reserved_slots??0,
@@ -108,7 +108,7 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sle
   await note({...stats,batch_reason:cap.reason==='NO_ENTRY_CAPACITY'?'CAPACITY_ZERO':cap.reason,slot_status:'BATCH_WAITING'});
   return outcome({created:false,reason:cap.reason});
  }
- // A dead collector and a late capture look identical from here -- ready=0, blocked=20 -- which is
+ // A dead collector and a late capture look identical from here -- ready=0, blocked=10 -- which is
  // how the 2026-09-29 04:33 KST collector outage read as ordinary flakiness for four hours while
  // the retry loop below burned every decision window against streams that did not exist. Ask the
  // transport directly: when it is gone, say so once and stop, instead of retrying up to 160 times.
@@ -119,7 +119,7 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sle
   await note({...stats,batch_reason:stats.collector_reason,slot_status:'EXPIRED'});
   return outcome({created:false,reason:stats.collector_reason});
  }
- const members=await db.from('leader20_members').select('symbol,rank').eq('epoch_id',ctl.epoch_id).lte('rank',ctl.clock_capture_enabled?20:10).order('rank');
+ const members=await db.from('leader20_members').select('symbol,rank').eq('epoch_id',ctl.epoch_id).lte('rank',Math.min(Number(ctl.watch_limit)||10,10)).order('rank');
  if(members.error)throw Error('BATCH_MEMBERSHIP_READ');
  stats.watch_count=members.data.length;
  let rows,packet;
