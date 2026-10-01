@@ -26,7 +26,7 @@ Current cron commands, DB settings, schema/function drift, job duration/concurre
 - Focused executor/entry baseline: 164/164 pass. Final execution/attribution/protection/dispatch/review integration gate: 389/389 pass.
 - Current production module graph is now bound into VM integration fixtures instead of leaving imported helpers undefined. Existing assertions that expected the removed in-process wake were updated to the deployed DB wake and account-before-claim behavior.
 - Deno 2.5.6 check of the exact executor graph passed using the system CA store; TLS validation remained enabled.
-- Broad main baseline: 1,795 tests, 1,766 pass, 29 fail. Broad synchronized graph before the final campaign-fixture correction: 1,799 tests, 1,772 pass, 27 fail. The only newly failing test was an extraction fixture anchored to an obsolete `const openSymbols` declaration; its anchor/bindings were corrected and separately rerun. Three pre-existing coordinator mock failures were corrected by supplying the real `pending`/`drainPending` interface. Remaining baseline failures are not a passing deployment gate.
+- Broad main baseline: 1,795 tests, 1,766 pass, 29 fail. Broad synchronized graph before the final campaign-fixture correction: 1,799 tests, 1,772 pass, 27 fail. The only newly failing test was an extraction fixture anchored to an obsolete `const openSymbols` declaration; its anchor/bindings were corrected and separately rerun. Three pre-existing coordinator mock failures were corrected by supplying the real `pending`/`drainPending` interface. Final GitHub broad-suite result: 1,799 tests, 1,773 pass, 26 fail, all also present in the original main baseline. Remaining baseline failures are not a passing deployment gate.
 
 ## Remaining authorized work
 
@@ -44,3 +44,5 @@ This prerequisite does not change production execution. Revert its source-sync c
 ## Compute
 
 No compute change was made. CPU, memory, I/O and connection peaks preceding restarts are unavailable. Nineteen observed interrupted/startup pairs do not prove OOM or undersizing. The support packet records the observed timeline and requests platform maintenance, process-exit, OOM and resource telemetry before making a cost-bearing recommendation.
+
+The first new baseline CI run used a shallow checkout, which broke five historical-harness files that read the preserved historical Git revision. The checkout now fetches full history; this changes neither fixtures nor runtime policy.

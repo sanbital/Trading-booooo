@@ -84,3 +84,4 @@ await record('functions',async()=>{
  const r=await fetch(`https://api.supabase.com/v1/projects/${project}/functions`,{headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN},signal:AbortSignal.timeout(15000)});return r.ok?{ok:true,rows:await r.json()}:{ok:false,http:r.status};
 });
 seal();console.log('Encrypted evidence saved; no production changes.');
+if(ev.results.readiness?.ok!==true)process.exitCode=2;
