@@ -85,7 +85,7 @@ test('a dispatched order always stops the run', () => {
   // whether a position exists, so no second entry may be attempted.
   assert.match(run, /if\(attempt\.dispatched\)throw e;/);
   const idx = run.indexOf('if(attempt.dispatched)throw e;');
-  const scoped = run.indexOf('ENTRY_SKIP_SYMBOL_SCOPED.test(msg)');
+  const scoped = run.indexOf('if(!symbolScoped)throw e;');
   assert.ok(idx > 0 && scoped > idx,
     'the dispatched guard must be evaluated BEFORE the symbol-scoped allowance');
 });

@@ -57,8 +57,8 @@ test('unknown usage is not zero cost',()=>assert.equal(costOf({}).usd,null));
 test('known token cost is kept in USD',()=>{const x=costOf(rawResponse({}));assert.ok(Math.abs(x.usd-.001425)<1e-12);assert.match(x.basis,/NOT_USDT/);});
 test('budget stops additional distinct calls',async()=>{const {c,store}=service({config:{...config(),apiBudgetUsd:.1}});await completed(c);const r=await c.consider(candidate('second'));assert.equal(r.allowed,false);assert.equal(store.calls,1);});
 test('adapter filters before signal CLAIMED and never orders',async()=>{const db={}, {c}=service();setTestCoordinator(db,c);const s=candidate();const first=await gptFilterExecutable(db,[s]);assert.equal(first.candidates.length,0);assert.equal(s.status,'NEW');await Promise.all([...c.pending.values()]);assert.equal((await gptFilterExecutable(db,[s])).candidates.length,1);assert.equal(gptFinalCheck(db,s).allowed,true);});
-test('resumption waits outside original lease and reuses ordinary cycle',async()=>{const db={};let held=false,runs=0;setTestCoordinator(db,{config:{mode:'ENFORCE'},waitReady:async()=>{assert.equal(held,false);return true;}});const run=async()=>{held=true;runs++;held=false;return {ok:true,entry:{entered:runs===2,reason:'GPT_REVIEW_PENDING'}};};const r=await runWithGptReview(db,run);assert.equal(runs,2);assert.equal(r.entry.entered,true);});
-test('no GPT-triggered retry after an ordinary engine rejection',async()=>{const db={};let runs=0;setTestCoordinator(db,{config:{mode:'ENFORCE'},waitReady:()=>{throw Error('must not wait')}});await runWithGptReview(db,async()=>{runs++;return {ok:true,entry:{entered:false,reason:'ENTRY_MARGIN_INSUFFICIENT'}};});assert.equal(runs,1);});
+test('resumption waits outside original lease and reuses ordinary cycle',async()=>{const db={};let held=false,runs=0;setTestCoordinator(db,{pending:new Map(),drainPending:async()=>{},config:{mode:'ENFORCE'},waitReady:async()=>{assert.equal(held,false);return true;}});const run=async()=>{held=true;runs++;held=false;return {ok:true,entry:{entered:runs===2,reason:'GPT_REVIEW_PENDING'}};};const r=await runWithGptReview(db,run);assert.equal(runs,2);assert.equal(r.entry.entered,true);});
+test('no GPT-triggered retry after an ordinary engine rejection',async()=>{const db={};let runs=0;setTestCoordinator(db,{pending:new Map(),drainPending:async()=>{},config:{mode:'ENFORCE'},waitReady:()=>{throw Error('must not wait')}});await runWithGptReview(db,async()=>{runs++;return {ok:true,entry:{entered:false,reason:'ENTRY_MARGIN_INSUFFICIENT'}};});assert.equal(runs,1);});
 test('local connector patch has five unique narrow regions',()=>{const fixture=replacements.map(r=>r.from).join('\n// untouched original segment\n');const out=transform(fixture);for(const r of replacements)assert.ok(out.includes(r.to));assert.equal((out.match(/untouched original segment/g)||[]).length,4);assert.throws(()=>transform(out),/ALREADY_PATCHED/);});
 test('local installer refuses an unverified current source blob',()=>assert.throws(()=>checkedTransform('unknown source'),/BASELINE_CHANGED/));
 test('SQL uses private review tables and no trading mutations',()=>{const sql=readFileSync(new URL('../create_review_store.UNAPPLIED.sql',import.meta.url),'utf8');assert.match(sql,/SECURITY INVOKER/);assert.match(sql,/ENABLE ROW LEVEL SECURITY/);assert.match(sql,/REVOKE ALL/);assert.ok(!/UPDATE public\.(v11|trading_)|ALTER TABLE public\.(v11|trading_)/.test(sql));});
@@ -79,7 +79,7 @@ test('local journal persists deduplication across store instances',async()=>{
   try{const one=await a.claim(key,{result:null},config());assert.equal(one.created,true);assert.equal((await b.claim(key,{result:null},config())).created,false);await a.snapshot(key,one.row.owner,{packet:'TEST'});await a.save(key,one.row.owner,'DONE',{decision:'TEST'});assert.equal((await b.get(key)).state,'DONE');await assert.rejects(b.save(key,one.row.owner,'DONE',{}),/CAS/);}finally{rmSync(dir,{recursive:true,force:true});}
 });
 test('local runner cannot call API without explicit option',async()=>{const {main}=await import('../review-once.mjs');await assert.rejects(main([]),/EXPLICIT_API_CALL_REQUIRED/);});
-test('SHADOW adapter does not await even journal I/O and admits no new entry (GPT final decision)',async()=>{let complete;const waiting=new Promise(r=>complete=r),db={};const scheduled=[];setTestCoordinator(db,{config:{mode:'SHADOW'},consider:()=>waiting,schedule:p=>scheduled.push(p)});const s=candidate(),r=await gptFilterExecutable(db,[s]);assert.deepEqual(r.candidates,[]);assert.equal(r.reason,'GPT_SHADOW_NO_NEW_ENTRY');assert.equal(scheduled.length,1);complete();await Promise.all(scheduled);});
+test('SHADOW adapter does not await even journal I/O and admits no new entry (GPT final decision)',async()=>{let complete;const waiting=new Promise(r=>complete=r),db={};const scheduled=[];setTestCoordinator(db,{pending:new Map(),drainPending:async()=>{},config:{mode:'SHADOW'},consider:()=>waiting,schedule:p=>scheduled.push(p)});const s=candidate(),r=await gptFilterExecutable(db,[s]);assert.deepEqual(r.candidates,[]);assert.equal(r.reason,'GPT_SHADOW_NO_NEW_ENTRY');assert.equal(scheduled.length,1);complete();await Promise.all(scheduled);});
 test('review purpose is part of the job binding (no cross-purpose reuse)',async()=>{
   const store=new MemoryReviewStore(),requests=[];
   const a=service({store,requests,purpose:'PRODUCTION'}).c,b=service({store,requests,purpose:'DRYRUN'}).c;
@@ -88,7 +88,7 @@ test('review purpose is part of the job binding (no cross-purpose reuse)',async(
 });
 
 test('follow-up cycle: one extra ordinary cycle after an entry, only when armed and early enough',async()=>{
-  const stub=(armed=true,now=()=>0)=>({config:{mode:'ENFORCE'},now,waitReady:()=>{throw Error('must not wait')}});
+  const stub=(armed=true,now=()=>0)=>({pending:new Map(),drainPending:async()=>{},config:{mode:'ENFORCE'},now,waitReady:()=>{throw Error('must not wait')}});
   const entered={ok:true,entry:{entered:true,remainingGptBuys:1,followUpArmed:true}};
   let db={},runs=0;setTestCoordinator(db,stub());
   let out=await runWithGptReview(db,async()=>{runs++;return runs===1?entered:{ok:true,entry:{entered:false,reason:'X'}};});
@@ -102,7 +102,7 @@ test('follow-up cycle: one extra ordinary cycle after an entry, only when armed 
   let t=0;db={};runs=0;setTestCoordinator(db,stub(true,()=>t));
   await runWithGptReview(db,async()=>{runs++;t+=31000;return entered;});
   assert.equal(runs,1,'too late in the invocation: no follow-up');
-  db={};runs=0;setTestCoordinator(db,{config:{mode:'SHADOW'},now:()=>0});
+  db={};runs=0;setTestCoordinator(db,{pending:new Map(),drainPending:async()=>{},config:{mode:'SHADOW'},now:()=>0});
   await runWithGptReview(db,async()=>{runs++;return entered;});assert.equal(runs,1,'only in ENFORCE');
   db={};runs=0;setTestCoordinator(db,stub());
   await runWithGptReview(db,async()=>{runs++;return entered;},{agedRecheck:true,followUp:false});

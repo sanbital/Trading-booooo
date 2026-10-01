@@ -1,0 +1,50 @@
+SUPABASE SUPPORT EVIDENCE — READ ONLY
+Project: etaajwpernzrcdrifdnw
+No deliberate production restart or compute change was performed by this task.
+Observed log window: tool default rolling 24 hours; first/last visible event times below. This is not a complete platform restart count.
+
+Event | UTC | KST
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-09-30T23:37:11.975000+00:00 | 2026-10-01T08:37:11.975000+09:00
+database system was interrupted; last known up at 2026-09-30 23:32:41 UTC | 2026-09-30T23:37:12.050000+00:00 | 2026-10-01T08:37:12.050000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T00:26:27.156000+00:00 | 2026-10-01T09:26:27.156000+09:00
+database system was interrupted; last known up at 2026-10-01 00:21:43 UTC | 2026-10-01T00:26:27.229000+00:00 | 2026-10-01T09:26:27.229000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T00:51:03.844000+00:00 | 2026-10-01T09:51:03.844000+09:00
+database system was interrupted; last known up at 2026-10-01 00:49:32 UTC | 2026-10-01T00:51:03.911000+00:00 | 2026-10-01T09:51:03.911000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T03:17:22.364000+00:00 | 2026-10-01T12:17:22.364000+09:00
+database system was interrupted; last known up at 2026-10-01 03:09:03 UTC | 2026-10-01T03:17:22.436000+00:00 | 2026-10-01T12:17:22.436000+09:00
+database system is ready to accept connections | 2026-10-01T03:17:24.438000+00:00 | 2026-10-01T12:17:24.438000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T03:56:59.497000+00:00 | 2026-10-01T12:56:59.497000+09:00
+database system was interrupted; last known up at 2026-10-01 03:51:54 UTC | 2026-10-01T03:56:59.569000+00:00 | 2026-10-01T12:56:59.569000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T06:16:04.088000+00:00 | 2026-10-01T15:16:04.088000+09:00
+database system was interrupted; last known up at 2026-10-01 06:10:10 UTC | 2026-10-01T06:16:04.153000+00:00 | 2026-10-01T15:16:04.153000+09:00
+database system is ready to accept connections | 2026-10-01T06:16:06.264000+00:00 | 2026-10-01T15:16:06.264000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T06:56:04.210000+00:00 | 2026-10-01T15:56:04.210000+09:00
+database system was interrupted; last known up at 2026-10-01 06:55:07 UTC | 2026-10-01T06:56:04.284000+00:00 | 2026-10-01T15:56:04.284000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T08:11:02.519000+00:00 | 2026-10-01T17:11:02.519000+09:00
+database system was interrupted; last known up at 2026-10-01 08:09:33 UTC | 2026-10-01T08:11:02.592000+00:00 | 2026-10-01T17:11:02.592000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T08:37:05.790000+00:00 | 2026-10-01T17:37:05.790000+09:00
+database system was interrupted; last known up at 2026-10-01 08:28:57 UTC | 2026-10-01T08:37:05.861000+00:00 | 2026-10-01T17:37:05.861000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T09:17:50.014000+00:00 | 2026-10-01T18:17:50.014000+09:00
+database system was interrupted; last known up at 2026-10-01 09:09:39 UTC | 2026-10-01T09:17:50.077000+00:00 | 2026-10-01T18:17:50.077000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T10:21:09.934000+00:00 | 2026-10-01T19:21:09.934000+09:00
+database system was interrupted; last known up at 2026-10-01 10:17:19 UTC | 2026-10-01T10:21:10.011000+00:00 | 2026-10-01T19:21:10.011000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T12:37:07.081000+00:00 | 2026-10-01T21:37:07.081000+09:00
+database system was interrupted; last known up at 2026-10-01 12:30:02 UTC | 2026-10-01T12:37:07.155000+00:00 | 2026-10-01T21:37:07.155000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T14:21:51.676000+00:00 | 2026-10-01T23:21:51.676000+09:00
+database system was interrupted; last known up at 2026-10-01 14:19:07 UTC | 2026-10-01T14:21:51.751000+00:00 | 2026-10-01T23:21:51.751000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T15:05:58.665000+00:00 | 2026-10-02T00:05:58.665000+09:00
+database system was interrupted; last known up at 2026-10-01 14:59:15 UTC | 2026-10-01T15:05:58.732000+00:00 | 2026-10-02T00:05:58.732000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T15:26:54.073000+00:00 | 2026-10-02T00:26:54.073000+09:00
+database system was interrupted; last known up at 2026-10-01 15:24:37 UTC | 2026-10-01T15:26:54.144000+00:00 | 2026-10-02T00:26:54.144000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T15:48:21.058000+00:00 | 2026-10-02T00:48:21.058000+09:00
+database system was interrupted; last known up at 2026-10-01 15:39:18 UTC | 2026-10-01T15:48:21.136000+00:00 | 2026-10-02T00:48:21.136000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T18:25:56.342000+00:00 | 2026-10-02T03:25:56.342000+09:00
+database system was interrupted; last known up at 2026-10-01 18:20:44 UTC | 2026-10-01T18:25:56.414000+00:00 | 2026-10-02T03:25:56.414000+09:00
+starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit | 2026-10-01T20:11:52.694000+00:00 | 2026-10-02T05:11:52.694000+09:00
+database system was interrupted; last known up at 2026-10-01 20:11:00 UTC | 2026-10-01T20:11:52.767000+00:00 | 2026-10-02T05:11:52.767000+09:00
+
+Independent failures: MCP SQL connection timeout; GitHub runner Management API HTTP 544 at 2026-10-01T22:36:07.947Z and 22:41:31.277Z.
+Fly scheduler process alive with DB circuit open; signed exchange read succeeded at 22:41:48.201Z.
+SQL cron/config/position/unknown-order backup unavailable. No resource-cause attribution established.
+Please provide: postmaster/container exit codes, OOM-killer and memory-pressure events, per-restart CPU/memory/disk I/O and connection peaks, recovery/WAL and replication state, autovacuum/lock/long-query telemetry, maintenance/software upgrades/restart actor history, and platform incident correlation.
+Do not assume a compute upgrade resolves the interrupted restart loop. Entry recovery must reconcile independent of compute tier.

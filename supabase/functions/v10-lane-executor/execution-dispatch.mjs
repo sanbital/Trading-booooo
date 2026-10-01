@@ -26,3 +26,22 @@ export function prioritizeSignal(rows,signalId){
   if(index<=0)return rows;
   return [rows[index],...rows.slice(0,index),...rows.slice(index+1)];
 }
+
+/** A durable dispatch claim is authority for exactly one immutable signal. It must
+ * never become a general account entry turn if that signal is later vetoed. */
+export function restrictExecutionDispatchCandidates(rows,signalId){
+  if(!signalId)return rows;
+  return rows.filter(row=>String(row?.id)===String(signalId));
+}
+
+const DRAINABLE_FINAL_STATES=new Set([
+  'FILLED','PARTIALLY_FILLED_CANCELED','REJECTED','EXPIRED',
+  'EXECUTION_WINDOW_INSUFFICIENT','CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION',
+]);
+
+/** One account owner may advance another durable BUY only after the preceding
+ * dispatch is provably final. UNKNOWN, PARTIALLY_FILLED and every retryable READY
+ * state stop the drain so an unresolved exchange side effect can never be crossed. */
+export function executionDispatchAllowsNext(finalization){
+  return finalization?.updated===true&&DRAINABLE_FINAL_STATES.has(String(finalization?.row?.state??''));
+}

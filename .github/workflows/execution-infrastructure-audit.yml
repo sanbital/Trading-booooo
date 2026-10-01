@@ -1,0 +1,36 @@
+name: Execution infrastructure encrypted audit
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: execution-infrastructure-audit
+  cancel-in-progress: false
+jobs:
+  audit:
+    if: github.repository == 'sanbital/Trading-booooo'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Read production through independent paths and encrypt rollback evidence
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        run: node ops/execution-infra/audit.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: execution-infra-audit-${{ github.run_id }}
+          path: infra-evidence/*.encrypted.json
+          retention-days: 7
+          if-no-files-found: error

@@ -53,21 +53,18 @@ test('TEST 6B: execute-ready-any is a short outbox-only path with no GPT fallbac
   assert.match(executor,/async function runExecutionDispatchOnly\(db,signalId=null\)/);
   assert.match(executor,/mode==="execute-ready-any"\)return res\(200,await runExecutionDispatchOnly\(db\)\)/);
   const start=executor.indexOf('async function runExecutionDispatchOnly');
-  const end=executor.indexOf('async function runWithExecutionDispatch',start);
+  const end=executor.indexOf('async function runLeaseCycleWithDispatchPriority',start);
   assert.ok(start>=0&&end>start);
   assert.doesNotMatch(executor.slice(start,end),/runWithGptReview/);
 });
-test('TEST 6C: durable clock BUY has an in-process execution wake before pg_net fallback',async()=>{
-  const [executor,adapter,coordinator]=await Promise.all([
-    read('supabase/functions/v10-lane-executor/index.ts'),
-    read('supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs'),
-    read('supabase/functions/_shared/gpt-final-review/coordinator.mjs')]);
-  assert.match(executor,/setImmediateExecutionWake\(db,\(signalId\)=>queueDurableExecutionWake\(db,signalId\)\)/);
-  assert.match(executor,/function queueDurableExecutionWake\(db,signalId\)/);
-  assert.match(adapter,/onDurableAllowed:\(s,review\)=>executionWakes\.get\(db\)/);
-  assert.match(coordinator,/onDurableAllowed=async\(\)=>\{\}/);
-  assert.match(coordinator,/this\.schedule\(this\.onDurableAllowed/);
-  assert.match(coordinator,/this\.tickets\.set\(String\(record\.identity\.signal_id\),checked\.ticket\)/);
+test('TEST 6C: deployed durable BUY uses DB wake and never inherits review request lifetime',async()=>{
+ const [executor,migration]=await Promise.all([
+  read('supabase/functions/v10-lane-executor/index.ts'),
+  read('supabase/migrations/20260930115438_execution_dispatch_and_partial_fill_truth.sql')]);
+ assert.doesNotMatch(executor,/setImmediateExecutionWake\(db,/);
+ assert.match(migration,/insert into public\.leader20_execution_dispatches/);
+ assert.match(migration,/after insert or update on public\.gpt_final_entry_reviews/);
+ assert.match(executor,/return await runWithLease\(db,\(\)=>drainExecutionDispatchesUnderAccountLease\(db,signalId\)\)/);
 });
 test('TEST 7, 10, 11: atomic signal claim, expired refusal, and live 30-second authority',async t=>{
   assert.ok(process.env.PGLITE_MODULE,'PGLITE_MODULE is required');

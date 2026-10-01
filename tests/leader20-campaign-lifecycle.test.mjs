@@ -1,3 +1,4 @@
+import {restrictExecutionDispatchCandidates} from '../supabase/functions/v10-lane-executor/execution-dispatch.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -157,11 +158,11 @@ test('real PostgreSQL: fixed periodic clock, fresh candidates, WAIT continuity, 
 
 test('executor keeps the newest candidate per symbol before campaign queue fairness ordering',async()=>{
  const source=await read('supabase/functions/v10-lane-executor/index.ts');
- const block=source.slice(source.indexOf('const openSymbols=new Set(openNow.map'),source.indexOf('if(!queue.length)entry='));
+ const block=source.slice(source.indexOf('const dispatchSignalId=typeof executionDispatchClaims'),source.indexOf('if(!queue.length)entry='));
  const retired=[];const db={from:()=>({update:patch=>({eq:()=>({eq:async(_,status)=>retired.push(patch)})})})};
- const run=new Function('signalRows','db',`return (async()=>{const openNow=[],blockedSymbols=new Set(),pair={},leader20Control={active_strategy:'LEADER20_DYNAMIC_1'},rec=x=>x??{},N=(x,f)=>Number.isFinite(Number(x))?Number(x):f;${block};return {queue,superseded};})()`);
+ const run=new Function('signalRows','db','restrictExecutionDispatchCandidates',`return (async()=>{const openNow=[],blockedSymbols=new Set(),pair={},leader20Control={active_strategy:'LEADER20_DYNAMIC_1'},rec=x=>x??{},N=(x,f)=>Number.isFinite(Number(x))?Number(x):f;${block};return {queue,superseded};})()`);
  const row=(id,symbol,seconds)=>({id,symbol,entry_bar_at:new Date(1800000000000+seconds*1000).toISOString(),features:{rank:1}});
- const result=await run([row('old','ONEUSDT',0),row('new','ONEUSDT',25),row('other','SOONUSDT',20)],db);
+ const result=await run([row('old','ONEUSDT',0),row('new','ONEUSDT',25),row('other','SOONUSDT',20)],db,restrictExecutionDispatchCandidates);
  assert.deepEqual(result.queue.map(x=>x.id),['other','new']);
  assert.deepEqual(result.superseded.map(x=>x.id),['old']);assert.equal(retired.length,1);
 });
