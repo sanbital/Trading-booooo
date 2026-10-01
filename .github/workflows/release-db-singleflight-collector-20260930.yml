@@ -14,7 +14,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
-    if: ${{ false }}
+    # Fence this archived workflow by its immutable file identity, even if re-enabled.
+    if: github.event_name == 'workflow_dispatch' && !contains(github.workflow_ref, '/release-db-singleflight-collector-20260930.yml@')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
