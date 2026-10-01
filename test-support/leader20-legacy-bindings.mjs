@@ -5,3 +5,7 @@ export const leaderControl=async()=>({active_strategy:'LEGACY',observation_enabl
 export async function requireEntryAuthority(_db,row){if(isLeader20(row))throw Error('Use real Leader20 DB authority in new-strategy tests');}
 
 export const leader20Control={active_strategy:'LEGACY',observation_enabled:false};
+// Bind the deployed module graph in historical VM integration harnesses too.
+export * from '../supabase/functions/v10-lane-executor/execution-dispatch.mjs';
+export * from '../supabase/functions/v10-lane-executor/entry-error-scope.mjs';
+export * from '../supabase/functions/v10-lane-executor/cycle-runtime-outcome.mjs';

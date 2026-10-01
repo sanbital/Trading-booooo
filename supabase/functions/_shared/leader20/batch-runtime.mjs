@@ -58,6 +58,14 @@ export async function batchControl(db){
  if(['42P01','PGRST205'].includes(r.error?.code))return {enabled:false};
  if(r.error||!r.data)throw Error('BATCH_CONTROL_UNAVAILABLE');return r.data;
 }
+/** The DB account snapshot is only a pre-review hint. An uncertain cache cannot
+ * prove that an order may be sent, but it also cannot erase a completed market
+ * capture. The executor performs a fresh exchange/account check before an IOC. */
+export function reviewCaptureCapacityBlock(cap){
+ if(cap?.certain===false)return null;
+ if(!cap||!Number.isFinite(Number(cap.available)))return 'CAPACITY_UNAVAILABLE';
+ return Number(cap.available)<1?cap.reason??'NO_ENTRY_CAPACITY':null;
+}
 // Only completion is retried: the paid model call remains outside this loop.
 // SQL preserves the first result, owner, original expiry and a 30-second wait cap.
 export async function finishEntryBatch(db,batch,result,{sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
@@ -103,10 +111,11 @@ export async function runEntryBatch(db,ctl,{now=Date.now,fetchFn=fetch,sleep=sle
   futures_available_margin:cap.futures_available_margin??cap.available_quote??null,
   target_margin_per_slot:cap.target_margin_per_slot??null,
   tracked_positions:cap.open_symbols??cap.held??[]});
- if(cap.available<1){
+ const capacityBlock=reviewCaptureCapacityBlock(cap);
+ if(capacityBlock){
   const marked=await db.rpc('leader20_batch_note_full');if(marked.error)throw Error('BATCH_CAPACITY_NOTE');
-  await note({...stats,batch_reason:cap.reason==='NO_ENTRY_CAPACITY'?'CAPACITY_ZERO':cap.reason,slot_status:'BATCH_WAITING'});
-  return outcome({created:false,reason:cap.reason});
+  await note({...stats,batch_reason:capacityBlock==='NO_ENTRY_CAPACITY'?'CAPACITY_ZERO':capacityBlock,slot_status:'BATCH_WAITING'});
+  return outcome({created:false,reason:capacityBlock});
  }
  // A dead collector and a late capture look identical from here -- ready=0, blocked=10 -- which is
  // how the 2026-09-29 04:33 KST collector outage read as ordinary flakiness for four hours while

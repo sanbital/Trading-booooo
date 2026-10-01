@@ -317,7 +317,7 @@ test('6+7+18. a sizing refusal is symbol-scoped and the queue keeps going', () =
       `${reason} must be symbol-scoped or one symbol ends the account's cycle`);
   }
   // And the loop must CONTINUE on those, not break.
-  assert.match(QUEUE, /if\(!ENTRY_SKIP_SYMBOL_SCOPED\.test\(msg\)\)throw e;\s*\n\s*entry=\{entered:false,reason:msg\};/);
+  assert.match(QUEUE, /if\(!symbolScoped\)throw e;\s*\n\s*entry=\{entered:false,reason:msg\};/);
 });
 
 test('17. an ACCOUNT-wide refusal still stops the run', () => {

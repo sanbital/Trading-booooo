@@ -2,17 +2,19 @@
 import {storedDynamicReplay} from "../_shared/gpt-final-decision/stored-replay.mjs";
 import {EXIT_AUTHORITY_VERSION,EXIT_CLASS,PROTECTION_ACTIONS,PROTECTION_ARBITRATION_VERSION,exitClass,hardSafetyState,softCandidate,approvedProtection,exitContext,legacySoftOrders,assertExitAuthority,positionGeneration} from "../_shared/exit-authority.mjs";
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
-import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume,gptArmFollowUp,clockReviewDiagnostics,gptClockWakeAt,setImmediateExecutionWake} from "./gpt-final-review-adapter.mjs";
+import {gptFilterExecutable,gptFinalCheck,gptBeginExecution,gptConfirmFirstFinality,gptConsumeRetry,runWithGptReview,gptReviewReadyToResume,gptArmFollowUp,clockReviewDiagnostics,gptClockWakeAt} from "./gpt-final-review-adapter.mjs";
 import {entryQueueWithLateReviews} from "./entry-late-review.mjs";
 import {isLeader20,validEvent,eventExpiry} from "../_shared/leader20/campaign.mjs";
 import {leaderControl,requireEntryAuthority} from "../_shared/leader20/runtime.mjs";
+import {classifyEntryAuthorityError} from "./entry-error-scope.mjs";
+import {runtimeCycleOutcome} from "./cycle-runtime-outcome.mjs";
 import {dryRunCoordinator,dryRunReviewPhase,liveProbe} from "./gpt-final-review-dryrun.mjs";
 import {readReviewControl} from "../_shared/gpt-final-review/supabase-store.mjs";
 import {fd1HoldTick,fd1Probe,fd1ExitProbe,HOLD_RELEASE,holdShadowEnabled,FD1_HOLD_POLICY_VERSION,TIME_REASONS as FD1_TIME_REASONS} from "./gpt-final-decision-adapter.mjs";
 import {readCaptureWithRecovery} from "../_shared/gpt-final-decision/capture-context.mjs";
 import {DYNAMIC_VERSION,dispatchDynamicSafety} from "../_shared/gpt-final-decision/dynamic-flow.mjs";
 import {FD1_ENTRY_ENGINE} from "../_shared/gpt-final-decision/engine.mjs";
-import {finalRecheckStep,finalRecheckProbe,postRecheckSafety,markRecheckOutcome,withOrderTiming,executionCapture,executionDynamicSafety,authorizeClockExecution,clockExecutionStep,clockExecutionTrace,readClockExecutionQuote} from "./gpt-final-recheck-adapter.mjs";
+import {finalRecheckStep,finalRecheckProbe,postRecheckSafety,markRecheckOutcome,withOrderTiming,executionCapture,executionDynamicSafety,authorizeClockExecution,clockExecutionStep,clockExecutionTrace,readClockExecutionQuote,definitiveClockCancel} from "./gpt-final-recheck-adapter.mjs";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 import {POLICY, STRATEGY, ENTRY_EXECUTION_POLICY_VERSION, entryFresh, postFillEntryGuard, nextExit, portfolioMatches as leaderPortfolioMatches} from "../_shared/leader-momentum-v17.mjs";
 import {nextExitReviewed, EXIT_REVIEW_CANDIDATE, EXIT_REVIEW_R5, exitAttemptId, classifyExitResponse} from "../_shared/leader-exit-review.mjs";
@@ -28,7 +30,7 @@ import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Sc
 import {E1_POLICY,advanceE1,e1QuoteEvidence,fetchE1AggTrades,startE1} from "../_shared/leader-e1-runtime.mjs";
 import {V24_ADAPTER_VERSION,v24EntryGate} from "./v24-entry-adapter.mjs";
 import {IOC_RETRY_POLICY,planAggressiveIocRetry} from "./entry-ioc-retry.mjs";
-import {EXECUTION_DISPATCH_STATE,claimExecutionDispatch,transitionExecutionDispatch} from "./execution-dispatch.mjs";
+import {EXECUTION_DISPATCH_STATE,claimExecutionDispatch,transitionExecutionDispatch,restrictExecutionDispatchCandidates,executionDispatchAllowsNext} from "./execution-dispatch.mjs";
 import {RETRY_RECONCILIATION_VERSION,retryProofCandidate,parentTradeStart,proveUnplacedPartialRetry} from "./entry-retry-reconciliation.mjs";
 import {ENTRY_LIFECYCLE_VERSION,lifecycleNote,noteChanged,gptTerminalReason,expiredTriggerReason,agedOutReason,mergeLifecycleNote,technicalFailureNote,isSymbolLocalSelectionError} from "./entry-lifecycle.mjs";
 import {ENTRY_CAPACITY_VERSION,UNUSED_SLOT_REASON,accountStopReason,budgetCovers,entryCapacity,ledgerEntry,slotCostUsdt,slotReasonOf,unusedSlotAccounting} from "./entry-capacity.mjs";
@@ -1360,7 +1362,16 @@ if(attempt.gptFinalReview?.clockFinalAuthority){
       clockExecutionTelemetry:boundary.record.clock_execution_telemetry,
       gptRecheckAttempted:boundary.record.gpt_recheck_attempted,gptRecheckResult:boundary.record.gpt_recheck_result});
   if(!boundary.proceed){
-    
+    if(definitiveClockCancel(boundary.record)){
+      await audit(db,null,"BULL","BULL","ENTRY_REJECT",boundary.reason,{signalId:s.id,symbol:s.symbol,
+        stage:"PRE_EXECUTION_GPT_FINAL",finalAdmission:false,finalRecheck:boundary.record});
+      const terminal=await db.from("v11_long_regime_signals").update({status:"REJECTED",
+        reject_reason:boundary.reason.slice(0,500),updated_at:new Date().toISOString()})
+        .eq("id",s.id).eq("status","CLAIMED");
+      if(terminal.error)throw Error("CLOCK_FINAL_RECHECK_SIGNAL_TERMINAL_WRITE");
+      return{entered:false,decision:"WAIT",reason:boundary.reason,releaseClaim:false,
+        terminal:boundary.reason,finalRecheck:boundary.record};
+    }
  return{entered:false,decision:"WAIT",reason:boundary.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL,
       finalRecheck:boundary.record};
   }
@@ -2512,10 +2523,10 @@ async function run(db) {
       // A completed HTTP request is not a successful trading cycle. Advance the legacy
       // success clock only after real entry evaluation and clean management/reconciliation.
       // This is telemetry only: it must never clear a circuit or change operator controls.
-      if(!fatal&&entryEvaluationCompleted&&["FLAT","PROTECTED","SOFTWARE_ONLY"].includes(health)&&
-          managed.every(x=>!x.error&&!x.skipped)&&reconciliation.every(x=>!x.error)){
+      const cycleOutcome=runtimeCycleOutcome({fatal,entryEvaluationCompleted,health,managed,reconciliation});
+      if(cycleOutcome.successful){
         patch.last_success_at=now;patch.last_error=null;
-      }else if(fatal){patch.last_error=String(fatal.message??fatal).slice(0,500);}
+      }else patch.last_error=cycleOutcome.lastError;
       if(managed.length&&managed.every(x=>x.action&&!x.error&&!x.skipped)&&["PROTECTED","FLAT"].includes(health))patch.last_management_success_at=now;
       if(managed.length&&managed.every(x=>x.action&&!x.error&&!x.skipped)&&health==="PROTECTED")
         patch.last_position_protection_success_at=now;
@@ -2589,8 +2600,10 @@ async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComp
       leader20Control.active_strategy==='LEGACY'&&!isLeader20(row)));
     if((page.data??[]).length<signalPageSize)break;
   }
-const openSymbols=new Set(openNow.map(x=>String(x.symbol).toUpperCase())),closedProtectionSymbols=typeof blockedSymbols==="undefined"?new Set():blockedSymbols,
-  quarantinedSymbols=typeof pair==="undefined"?new Set():new Set((pair.quarantines??[]).map(x=>String(x.symbol).toUpperCase())),eligible=signalRows.filter(x=>!openSymbols.has(String(x.symbol).toUpperCase())),
+const dispatchSignalId=typeof executionDispatchClaims==="undefined"?null:executionDispatchClaims.get(db)?.signalId??null,
+  openSymbols=new Set(openNow.map(x=>String(x.symbol).toUpperCase())),closedProtectionSymbols=typeof blockedSymbols==="undefined"?new Set():blockedSymbols,
+  quarantinedSymbols=typeof pair==="undefined"?new Set():new Set((pair.quarantines??[]).map(x=>String(x.symbol).toUpperCase())),
+  eligible=restrictExecutionDispatchCandidates(signalRows.filter(x=>!openSymbols.has(String(x.symbol).toUpperCase())),dispatchSignalId),
   ranked=eligible.filter(x=>!closedProtectionSymbols.has(String(x.symbol).toUpperCase())&&!quarantinedSymbols.has(String(x.symbol).toUpperCase()))
     .sort((a,b)=>Date.parse(b.entry_bar_at)-Date.parse(a.entry_bar_at)||N(rec(a.features).rank,999)-N(rec(b.features).rank,999));
 // One symbol never occupies more than one place in the queue. The list is already
@@ -2863,17 +2876,26 @@ for await(const [index,s] of entryQueueWithLateReviews(queued,{
     // nothing is held, so the slot stays free for the next candidate.
     refusals.push(slotReasonOf(entry?.reason));
   }catch(e){
-    await recordEntryTechnicalFailure(db,cl.data,"EXECUTION",e,{gptAttempted:true,orderDispatched:attempt.dispatched===true,statuses:["CLAIMED","REJECTED"]});
-    const msg=e instanceof Error?e.message:String(e),pending=await db.from("v11_long_regime_orders").select("id").eq("signal_id",s.id).eq("state","RECONCILIATION_FAILED").limit(1);
-    if(!pending.data?.length)await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);
+    const authorityError=classifyEntryAuthorityError(e,{orderDispatched:attempt.dispatched===true}),
+      msg=authorityError.message,authorityCandidateVeto=authorityError.candidateVeto,
+      symbolScoped=authorityCandidateVeto||ENTRY_SKIP_SYMBOL_SCOPED.test(msg);
+    if(!authorityCandidateVeto)await recordEntryTechnicalFailure(db,cl.data,"EXECUTION",e,{gptAttempted:true,orderDispatched:attempt.dispatched===true,statuses:["CLAIMED","REJECTED"]});
+    const pending=await db.from("v11_long_regime_orders").select("id").eq("signal_id",s.id).eq("state","RECONCILIATION_FAILED").limit(1);
+    if(pending.error)throw new Error(`ENTRY_RECONCILIATION_READ_FAILED:${pending.error.message}`);
+    if(!pending.data?.length){
+      const terminal=await db.from("v11_long_regime_signals").update({status:"REJECTED",reject_reason:msg.slice(0,500),updated_at:new Date().toISOString()}).eq("id",s.id);
+      if(terminal.error)throw new Error(`ENTRY_REJECTION_WRITE_FAILED:${terminal.error.message}`);
+    }
     if(attempt.dispatched)throw e;
     await audit(db,null,"BULL","BULL","ENTRY_REJECT",msg.slice(0,500),{
       signalId:s.id,symbol:s.symbol,stage:"PRE_ORDER_REJECTION",finalAdmission:false,
+      category:authorityCandidateVeto?"AUTHORITY_VETO":"ENTRY_REJECTION",scope:authorityCandidateVeto?"CANDIDATE":"SYMBOL",
+      rootReason:msg,derivedAction:"CANDIDATE_REJECTED",retryable:false,accountScoped:false,sideEffectStarted:false,
       clockExecutionTelemetry:attempt.clockExecutionTelemetry??null,
       orderDispatched:false,entryPriceCheck:attempt.entryPriceCheck??null,
       booAdmission:attempt.booAdmission??null,booPredispatch:attempt.booPredispatch??null})
       .catch(()=>console.error("V17_ENTRY_REJECTION_AUDIT_FAILED",s.id));
-    if(!ENTRY_SKIP_SYMBOL_SCOPED.test(msg))throw e;
+    if(!symbolScoped)throw e;
     entry={entered:false,reason:msg};refusals.push(slotReasonOf(msg));
   }
 }
@@ -3305,7 +3327,7 @@ async function qv3AfterProtection(db,p,ctx){
   }
 }
 const exchangeGateway=gateway;
-const leaseOwners=new WeakMap(),cycleBudgets=new WeakMap(),executionDispatchClaims=new WeakMap(),executionWakeQueues=new WeakMap();
+const leaseOwners=new WeakMap(),cycleBudgets=new WeakMap(),executionDispatchClaims=new WeakMap();
 const EXECUTION_LEASE_TTL_SECONDS=150;
 async function verifyExecutionLease(db,allowBudgetExceeded=false){
   if(!allowBudgetExceeded&&cycleBudgets.get(db)?.remaining()===0)throw Error("V18_API_BUDGET_EXHAUSTED");
@@ -3492,55 +3514,71 @@ async function finishExecutionDispatch(db,claim,result,error=null){
       error:error??result?.skipped??result?.entry?.reason??null});
   }catch(e){console.error("EXECUTION_DISPATCH_FINALIZE_FAILED",signalId,String(e?.message??e).slice(0,200));return null;}
 }
-async function executeClaimedDispatch(db,row,owner){
+async function executeClaimedDispatchUnderAccountLease(db,row,owner){
   const claim={signalId:String(row.signal_id),owner,claimedAt:Date.parse(row.executor_claimed_at),
     validUntil:Date.parse(row.valid_until)};
   executionDispatchClaims.set(db,claim);
-  let result=null,error=null;
+  let result=null,error=null,thrown=null,finalization=null;
   try{
-    const waitUntil=Math.min(Date.now()+10000,claim.validUntil-ENTRY_ATTEMPT_RESERVE.ms);
-    do{
-      result=await runWithLease(db,runDispatchedEntry);
-      if(result?.skipped!=="V17_EXECUTOR_BUSY")break;
-      if(Date.now()>=waitUntil)break;
-      await new Promise(resolve=>setTimeout(resolve,250));
-    }while(true);
-    return result;
-  }catch(e){error=String(e?.message??e);throw e;}
-  finally{await finishExecutionDispatch(db,claim,result,error);executionDispatchClaims.delete(db);}
+    // The caller already owns the account-wide V17 lease. Claiming a dispatch first
+    // let every BUY worker reserve a different row and spin on the same account,
+    // amplifying DB traffic and consuming the decision window.
+    result=await runDispatchedEntry(db);
+  }catch(e){error=String(e?.message??e);thrown=e;}
+  finally{finalization=await finishExecutionDispatch(db,claim,result,error);executionDispatchClaims.delete(db);}
+  if(thrown)throw thrown;
+  return {...result,executionDispatchFinalization:finalization};
 }
-async function runExecutionDispatchOnly(db,signalId=null){
-  const owner=crypto.randomUUID(),claim=await claimExecutionDispatch(db,{signalId,owner,
+async function claimAndExecuteDispatchUnderAccountLease(db,signalId=null){
+  const dispatchOwner=crypto.randomUUID();
+  const claim=await claimExecutionDispatch(db,{signalId,owner:dispatchOwner,
     minRemainingMs:ENTRY_ATTEMPT_RESERVE.ms});
-  if(claim.claimed===true&&claim.row)return await executeClaimedDispatch(db,claim.row,owner);
+  if(claim.claimed===true&&claim.row)
+    return await executeClaimedDispatchUnderAccountLease(db,claim.row,dispatchOwner);
   return{ok:true,revision:REVISION,patch:PATCH,dispatchMode:"IMMEDIATE_DURABLE_BUY",
     skipped:claim.reason??"EXECUTION_DISPATCH_NOT_CLAIMABLE"};
 }
-/** In-process latency fast path for a durable clock BUY.
- * The DB outbox remains the authority and pg_net/cron remain crash fallbacks.
- * One queue per request-scoped DB client serializes account-side order work and prevents
- * simultaneous BUY callbacks from stampeding the global execution lease/gateway. */
-function queueDurableExecutionWake(db,signalId){
-  let q=executionWakeQueues.get(db);
-  if(!q){q={ids:[],seen:new Set(),task:null};executionWakeQueues.set(db,q);}
-  const id=String(signalId);
-  if(!q.seen.has(id)){q.seen.add(id);q.ids.push(id);}
-  if(!q.task){
-    q.task=(async()=>{
-      while(q.ids.length){
-        const next=q.ids.shift();
-        try{await runExecutionDispatchOnly(db,next);}
-        catch(e){console.error("DURABLE_EXECUTION_WAKE_FAILED",next,String(e?.message??e).slice(0,200));}
-        finally{q.seen.delete(next);}
+async function drainExecutionDispatchesUnderAccountLease(db,signalId=null){
+  const completed=[];let last=null,terminalizedWithoutClaim=0;
+  // Top10 is the immutable per-slot universe and MAX_SLOTS is the account ceiling.
+  // This bound prevents a malformed outbox from turning one lease into an open loop.
+  for(let index=0;index<MAX_SLOTS;index++){
+    const current=await claimAndExecuteDispatchUnderAccountLease(db,signalId);last=current;
+    if(current?.skipped){
+      // A generic claim can atomically terminalize an expired head row. Continue
+      // within the same bounded pass so that row cannot starve a newer valid BUY.
+      if(!signalId&&["CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION","EXECUTION_WINDOW_INSUFFICIENT"].includes(current.skipped)){
+        terminalizedWithoutClaim++;continue;
       }
-    })().finally(()=>{q.task=null;});
+      break;
+    }
+    completed.push(current);
+    if(signalId||!executionDispatchAllowsNext(current.executionDispatchFinalization))break;
   }
-  return q.task;
+  if(completed.length===0&&terminalizedWithoutClaim===0)return last;
+  const latest=completed.at(-1)??{};
+  return {...latest,ok:true,revision:REVISION,patch:PATCH,dispatchMode:"IMMEDIATE_DURABLE_BUY_DRAIN",
+    executionDispatchDrain:{completed:completed.length,terminalizedWithoutClaim,
+      states:completed.map(x=>x.executionDispatchFinalization?.row?.state??null)}};
+}
+async function runExecutionDispatchOnly(db,signalId=null){
+  // Account ownership precedes dispatch ownership. Losers leave the durable row
+  // READY, so pg_net or the five-second sweeper can retry without a claim lease.
+  return await runWithLease(db,()=>drainExecutionDispatchesUnderAccountLease(db,signalId));
+}
+async function runLeaseCycleWithDispatchPriority(db,operation=run){
+  // Every ordinary-cycle lease acquisition rechecks the durable outbox while it owns
+  // the account. This closes the GPT-completion race where runWithGptReview used to
+  // reacquire the lease and spend the remaining BUY window in a long management run.
+  return await runWithLease(db,async()=>{
+    const dispatched=await drainExecutionDispatchesUnderAccountLease(db);
+    if(dispatched?.skipped!=="NO_READY_EXECUTION")return dispatched;
+    return await operation(db);
+  });
 }
 async function runWithExecutionDispatch(db,signalId=null){
-  const dispatched=await runExecutionDispatchOnly(db,signalId);
-  if(signalId||dispatched?.skipped!=="NO_READY_EXECUTION")return dispatched;
-  return await runWithGptReview(db,runWithLease);
+  if(signalId)return await runExecutionDispatchOnly(db,signalId);
+  return await runWithGptReview(db,runLeaseCycleWithDispatchPriority);
 }
 Deno.serve(async req=>{
   if(req.method!=="POST")return res(405,{ok:false,error:"POST_ONLY"});
@@ -3554,9 +3592,9 @@ Deno.serve(async req=>{
     }}
   });
   if(!(await auth(db,req)))return res(401,{ok:false,error:"UNAUTHORIZED"});
-  // Register before any GPT coordinator can be created in this invocation. A durable
-  // clock BUY can therefore wake execution in-process immediately after its DB commit.
-  setImmediateExecutionWake(db,(signalId)=>queueDurableExecutionWake(db,signalId));
+  // The durable review row's DB trigger owns the immediate pg_net wake, with the
+  // five-second outbox sweep as fallback. Starting execution inside this long-running
+  // review request duplicates the same wake and inherits its short DB signal lifetime.
   const body=await req.json().catch(()=>({})),mode=String(body.mode||"run").toLowerCase();
   try{
     if(mode==="preflight"||mode==="diagnostic"){

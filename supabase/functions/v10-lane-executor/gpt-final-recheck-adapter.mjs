@@ -30,6 +30,14 @@ const getenv=n=>globalThis.Deno?.env?.get(n)??'';
 const CLOCK_DELTA_TIMEOUT_MS=12000;
 const CLOCK_DELTA_EXECUTION_RESERVE_MS=5000;
 const clockTraces=new WeakMap();
+/** A parsed GPT CANCEL_BUY is a final decision for this immutable BUY generation.
+ * The adapter stores `valid=false` because CANCEL grants no order authority, so the
+ * positive proof is the parsed answer plus a completed, error-free provider call. */
+export function definitiveClockCancel(record){
+ const f=record?.final;
+ return record?.clock_final_authority!=null&&f?.attempted===true&&f?.error==null&&
+  f?.decision==='CANCEL_BUY'&&f?.answer?.decision==='CANCEL_BUY';
+}
 export function clockExecutionTrace(ticket){
  if(!clockTraces.has(ticket))clockTraces.set(ticket,{gpt_completed_at:ticket.clockFinalAuthority?.completed_at_ms,
   gpt_buy_completed_at:ticket.clockFinalAuthority?.completed_at_ms,
