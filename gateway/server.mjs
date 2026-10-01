@@ -1,5 +1,6 @@
 import { readFuturesModeEvidence } from "./futures-mode-evidence.mjs";
 import { createV17StopCommands } from "./v17-stop-commands.mjs";
+import { createOrderWriterFence, createGatewayAuthorizer } from "./order-writer-fence.mjs";
 import http from "node:http";
 import crypto from "node:crypto";
 import dns from "node:dns";
@@ -55,6 +56,11 @@ const SCHEDULER_ENABLED = boolEnv("SCHEDULER_ENABLED", true);
 const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 12, 8, 3600) * 1000;
 const COLD_START_SCAN_MS = integerEnv("LOB_COLD_START_SCAN_SECONDS", 3, 1, 120) * 1000;
 const MONITOR_INTERVAL_MS = integerEnv("AUTO_MONITOR_INTERVAL_SECONDS", 2, 1, 300) * 1000;
+// Expand deployment is inert. Activate only after all side-effect callers have
+// durable writer envelopes and the legacy account writer is stopped.
+const ORDER_WRITER_REQUIRED = boolEnv("ORDER_WRITER_REQUIRED", false);
+const orderWriterFence = createOrderWriterFence({required:ORDER_WRITER_REQUIRED,
+  authorize:createGatewayAuthorizer({url:SUPABASE_URL,key:env("SUPABASE_SERVICE_ROLE_KEY")})});
 const AUTOTRADER_DB_BREAKER_BASE_MS = 30_000;
 const AUTOTRADER_DB_BREAKER_MAX_MS = 60_000;
 // v5.10.1: 60 -> 180 seconds.
@@ -2649,6 +2655,7 @@ function createServer() {
             binance_futures: Boolean(BINANCE_API_KEY && BINANCE_SECRET_KEY),
           },
           scheduler_enabled: SCHEDULER_ENABLED,
+          order_writer: {required:ORDER_WRITER_REQUIRED,active_accounts:orderWriterFence.activeAccounts()},
           scheduler: schedulerState,
           intervals: {
             scan_seconds: SCAN_INTERVAL_MS / 1000,
@@ -2688,7 +2695,8 @@ function createServer() {
       if (!verification.ok) {
         return sendJson(res, verification.status, { error: verification.error });
       }
-      const result = await handleCommand(raw ? JSON.parse(raw) : {});
+      const command = raw ? JSON.parse(raw) : {};
+      const result = await orderWriterFence.run(command, () => handleCommand(command));
       return sendJson(res, 200, { ok: true, result, version: VERSION });
     } catch (error) {
       console.error("gateway request failed", error);

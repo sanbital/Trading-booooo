@@ -1,0 +1,29 @@
+name: Verify execution writer infrastructure
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - gateway/**
+      - supabase/functions/_shared/account-order-writer.mjs
+      - supabase/migrations/*account_writer*
+      - tests/account-writer.test.mjs
+      - .github/workflows/execution-writer-tests.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install isolated PostgreSQL runtime
+        run: npm install --prefix "$RUNNER_TEMP/infra-tests" --ignore-scripts --no-audit --no-fund @electric-sql/pglite@0.3.14
+      - name: Check writer SQL and gateway boundary without production credentials
+        run: |
+          export PGLITE_MODULE="$RUNNER_TEMP/infra-tests/node_modules/@electric-sql/pglite/dist/index.js"
+          node --check gateway/server.mjs
+          node --test --test-reporter=tap tests/account-writer.test.mjs gateway/*.test.mjs
