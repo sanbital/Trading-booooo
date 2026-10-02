@@ -55,6 +55,8 @@ test('Top10 clock batch sends 240 original rows and preserves independent held/d
  rows[0].capture.trajectory.pop();
  const blocked=await buildBatch(rows,{asOf:slot+10000,epochId:'e',generation:1,held:['C1USDT']});
  assert.equal(blocked.symbols.filter(s=>s.state==='READY').length,8);
+ await assert.rejects(buildBatch([...rows,...rows.map((r,i)=>({...r,symbol:`X${i}USDT`}))],
+   {asOf:slot+10000,epochId:'e',generation:1}),/CLOCK_BATCH_TOP10_IDENTITY/);
 });
 test('each capture preparation ranks current rolling24h Top20 and cannot refresh mid-window',async()=>{
  const symbols=Array.from({length:25},(_,i)=>({symbol:`C${i}USDT`,status:'TRADING',contractType:'PERPETUAL',quoteAsset:'USDT',marginAsset:'USDT',underlyingType:'COIN'}));
@@ -62,3 +64,5 @@ test('each capture preparation ranks current rolling24h Top20 and cannot refresh
  const e=await selectEpoch(make(slot-179000));assert.equal(e.capture_slot_ms,slot);
  assert.equal(e.next_refresh_at_ms,slot+420000);assert.equal(e.members[0].symbol,'C24USDT');
  await assert.rejects(selectEpoch(make(slot-119999)),/CLOCK_PREPARATION_NOT_DUE/);
+
+});

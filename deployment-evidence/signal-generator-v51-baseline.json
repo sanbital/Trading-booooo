@@ -1,0 +1,76 @@
+{
+  "production_version": 51,
+  "production_bundle_sha256": "3bf0ce7eb57b1d7ee2065176d3113d47990fc90a53eeef6f500f7a3a670777f8",
+  "slug": "v10-lane-signal-generator",
+  "preserved_at_utc": "2026-10-02T01:35:15.577188+00:00",
+  "files": {
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/leader-market-v17.mjs": {
+      "original_path": "_shared/leader-market-v17.mjs",
+      "sha256": "c56587fa92eaabe8d8ec83b291cf823de31ce6cf7d918d762df03d420239e34a"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/leader-momentum-v17.mjs": {
+      "original_path": "_shared/leader-momentum-v17.mjs",
+      "sha256": "a8c23f2fa0bd34979bac19fe341724684e5e7544a3ac066d09cabe4f846c9a0e"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/leader-slot-sizing.mjs": {
+      "original_path": "_shared/leader-slot-sizing.mjs",
+      "sha256": "26953a7e7d9b8e31a538223897c13ef6cb3f34d924d108c588e6ab82e16e430e"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/leader20/runtime.mjs": {
+      "original_path": "_shared/leader20/runtime.mjs",
+      "sha256": "22c7f0ab194b4d2478857605e0dd381c4f9ea7dda3a97ff0b98ca6c42c5bcf49"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/leader20/clock.mjs": {
+      "original_path": "_shared/leader20/clock.mjs",
+      "sha256": "ac3ce3bf29d1c254baf212957bd5a4617de445337503feb10aaadf2211cdc458"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/leader20/universe.mjs": {
+      "original_path": "_shared/leader20/universe.mjs",
+      "sha256": "cd72c3983fb08d3515db63f7210a012569c690c81e7b7e4ee21b653c98df03a5"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/gpt-final-review/contract.mjs": {
+      "original_path": "_shared/gpt-final-review/contract.mjs",
+      "sha256": "010cd1b76798febcbbd42088b69671f297e3e6fb939ce53cb7fc601da574f28b"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/leader20/batch-runtime.mjs": {
+      "original_path": "_shared/leader20/batch-runtime.mjs",
+      "sha256": "e0fc7af5a2003b8dc4084de443a86bbde2027cc8950ebd5557d5f5513503ebc5"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/leader20/batch.mjs": {
+      "original_path": "_shared/leader20/batch.mjs",
+      "sha256": "5c565c775501b8541a0a3e28c6f64a3b460b27224b6ba371f2be6637c9ce59bf"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/gpt-final-decision/capture-context.mjs": {
+      "original_path": "_shared/gpt-final-decision/capture-context.mjs",
+      "sha256": "08084b22c62569f7a6a5503ae966ccae69fd57c10386c1df7251762add465a0c"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/gpt-final-decision/trajectory.mjs": {
+      "original_path": "_shared/gpt-final-decision/trajectory.mjs",
+      "sha256": "6a5048382248fab05815739818bbff8ed35ce72202c6292aec178deb44768a8c"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/gpt-final-decision/dynamic-flow.mjs": {
+      "original_path": "_shared/gpt-final-decision/dynamic-flow.mjs",
+      "sha256": "921a716efbe50a068ea321ef19eac3ed87604f20df0ade9263c56fbc716f5501"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/gpt-final-decision/snapshot-hash.mjs": {
+      "original_path": "_shared/gpt-final-decision/snapshot-hash.mjs",
+      "sha256": "b7a4eee76bc05c1cbc17ae76a1b0c56e0faaa89e77524574beb8d55921808a58"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/leader20/paid-transport.mjs": {
+      "original_path": "_shared/leader20/paid-transport.mjs",
+      "sha256": "affa8f13f4aa19c09691d85e7ed5f393b896615244e22292a026319fce5e6369"
+    },
+    "supabase/functions/v10-lane-signal-generator/_production-v51/_shared/leader20/campaign.mjs": {
+      "original_path": "_shared/leader20/campaign.mjs",
+      "sha256": "4363269570cb5fdd36de2fc14b7360f524d020f1bb5a340548c928b8b5c5315e"
+    }
+  },
+  "relocation": {
+    "from": "../_shared/",
+    "to": "./_production-v51/_shared/"
+  },
+  "entrypoint": {
+    "path": "supabase/functions/v10-lane-signal-generator/index.ts",
+    "original_sha256": "5f374d2b544f758466bd93065be96e50c17ed7bdc8449c91d6cb389316be334c"
+  }
+}

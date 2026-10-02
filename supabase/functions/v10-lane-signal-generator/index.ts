@@ -1,8 +1,8 @@
 // @ts-nocheck
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.57.4';
-import {scanMarket} from '../_shared/leader-market-v17.mjs';
-import {leaderControl,generateLeader20} from '../_shared/leader20/runtime.mjs';
-import {POLICY,STRATEGY,entryFresh} from '../_shared/leader-momentum-v17.mjs';
+import {scanMarket} from './_production-v51/_shared/leader-market-v17.mjs';
+import {leaderControl,generateLeader20} from './_production-v51/_shared/leader20/runtime.mjs';
+import {POLICY,STRATEGY,entryFresh} from './_production-v51/_shared/leader-momentum-v17.mjs';
 // Existing v11 tables/token/cron remain compatible. BULL is a storage lane only;
 // all trading decisions for features.strategy=STRATEGY are regime-independent.
 const REVISION='V11-LONG-REGIME-1.0.1';

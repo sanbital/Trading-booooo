@@ -3,13 +3,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync,existsSync} from 'node:fs';
 import {WIRE_OUTPUT_SCHEMA,OUTPUT_SCHEMA,MODEL,LIMITS,VERSION,validateShape,validateAnswer,expandWireAnswer,toWireAnswer,compactInput,parseApiResponse,decisionIdentity} from '../../../supabase/functions/_shared/gpt-final-review/contract.mjs';
-import {FinalReviewCoordinator,MemoryReviewStore} from '../../../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
+import {FinalReviewCoordinator,MemoryReviewStore as BaseMemoryReviewStore} from '../../../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
 import {CandleReadCache} from '../../../supabase/functions/_shared/gpt-final-review/candle-cache.mjs';
 import {collectMarket} from '../../../supabase/functions/_shared/gpt-final-review/market.mjs';
 import {payloadFor} from '../../../supabase/functions/_shared/gpt-final-review/openai.mjs';
 import {gptFilterExecutable,gptReviewReadyToResume,runWithGptReview,setTestCoordinator} from '../../../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {T,candidate,bars,packet,answer,transport,config,marketData,rawResponse} from './helpers.mjs';
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
+// Match the durable store's snapshot CAS in this fixture, without changing the
+// byte-preserved production module graph merely to repair a memory-only test.
+class MemoryReviewStore extends BaseMemoryReviewStore {
+ async snapshot(key,owner,record){const old=this.rows.get(key);
+  assert.ok(old?.owner===owner&&old.state==='RUNNING','REVIEW_SNAPSHOT_CAS');
+  this.rows.set(key,{...old,record:structuredClone(record)});return true;
+ }
+}
 function service({decision='PASS',store=new MemoryReviewStore(),now=()=>T+1000,hold=null,mode='ENFORCE',fetchFn=null}={}){
  return new FinalReviewCoordinator({config:config(mode),store,now,apiKey:()=> 'MOCK_ONLY',market:async()=>marketData(),fetchFn:fetchFn??transport({decision,hold})});
 }
@@ -72,7 +80,7 @@ test('pending API never yields the observation loop; saved valid PASS may yield 
  let release;const hold=new Promise(r=>release=r),c=service({hold}),db={};setTestCoordinator(db,c);
  await gptFilterExecutable(db,[candidate()]);assert.equal(gptReviewReadyToResume(db),false);
  release();await Promise.all([...c.pending.values()]);assert.equal(gptReviewReadyToResume(db),true);assert.equal(gptReviewReadyToResume(db),false);
- assert.equal(c.check(candidate()).allowed,false);
+ assert.equal(c.check(candidate()).allowed,true,'completed CAS immediately warms the same immutable ticket');
  assert.equal((await c.consider(candidate())).allowed,true);
 });
 for(const decision of ['VETO','ABSTAIN'])test(decision+' never interrupts protection for a retry',async()=>{
@@ -148,6 +156,6 @@ test('GPT ready hint waits for protection and re-enters through the leased cycle
    assert.match(fast,/await manageLeader\(db,fresh,[\s\S]*?if\(gptReviewReadyToResume\(db\)\)/);
    assert.match(cycle,/await verifyExecutionLease\(db\);[\s\S]*?await runEntryQueue\(db,pair/);
    assert.match(source,/return res\(200,await runWithExecutionDispatch\(db\)\)/);
-   assert.match(source,/mode==="execute-ready"[\s\S]*?runWithExecutionDispatch\(db,signalId\)/);
+   assert.match(source,/mode==="execute-ready"[\s\S]*?runExecutionDispatchOnly\(db,signalId\)/);
  }
 });
