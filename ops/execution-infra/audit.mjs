@@ -71,7 +71,8 @@ if(ev.results.readiness.ok){
  unresolved_orders:"select to_jsonb(r) row from public.v11_long_regime_orders r where state in ('PLANNED','DISPATCHED','SUBMITTING','PARTIALLY_FILLED','UNKNOWN','RECONCILIATION_PENDING','RECONCILIATION_FAILED')",
  dispatches:"select to_jsonb(d) row from public.leader20_execution_dispatches d where gpt_completed_at>=now()-interval '7 days' order by gpt_completed_at",
  decisions:"select job_key,purpose,state,decision,valid,created_at,record->'identity' identity,record#>'{packet,leader20,entry_window}' entry_window,record#>'{result,review_route}' review_route,record#>'{result,completed_at_ms}' completed_at_ms,record#>'{result,error}' error,record#>'{result,origin}' origin from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and decision='BUY'",
- cohort_clock:"select to_jsonb(c) row from public.leader20_clock_executions c where gpt_completed_at>=now()-interval '7 days'",
+ cohort_clock:"select to_jsonb(c) row from public.leader20_clock_executions c where gpt_buy_completed_at>=now()-interval '7 days'",
+ same_decision_cohort:readFileSync('ops/execution-infra/cohort.sql','utf8'),
  cohort_orders:"select (to_jsonb(o)-'request_payload'-'response_payload') || jsonb_build_object('clock_authority',o.request_payload#>'{entry_gpt_decision,clockFinalAuthority}','clock_execution',o.request_payload->'entry_clock_execution','same_order_finality',o.response_payload->'v22EntryFinality','not_dispatched',o.response_payload->'notDispatched') row from public.v11_long_regime_orders o where signal_id in (select (r.record#>>'{identity,signal_id}')::uuid from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and state='DONE' and valid is true and decision='BUY' and r.record#>>'{result,review_route}'='TOP20_CLOCK_GPT_FINAL_3')",
  cohort_positions:"select to_jsonb(p) row from public.v11_long_regime_positions p where signal_id in (select (r.record#>>'{identity,signal_id}')::uuid from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and state='DONE' and valid is true and decision='BUY' and r.record#>>'{result,review_route}'='TOP20_CLOCK_GPT_FINAL_3')",
  cohort_fills:"select to_jsonb(f) row from public.exchange_trade_fills f where f.v17_order_id in (select o.id from public.v11_long_regime_orders o where signal_id in (select (r.record#>>'{identity,signal_id}')::uuid from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and state='DONE' and valid is true and decision='BUY' and r.record#>>'{result,review_route}'='TOP20_CLOCK_GPT_FINAL_3'))",
@@ -97,10 +98,30 @@ await record('exchange_read_only',async()=>{
  return{ok:portfolio.ok&&openOrders.ok,portfolio,openOrders,utc:new Date().toISOString()};
 });
 const apps=[...new Set([process.env.FLY_APP_NAME,process.env.FLY_BINANCE_APP_NAME,'sanbital-doa-capture-20260925'].filter(Boolean))];
+for(const app of [process.env.FLY_APP_NAME,process.env.FLY_BINANCE_APP_NAME].filter(Boolean))
+ await record('fly_health:'+app,async()=>{
+  const r=await fetch(`https://${app}.fly.dev/health`,{signal:AbortSignal.timeout(5000)});
+  return r.ok?{ok:true,utc:new Date().toISOString(),value:await r.json()}:{ok:false,http:r.status};
+ });
 for(const app of apps)await record('fly:'+app,async()=>{
  const r=await fetch(`https://api.machines.dev/v1/apps/${app}/machines`,{headers:{authorization:'Bearer '+process.env.FLY_API_TOKEN},signal:AbortSignal.timeout(15000)});
  if(!r.ok)return{ok:false,http:r.status};
- const rows=await r.json();return{ok:true,machines:rows.map(m=>({id:m.id,name:m.name,state:m.state,region:m.region,created_at:m.created_at,updated_at:m.updated_at,image_ref:m.image_ref,config:m.config,guest:m.config?.guest,services:m.config?.services,env:Object.fromEntries(Object.entries(m.config?.env??{}).filter(([k])=>/^(SCHEDULER_ENABLED|EXTERNAL_SCHEDULER_ENABLED|ORDER_WRITER_REQUIRED|AUTO_SCAN_INTERVAL_SECONDS|AUTO_MONITOR_INTERVAL_SECONDS|PORT|PRIMARY_REGION|VERSION)$/.test(k))),events:m.events}))};
+ const rows=await r.json();
+ if(fullAudit&&[process.env.FLY_APP_NAME,process.env.FLY_BINANCE_APP_NAME].includes(app)){
+  // Read a fixed source allowlist from the running image. No environment reads,
+  // process signalling, config mutation, order calls, or arbitrary command inputs.
+  const source='const fs=require("node:fs"),crypto=require("node:crypto");const files=["server.mjs","futures-mode-evidence.mjs","v17-stop-commands.mjs","v17-shadow-worker.mjs","v17-shadow-host.mjs","leader-exit-r3.mjs","leader-exit-r4.mjs"];console.log(JSON.stringify(files.map(name=>{const path="/app/"+name;if(!fs.existsSync(path))return{name,missing:true};const bytes=fs.readFileSync(path);return{name,sha256:crypto.createHash("sha256").update(bytes).digest("hex"),content:bytes.toString("base64")}})))';
+  for(const machine of rows.filter(m=>m.state==='started'))await record('fly_source:'+app+':'+machine.id,async()=>{
+   const response=await fetch(`https://api.machines.dev/v1/apps/${app}/machines/${machine.id}/exec`,{
+    method:'POST',headers:{authorization:'Bearer '+process.env.FLY_API_TOKEN,'content-type':'application/json'},
+    body:JSON.stringify({cmd:"node -e '"+source+"'",timeout:10}),signal:AbortSignal.timeout(15000)});
+   if(!response.ok)return{ok:false,http:response.status};
+   const result=await response.json();
+   return result.exit_code===0?{ok:true,utc:new Date().toISOString(),files:JSON.parse(result.stdout)}:
+    {ok:false,error:'SOURCE_READ_FAILED'};
+  });
+ }
+ return{ok:true,machines:rows.map(m=>({id:m.id,name:m.name,state:m.state,region:m.region,created_at:m.created_at,updated_at:m.updated_at,image_ref:m.image_ref,config:m.config,guest:m.config?.guest,services:m.config?.services,env:Object.fromEntries(Object.entries(m.config?.env??{}).filter(([k])=>/^(SCHEDULER_ENABLED|EXTERNAL_SCHEDULER_ENABLED|ORDER_WRITER_REQUIRED|AUTO_SCAN_INTERVAL_SECONDS|AUTO_MONITOR_INTERVAL_SECONDS|PORT|PRIMARY_REGION|VERSION)$/.test(k))),events:m.events}))};
 });
 await record('functions',async()=>{
  const r=await fetch(`https://api.supabase.com/v1/projects/${project}/functions`,{headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN},signal:AbortSignal.timeout(15000)});return r.ok?{ok:true,rows:await r.json()}:{ok:false,http:r.status};
