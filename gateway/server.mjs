@@ -2761,6 +2761,7 @@ function createServer() {
             monitor_seconds: MONITOR_INTERVAL_MS / 1000,
           },
           build: GATEWAY_BUILD,
+          deployment_commit: process.env.RELEASE_COMMIT ?? "unknown",
           capabilities: {
             p10_top_of_book_batch: true,
             p10_position_proof: true,

@@ -40,7 +40,7 @@ export function createScheduledJobRunner({url,repository,staticTokens={},fetchIm
   return async(job,{signal})=>{
     const target=job.target;
     if(target?.rpc) {
-      const bound={gpt_final_review_recover_ready:{max:100,fallback:30},trading_scheduler_trim_ticks:{max:5000,fallback:5000}}[target.rpc];
+      const bound={leader20_execution_expire:{max:100,fallback:30},gpt_final_review_recover_ready:{max:100,fallback:30},trading_scheduler_trim_ticks:{max:5000,fallback:5000}}[target.rpc];
       if(!bound)throw Object.assign(Error('UNREGISTERED_JOB_RPC'),{status:400});
       return repository.rpc(target.rpc,{p_limit:Math.min(bound.max,Math.max(1,target.limit??bound.fallback))},signal);
     }

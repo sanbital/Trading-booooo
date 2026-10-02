@@ -18,8 +18,9 @@ Deno.test("scan-level entry catch never owns post-submit reconciliation latch", 
     scanSource.includes('latchP10EntrySafety("P10_ENTRY_RECONCILIATION_REQUIRED")'),
     false,
   );
-  assert(scanSource.includes("P10_ENTRY_PREORDER_ERROR"));
-  assert(scanSource.includes("P10_ENTRY_POLICY_BLOCK"));
+  assert(scanSource.includes("P10_ENTRY_PATH_RETIRED"));
+  assertEquals(scanSource.includes("enterP10Signal("), false);
+  assertEquals(scanSource.includes("claimSignal("), false);
 });
 
 Deno.test("post-submit entry path retains reconciliation latch ownership", () => {

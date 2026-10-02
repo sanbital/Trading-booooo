@@ -14,6 +14,8 @@ COPY v17-shadow-host.mjs ./v17-shadow-host.mjs
 COPY leader-exit-r3.mjs ./leader-exit-r3.mjs
 COPY leader-exit-r4.mjs ./leader-exit-r4.mjs
 RUN chmod 644 /app/*.mjs
+ARG RELEASE_COMMIT=unknown
+ENV RELEASE_COMMIT=$RELEASE_COMMIT
 ENV NODE_ENV=production PORT=8080
 USER node
 EXPOSE 8080

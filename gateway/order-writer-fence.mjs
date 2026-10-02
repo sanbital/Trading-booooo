@@ -32,7 +32,7 @@ export function createOrderWriterFence({required=false,authorize,acquireLegacy})
       if(!envelope&&acquireLegacy){
         // Retired P10 entry cannot use the management compatibility path. Existing
         // native stops/explicit reduce-only CLOSE remain supported under the account writer.
-        if(command.action==='create_order'&&!(command.order?.side==='SELL'&&command.order?.position_effect==='CLOSE'))throw refusal('FINAL_BUY_WRITER_REQUIRED');
+        if(command.action==='create_order'&&!(['BUY','SELL'].includes(command.order?.side)&&command.order?.position_effect==='CLOSE'))throw refusal('FINAL_BUY_WRITER_REQUIRED');
         if(!['create_order','cancel_order','v17_create_stop','v17_cancel_stop'].includes(command.action))throw refusal('LEGACY_MANAGEMENT_ACTION_REQUIRED');
         legacy=await acquireLegacy(command);envelope=legacy?.envelope;
       }

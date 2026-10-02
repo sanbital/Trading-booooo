@@ -8,3 +8,6 @@ if(!Array.isArray(machines)||machines.length!==1||machines[0].config?.guest?.mem
 const backup={utc:new Date().toISOString(),commit:process.env.GITHUB_SHA,app,machines};mkdirSync('infra-evidence',{recursive:true});
 writeFileSync(`infra-evidence/writer-stage-${app}-before.encrypted.json`,JSON.stringify(encryptTimeline(backup,readFileSync('ops/execution-infra/evidence-public.pem'))));
 console.log(JSON.stringify({utc:backup.utc,app,backup:'ENCRYPTED',machines:machines.length,computeChanged:false}));
+
+const h=await fetch(`https://${app}.fly.dev/health`,{signal:AbortSignal.timeout(5000)});if(!h.ok)throw Error('GATEWAY_BEFORE_HEALTH_UNAVAILABLE');const health=await h.json();
+writeFileSync(`infra-evidence/writer-stage-${app}-flags-before.json`,JSON.stringify({external:health.external_scheduler?.enabled,writer:health.order_writer?.required,scheduler:health.scheduler_enabled}));
