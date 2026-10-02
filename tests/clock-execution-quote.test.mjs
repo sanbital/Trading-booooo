@@ -31,7 +31,7 @@ async function fixture(){
   insert:row=>({select:()=>({single:async()=>{if(intents.has(row.client_order_id))return {error:{message:'duplicate'}};
    intents.add(row.client_order_id);events.push('intent');f.setNow(f.now()+2000);return {data:{id:'mock-intent',...row}};}})}),
   update:row=>({eq:async()=>{writes.push(row);return {error:null};}})};
- const ctx={requireEntryAuthority,IOC_RETRY_POLICY:{maxAttempts:2},LEV:3,REVISION:'offline',PATCH:'offline',cid:(p,id)=>p+id,
+ const ctx={shortAccountWriter:()=>false,requireEntryAuthority,IOC_RETRY_POLICY:{maxAttempts:2},LEV:3,REVISION:'offline',PATCH:'offline',cid:(p,id)=>p+id,
   Date:class extends Date{static now(){return f.now();}},verifyExecutionLease:async()=>{events.push('lease');f.setNow(f.now()+1000);},
   fill:r=>r,entryReceipt:r=>r,classifyFailure:()=>({fatal:true})};
  vm.createContext(ctx);vm.runInContext(code+'\nthis.dispatch=dispatchEntryIocAttempt;',ctx);

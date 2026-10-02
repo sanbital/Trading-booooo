@@ -95,9 +95,9 @@ export function executionDynamicSafety(s,ticket,record,at){
 }
 /** Final venue boundary: intent/lease I/O is already complete. Re-read both the quote and
  * rolling 24-bucket trajectory. An old BUY or earlier local check is never inherited. */
-export async function authorizeClockExecution(db,s,ticket,record,readQuote,authorize,{now=Date.now}={}){
+export async function authorizeClockExecution(db,s,ticket,record,readQuote,authorize,{now=Date.now,allowReview=true}={}){
   const sequence=Math.min(2,record?.gpt_recheck_attempted===true?2:record?.recheck_sequence??1),
-    step=await clockExecutionStep(db,s,ticket,readQuote,{now,sequence,priorRecord:record});
+    step=await clockExecutionStep(db,s,ticket,readQuote,{now,sequence,priorRecord:record,allowReview});
   Object.assign(record,step.record);
   if(!step.proceed)return {allowed:false,reason:step.reason};
   const checked=authorize();
@@ -174,7 +174,7 @@ async function runClockDeltaRecheck(db,s,ticket,validity,{now=Date.now,sequence=
 /** Latest quote + rolling 24-bucket validity check. GPT is called only for UNCERTAIN
  * market change, never for VALID and never to rescue incomplete/non-causal data. */
 export async function clockExecutionStep(db,s,ticket,readQuote,{now=Date.now,sequence=1,priorRecord=null,
-  quote:providedQuote=null,capture:providedCapture=null,purpose='PRODUCTION'}={}){
+  quote:providedQuote=null,capture:providedCapture=null,purpose='PRODUCTION',allowReview=true}={}){
  const checkedAt=now(),identity=leaderIdentity(s),ticketSafety=clockTicketCheck(ticket,identity,checkedAt);
  if(!ticketSafety.ok){const record=clockExecutionRecord(ticket,null,ticketSafety,checkedAt,sequence,null,null);
   return {proceed:false,decision:'WAIT',reason:ticketSafety.reason,record};}
@@ -196,6 +196,7 @@ export async function clockExecutionStep(db,s,ticket,readQuote,{now=Date.now,seq
  else if(validity.result===VALIDITY_RESULT.INVALID){reason=safety?.ok===false?safety.reason:
    'PRE_EXECUTION_INVALID:'+validity.reasons.join(',');}
  else if(dataUnsafe){reason='PRE_EXECUTION_UNCERTAIN_DATA_UNSAFE';gptResult='NOT_ATTEMPTED_DATA_UNSAFE';}
+ else if(!allowReview){reason='PRE_EXECUTION_REVIEW_REQUIRED';gptResult='DEFERRED_OUTSIDE_ACCOUNT_WRITER';}
  else{final=await runClockDeltaRecheck(db,s,ticket,validity,{now,sequence,purpose});
   gptResult=final.valid===true&&final.decision==='KEEP_BUY'?'KEEP_BUY':final.error??final.decision??'CANCEL_BUY';
   proceed=final.valid===true&&final.decision==='KEEP_BUY'&&now()<final.valid_until_ms;

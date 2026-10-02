@@ -1,5 +1,6 @@
 import { readFuturesModeEvidence } from "./futures-mode-evidence.mjs";
 import { createV17StopCommands } from "./v17-stop-commands.mjs";
+import {beforeExchangeMutation,createGatewayAuthorizer,createOrderWriterFence,createGatewayLegacyLease} from "./order-writer-fence.mjs";
 import http from "node:http";
 import crypto from "node:crypto";
 import dns from "node:dns";
@@ -33,7 +34,7 @@ const VERSION = "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT";
  *
  * Bump this on every gateway release.
  */
-const GATEWAY_BUILD = "2026-09-18-entry-floor-15-and-never-placed-proof";
+const GATEWAY_BUILD = "2026-10-02-account-writer-fence-1";
 // Keep exactly one audited previous protocol revision during the rolling cutover. Both the
 // old engine/new gateway and new engine/old gateway therefore remain order-compatible;
 // arbitrary or older revisions stay rejected.
@@ -51,6 +52,10 @@ const BINANCE_SECRET_KEY = env("BINANCE_SECRET_KEY");
 const SHARED_SECRET = env("GATEWAY_SHARED_SECRET");
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
+const ORDER_WRITER_REQUIRED = boolEnv("ORDER_WRITER_REQUIRED", false);
+const writerDatabase={url:SUPABASE_URL,key:env("SUPABASE_SERVICE_ROLE_KEY")};
+const orderWriterFence=createOrderWriterFence({required:ORDER_WRITER_REQUIRED,
+ authorize:createGatewayAuthorizer(writerDatabase),acquireLegacy:createGatewayLegacyLease(writerDatabase)});
 const SCHEDULER_ENABLED = boolEnv("SCHEDULER_ENABLED", true);
 const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 12, 8, 3600) * 1000;
 const COLD_START_SCAN_MS = integerEnv("LOB_COLD_START_SCAN_SECONDS", 3, 1, 120) * 1000;
@@ -457,6 +462,9 @@ async function binanceRequest(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    // Sign BEFORE the DB gate: if this process is suspended afterwards the venue's
+    // unchanged 5s recvWindow rejects that old signed request on resume.
+    await beforeExchangeMutation({required:ORDER_WRITER_REQUIRED,venue,method,path});
     const response = await fetch(
       `${binanceHost(venue)}${path}?${payload}&signature=${signature}`,
       {
@@ -2195,6 +2203,64 @@ async function accountFees(exchange, market = null) {
   };
 }
 
+async function tradeHistory(exchange, market, options = {}) {
+  if (exchange !== "binance" && exchange !== "binance_futures") {
+    throw Object.assign(new Error("trade_history is supported only for Binance spot/futures"), {
+      status: 400,
+      code: "UNSUPPORTED_EXCHANGE",
+    });
+  }
+  const symbol = validateBinanceSymbol(market);
+  const requestedLimit = Math.trunc(Number(options.limit ?? 1000));
+  const limit = Math.min(1000, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 1000));
+  const params = { symbol, limit };
+  const fromId = Number(options.fromId);
+  if (options.fromId !== null && options.fromId !== undefined && options.fromId !== "" &&
+      Number.isInteger(fromId) && fromId >= 0) {
+    params.fromId = fromId;
+  }
+  const futures = exchange === "binance_futures";
+  const rows = futures
+    ? (await futuresRequest("GET", "/fapi/v1/userTrades", params)).data
+    : (await binanceRequest("GET", "/api/v3/myTrades", params)).data;
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    symbol: row?.symbol || symbol,
+    id: row?.id,
+    orderId: row?.orderId,
+    price: row?.price,
+    qty: row?.qty,
+    quoteQty: row?.quoteQty ?? (Number(row?.price || 0) * Number(row?.qty || 0)),
+    commission: row?.commission,
+    commissionAsset: row?.commissionAsset,
+    realizedPnl: row?.realizedPnl ?? null,
+    time: row?.time,
+    isBuyer: row?.isBuyer ?? String(row?.side || "").toUpperCase() === "BUY",
+    isMaker: row?.isMaker ?? row?.maker ?? false,
+  }));
+}
+
+async function orderHistory(exchange, market, options = {}) {
+  if (exchange !== "binance" && exchange !== "binance_futures") {
+    throw Object.assign(new Error("order_history is supported only for Binance spot/futures"), {
+      status: 400,
+      code: "UNSUPPORTED_EXCHANGE",
+    });
+  }
+  const symbol = validateBinanceSymbol(market);
+  const requestedLimit = Math.trunc(Number(options.limit ?? 1000));
+  const limit = Math.min(1000, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 1000));
+  const params = { symbol, limit };
+  const startTime = Number(options.startTime);
+  const endTime = Number(options.endTime);
+  const orderId = Number(options.orderId);
+  if (Number.isFinite(startTime) && startTime > 0) params.startTime = Math.trunc(startTime);
+  if (Number.isFinite(endTime) && endTime > 0) params.endTime = Math.trunc(endTime);
+  if (Number.isInteger(orderId) && orderId >= 0) params.orderId = orderId;
+  return exchange === "binance_futures"
+    ? ((await futuresRequest("GET", "/fapi/v1/allOrders", params)).data || [])
+    : ((await binanceRequest("GET", "/api/v3/allOrders", params)).data || []);
+}
+
 async function openOrders(exchange, market = null) {
   if (isBinanceFutures(exchange)) {
     const rows = (await futuresRequest(
@@ -2472,6 +2538,18 @@ async function handleCommand(command) {
       return getOrder(exchange, command.identifier, command.market, command.exchange_order_id);
     case "cancel_order":
       return cancelOrder(exchange, command.identifier, command.market);
+    case "order_history":
+      return orderHistory(exchange, command.market, {
+        orderId: command.order_id,
+        startTime: command.start_time,
+        endTime: command.end_time,
+        limit: command.limit,
+      });
+    case "trade_history":
+      return tradeHistory(exchange, command.market, {
+        fromId: command.from_id,
+        limit: command.limit,
+      });
     case "open_orders":
       return openOrders(exchange, command.market || null);
     case "fees":
@@ -2648,6 +2726,7 @@ function createServer() {
             // have USDⓈ-M futures enabled for it, which only a live call can prove.
             binance_futures: Boolean(BINANCE_API_KEY && BINANCE_SECRET_KEY),
           },
+          order_writer:{required:ORDER_WRITER_REQUIRED,active_accounts:orderWriterFence.activeAccounts()},
           scheduler_enabled: SCHEDULER_ENABLED,
           scheduler: schedulerState,
           intervals: {

@@ -71,7 +71,7 @@ test('4. mixed changed state => UNCERTAIN and compact packet contains no 24-buck
   assert.deepEqual(Object.keys(packet.current.horizons),['s5','s15','s30','s60','s120']);
 });
 
-async function clockCase(decision,{providerError=null}={}){
+async function clockCase(decision,{providerError=null,allowReview=true}={}){
   const f=await nmrClockFinal(),at=f.original.result.completed_at_ms+25000,ref=f.ticket.initial.executionRef.mid,
     originalLast=f.ticket.initial.capture_context.trajectory.at(-1).mid,
     latest=rollingCapture(f.ticket.initial.capture_context,at,{ratio:(ref*1.006)/originalLast,hash:'clock-chase'}),
@@ -84,7 +84,7 @@ async function clockCase(decision,{providerError=null}={}){
         text:JSON.stringify({decision,reason:decision==='KEEP_BUY'?'근거 유지':'근거 소멸'})}]}],
         usage:{input_tokens:100,output_tokens:10,input_tokens_details:{cached_tokens:0}}});
     }});
-  const r=await clockExecutionStep(f.db,f.s,f.ticket,async()=>quote(latest,f.now()),{now:f.now});
+  const r=await clockExecutionStep(f.db,f.s,f.ticket,async()=>quote(latest,f.now()),{now:f.now,allowReview});
   setRecheckTestHooks(null);return {r,calls};
 }
 
@@ -147,3 +147,5 @@ test('MOVR 2026-09-30 replay: 52s-old BUY at 1.83305 is not inherited at 1.81955
   assert.equal(r.decision_age_ms,52000);assert.ok(Math.abs(r.price_drift_bps+73.6472)<.01);
   assert.notEqual(r.result,VALIDITY_RESULT.VALID);assert.equal(r.result,VALIDITY_RESULT.INVALID);
 });
+
+test('UNCERTAIN at writer boundary defers paid review without weakening latest data validation',async()=>{const {r,calls}=await clockCase('KEEP_BUY',{allowReview:false});assert.equal(calls,0);assert.equal(r.proceed,false);assert.equal(r.reason,'PRE_EXECUTION_REVIEW_REQUIRED');assert.equal(r.record.pre_execution_validity.result,'UNCERTAIN');});

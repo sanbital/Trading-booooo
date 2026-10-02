@@ -411,7 +411,7 @@ test('durable intent latency cannot bypass the last authority check; a third IOC
   const events=[],writes=[];
   const db={from:()=>({insert:row=>{events.push('intent');return {select:()=>({single:async()=>({data:{id:'o',...row}})})};},
     update:row=>({eq:async()=>{writes.push(row);return {};}})})};
-  const ctx={IOC_RETRY_POLICY,LEV:3,REVISION:'test',PATCH:'test',cid:()=> 'id',Date,
+  const ctx={shortAccountWriter:()=>false,IOC_RETRY_POLICY,LEV:3,REVISION:'test',PATCH:'test',cid:()=> 'id',Date,
     verifyExecutionLease:async()=>events.push('lease'),classifyFailure:()=>({fatal:false})};
   Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);vm.runInContext(dispatch+'\nthis.dispatch=dispatchEntryIocAttempt;',ctx);
   const gw=async()=>{events.push('venue');throw Error('MUST_NOT_SEND');};

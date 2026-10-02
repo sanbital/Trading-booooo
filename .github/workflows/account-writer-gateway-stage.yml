@@ -1,0 +1,96 @@
+name: Stage account writer gateway without activating cutover
+on:
+  workflow_dispatch:
+    inputs:
+      release_marker:
+        type: string
+        required: true
+        description: "ACCOUNT_WRITER_STAGE_1"
+      expected_commit:
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: account-writer-gateway-stage
+  cancel-in-progress: false
+jobs:
+  stage:
+    if: github.repository == 'sanbital/Trading-booooo' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    strategy:
+      max-parallel: 1
+      matrix:
+        include:
+          - app: trading-booooo
+            config: fly.binance.toml
+          - app: trading-booooo-sanbital-gateway
+            config: fly.toml
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Require exact deliberate release
+        env:
+          RELEASE_MARKER: ${{ inputs.release_marker }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_MARKER" = ACCOUNT_WRITER_STAGE_1
+          test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
+      - name: Test and stage unchanged exit engine
+        run: |
+          set -euo pipefail
+          node gateway/patch-trade-history.mjs
+          node gateway/stage-engine.mjs
+          node --check gateway/server.mjs
+          node --test gateway/*.test.mjs
+      - name: Build and boot complete Docker COPY set without trading credentials
+        run: |
+          set -euo pipefail
+          docker build -t account-writer-stage gateway
+          docker run -d --name writer-stage -p 127.0.0.1:8099:8080 -e SCHEDULER_ENABLED=false -e V17_SHADOW_ENABLED=true account-writer-stage
+          trap 'docker rm -f writer-stage >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 20); do
+            if curl -fsS --max-time 2 http://127.0.0.1:8099/health > /tmp/writer-health.json; then break; fi
+            sleep 1
+          done
+          node -e "const h=require('/tmp/writer-health.json');if(h.build!=='2026-10-02-account-writer-fence-1'||h.order_writer.required!==false)throw Error('BOOT_CONTRACT')"
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Preserve encrypted current machine manifests
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          WRITER_STAGE_APP: ${{ matrix.app }}
+        run: node ops/execution-infra/gateway-stage-backup.mjs
+      - name: Stage existing service-role credential without changing flags
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: etaajwpernzrcdrifdnw
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_DATABASE_KEY_APP: ${{ matrix.app }}
+        run: node ops/execution-infra/stage-gateway-db-key.mjs
+      - name: Deploy only existing gateway, same size and disabled writer requirement
+        working-directory: gateway
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          WRITER_STAGE_APP: ${{ matrix.app }}
+          WRITER_STAGE_CONFIG: ${{ matrix.config }}
+        run: |
+          set -euo pipefail
+          flyctl deploy . --remote-only --ha=false --strategy rolling -a "$WRITER_STAGE_APP" --config "$WRITER_STAGE_CONFIG"
+      - name: Check exact live build and preserved scheduler flags
+        env:
+          WRITER_STAGE_APP: ${{ matrix.app }}
+        run: node ops/execution-infra/gateway-stage-health.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: writer-gateway-stage-${{ matrix.app }}-${{ github.run_id }}
+          path: infra-evidence/writer-stage-*
+          retention-days: 30
+          if-no-files-found: error
