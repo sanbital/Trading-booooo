@@ -1,5 +1,12 @@
 # Execution infrastructure work — blocked at production database readiness
 
+Historical initial baseline below. For current implementation, passing regression
+results, corrected independent probe evidence, and outstanding production integration,
+see [REPORT-20261002.md](REPORT-20261002.md). The initial PGDATABASE-only direct
+probe did not select the remote host and is not evidence of remote DB connectivity.
+The corrected --dbname probe confirmed a pooler upstream DB timeout at 00:44 UTC /
+09:44 KST. Database/REST health was UNHEALTHY. Migration/cutover remain unperformed.
+
 This is a prerequisite source synchronization, not the requested execution-writer or scheduler rollout. No production DB, cron, Edge Function or Fly configuration was changed.
 
 ## Verified baseline
@@ -19,7 +26,7 @@ Supabase MCP SQL twice returned `Connection terminated due to connection timeout
 
 Read-only runs: https://github.com/sanbital/Trading-booooo/actions/runs/36936021796 and https://github.com/sanbital/Trading-booooo/actions/runs/36936552194 . Raw evidence is encrypted with AES-256-GCM and an RSA-OAEP-SHA256 wrapped key before upload. The decryption key is outside the repository. No authentication headers or keys are logged.
 
-Current cron commands, DB settings, schema/function drift, job duration/concurrency, unknown orders, DB positions and cohort rows could not be backed up or measured. Accordingly, there is no DB rollback point and no safe scheduler cutover authorization gate has passed. Do not deploy the next migration or switch schedulers until those reads succeed.
+Current cron commands, DB settings, schema/function drift, job duration/concurrency, unknown orders, DB positions and cohort rows could not be backed up or measured. Accordingly, there is no DB rollback point and the scheduler cutover readiness gate has not passed. Do not deploy the next migration or switch schedulers until those reads succeed. User authorization is already provided; this is an evidence/readiness requirement.
 
 ## Validation
 
