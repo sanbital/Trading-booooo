@@ -2,6 +2,7 @@
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {randomBytes,createCipheriv,publicEncrypt,createHash,createHmac} from 'node:crypto';
+import {evaluateSafetyMetrics} from './safety-alerts.mjs';
 import {summarizeCohort} from './cohort-summary.mjs';
 const project='etaajwpernzrcdrifdnw';
 const event=process.env.GITHUB_EVENT_PATH?JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8')):{};
@@ -76,6 +77,7 @@ await record('service_rest_probe',async()=>{
 await record('readiness',()=>sql("select now() utc,now() at time zone 'Asia/Seoul' kst,pg_postmaster_start_time() started_at"));
 if(ev.results.readiness.ok){
  const queries={
+ live_safety_metrics:readFileSync('ops/execution-infra/live-safety-metrics.sql','utf8'),
  settings:"select name,setting,unit,source from pg_settings where name in ('cron.use_background_workers','cron.max_running_jobs','max_connections','max_worker_processes','statement_timeout','shared_buffers','work_mem','max_parallel_workers','autovacuum_max_workers')",
  activity:"select backend_type,state,wait_event_type,wait_event,count(*) connections,max(extract(epoch from now()-query_start)) max_query_age_s from pg_stat_activity group by 1,2,3,4",
  cron_backup:"select * from cron.job order by jobid",
@@ -102,7 +104,7 @@ if(ev.results.readiness.ok){
  net_responses:"select status_code,timed_out,error_msg,count(*) from net._http_response where created>=now()-interval '24 hours' group by 1,2,3 order by count(*) desc limit 50",
  stats:"select datname,numbackends,xact_commit,xact_rollback,blks_read,blks_hit,temp_bytes,deadlocks,blk_read_time,blk_write_time,stats_reset from pg_stat_database where datname=current_database()",
  };
- const routine=new Set(['settings','activity','leases','positions','unresolved_orders','net_queue','stats']);
+ const routine=new Set(['live_safety_metrics','settings','activity','leases','positions','unresolved_orders','net_queue','stats']);
  for(const [name,query]of Object.entries(queries))if(fullAudit||routine.has(name))await record(name,()=>sql(query));
  if(ev.results.same_decision_cohort?.ok)await record('same_decision_cohort_summary',async()=>({
    ok:true,value:summarizeCohort(ev.results.same_decision_cohort.rows),
@@ -135,7 +137,7 @@ for(const app of apps)await record('fly:'+app,async()=>{
  if(fullAudit&&[process.env.FLY_APP_NAME,process.env.FLY_BINANCE_APP_NAME].includes(app)){
   // Read a fixed source allowlist from the running image. No environment reads,
   // process signalling, config mutation, order calls, or arbitrary command inputs.
-  const source='const fs=require("node:fs"),crypto=require("node:crypto");const files=["server.mjs","futures-mode-evidence.mjs","v17-stop-commands.mjs","v17-shadow-worker.mjs","v17-shadow-host.mjs","leader-exit-r3.mjs","leader-exit-r4.mjs"];console.log(JSON.stringify(files.map(name=>{const path="/app/"+name;if(!fs.existsSync(path))return{name,missing:true};const bytes=fs.readFileSync(path);return{name,sha256:crypto.createHash("sha256").update(bytes).digest("hex"),content:bytes.toString("base64")}})))';
+  const source='const fs=require("node:fs"),crypto=require("node:crypto");const files=["server.mjs","scheduler-orchestrator.mjs","scheduler-repository.mjs","order-writer-fence.mjs","futures-mode-evidence.mjs","v17-stop-commands.mjs","v17-shadow-worker.mjs","v17-shadow-host.mjs","leader-exit-r3.mjs","leader-exit-r4.mjs"];console.log(JSON.stringify(files.map(name=>{const path="/app/"+name;if(!fs.existsSync(path))return{name,missing:true};const bytes=fs.readFileSync(path);return{name,sha256:crypto.createHash("sha256").update(bytes).digest("hex"),content:bytes.toString("base64")}})))';
   for(const machine of rows.filter(m=>m.state==='started'))await record('fly_source:'+app+':'+machine.id,async()=>{
    const response=await fetch(`https://api.machines.dev/v1/apps/${app}/machines/${machine.id}/exec`,{
     method:'POST',headers:{authorization:'Bearer '+process.env.FLY_API_TOKEN,'content-type':'application/json'},
@@ -151,5 +153,10 @@ for(const app of apps)await record('fly:'+app,async()=>{
 await record('functions',async()=>{
  const r=await fetch(`https://api.supabase.com/v1/projects/${project}/functions`,{headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN},signal:AbortSignal.timeout(15000)});return r.ok?{ok:true,rows:await r.json()}:{ok:false,http:r.status};
 });
-seal();console.log('Encrypted evidence saved; no production changes.');
+const metrics=ev.results.live_safety_metrics?.rows?.[0];
+const alerts=metrics?evaluateSafetyMetrics(metrics):['SAFETY_METRICS_UNAVAILABLE'];
+ev.alerts=alerts;seal();
+for(const code of alerts)console.log(`::error title=Execution infrastructure::${code}`);
+console.log('Encrypted evidence saved; no production changes.');
+if(alerts.length)process.exitCode=2;
 if(ev.results.readiness?.ok!==true)process.exitCode=2;

@@ -1,3 +1,4 @@
+import {createAnalysisReadCoalescer} from '../../supabase/functions/v10-lane-executor/analysis-read-coalescer.mjs';
 import * as executionContext from '../../supabase/functions/v10-lane-executor/account-execution-context.mjs';
 import {createHostAccountScopes} from '../../supabase/functions/v10-lane-executor/account-host-scopes.mjs';
 import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
@@ -233,6 +234,7 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
   if(cmd.action==='get_order'){const r=state.software[cmd.identifier];if(r instanceof Error)throw r;if(!r)throw Error('ORDER_READ_PENDING');return clone(r);}
   if(cmd.action==='trade_history')return clone(state.tradeHistory[cmd.market]??[]);
   if(cmd.action==='order_history')return clone(state.orderHistory[cmd.market]??[]);
+  if(cmd.action==='cancel_order')return{canceled:true};
   if(cmd.action==='create_order'){
    if(state.createOrder){const result=await state.createOrder(cmd,state);
     if(result&&cmd.order?.identifier&&!state.software[cmd.order.identifier])state.software[cmd.order.identifier]=clone(result);
@@ -246,8 +248,8 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
   baseline?execFileSync('git',['show',BASE+':supabase/functions/v10-lane-executor/index.ts'],{cwd:root,encoding:'utf8'}):readFileSync(new URL('supabase/functions/v10-lane-executor/index.ts',root),'utf8');
  source=source.replace(/\r\n/g,'\n').replace(/^import .*;\n/gm,'').replace('const exchangeGateway=gateway;','const exchangeGateway=__gateway;');source=source.slice(0,source.indexOf('Deno.serve'));
  // Only exchange/DB/time boundaries are replaced. run/manage/open/close are actual source.
- source+='\ngateway=__gateway;this.runCycle=()=>runWithLease(__db);this.open=(...args)=>openBull(__db,...args);this.close=(...args)=>closePos(__db,...args);this.manage=(...args)=>manageLeader(__db,...args);this.setLease=()=>leaseOwners.set(__db,"test-owner");this.enableShort=()=>loadAccountExecutionMode(__db);this.periodic=operation=>accountHostScopes.get(__db).periodic(operation);this.mutate=operation=>withAccountMutation(__db,operation);this.actualShortCycle=()=>runLeaseCycleWithDispatchPriority(__db);';
- const ctx={...executionContext,createHostAccountScopes,...dispatch,...exitAuthority,...retry,...lifecycle,...liveChase,...capacity,...cec,...b06133,...gpt,...fd1,FD1_TIME_REASONS:fd1.TIME_REASONS,...entryEvidence,...momentum,...review,...ops,createBudget:(opts={})=>ops.createBudget({...opts,clock:Clock.now}),...settlement,...entrySettlement,...entryOrderState,...dbOnly,...entryControl,...fillEvidence,...qv3,...e1,...slotSizing,...booBindings,...pullbackSetup,setupIsTerminal:pullbackSetup.isTerminal,
+ source+='\ngateway=__gateway;this.runCycle=()=>runWithLease(__db);this.open=(...args)=>openBull(__db,...args);this.close=(...args)=>closePos(__db,...args);this.manage=(...args)=>manageLeader(__db,...args);this.setLease=()=>leaseOwners.set(__db,"test-owner");this.enableShort=()=>loadAccountExecutionMode(__db);this.periodic=operation=>accountHostScopes.get(__db).periodic(operation);this.mutate=operation=>withAccountMutation(__db,operation);this.actualShortCycle=()=>runLeaseCycleWithDispatchPriority(__db);this.fencedGateway=cmd=>scopedGateway(__db,createBudget({ms:90000,calls:240}))(cmd);';
+ const ctx={...executionContext,createHostAccountScopes,createAnalysisReadCoalescer,...dispatch,...exitAuthority,...retry,...lifecycle,...liveChase,...capacity,...cec,...b06133,...gpt,...fd1,FD1_TIME_REASONS:fd1.TIME_REASONS,...entryEvidence,...momentum,...review,...ops,createBudget:(opts={})=>ops.createBudget({...opts,clock:Clock.now}),...settlement,...entrySettlement,...entryOrderState,...dbOnly,...entryControl,...fillEvidence,...qv3,...e1,...slotSizing,...booBindings,...pullbackSetup,setupIsTerminal:pullbackSetup.isTerminal,
   fetchE1AggTrades:e1Tape??e1.fetchE1AggTrades,QV3_LIVE_CUTOVER:qv3Cutover,qv3Candles:(symbol,at,start)=>qv3.qv3Candles(symbol,at,start,qv3Fetch??(()=>{throw Error("NETWORK_FORBIDDEN")})),leaderPortfolioMatches:momentum.portfolioMatches,protectNewLeaderPosition,createGatewayProtection:baseline?baselineAdapter.createGatewayProtection:createGatewayProtection,
   Date:Clock,console,crypto,Map,Set,WeakMap,AbortController,TextEncoder,Response,Headers,fetch:()=>{throw Error('NETWORK_FORBIDDEN')},
   setTimeout:advanceTimers?(fn,ms)=>{state.now+=Number(ms)||0;return setTimeout(fn,0)}:setTimeout,clearTimeout,

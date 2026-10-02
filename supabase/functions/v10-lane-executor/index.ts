@@ -46,6 +46,7 @@ import {V30_FRONT_LIVE_VERSION,v30FrontDecision,entryBranchOf,baselineAllowedV30
 import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
 import {admitSchedulerRequest} from '../_shared/scheduler-admission.mjs';
 import {createProviderJournal} from "./account-provider-journal.mjs";
+import {createAnalysisReadCoalescer} from "./analysis-read-coalescer.mjs";
 import {runDispatchAnalysisBatch} from "./dispatch-analysis-batch.mjs";
 import {createHostAccountScopes} from "./account-host-scopes.mjs";
 import {currentExecutionContext,currentAccountOwner,contextualOwners,contextualState,executionContextHeaders,assertActiveExecutionRequest} from "./account-execution-context.mjs";
@@ -1974,7 +1975,7 @@ function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
     // A post-fill capacity refresh is a read-only safety barrier, not another trading
     // attempt. Give that one barrier its own tiny budget so the previous fill cannot
     // consume the very read required to prove whether another slot is safe.
-    const write=["create_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action);
+    const write=["create_order","cancel_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action);
     let left;
     try{
       const cycleLeft=!allowCycleBudgetExceeded&&cycle&&cycle!==budget?cycle.take(cost):Infinity;
@@ -1991,7 +1992,10 @@ function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
     let outgoing=cmd;
     if(shortAccountWriter(db)&&write){const c=currentExecutionContext(db);outgoing={...cmd,
       writer:{account_key:"binance_futures:futures",owner:c.owner,fence:c.fence,execution_key:await hashJson(cmd)}};}
-    const result=await exchangeGateway(outgoing,Math.max(1,Math.min(timeout,left,write?12000:2500)));
+    let coalescer=analysisGatewayReads.get(db);
+    if(!coalescer){coalescer=createAnalysisReadCoalescer();analysisGatewayReads.set(db,coalescer);}
+    const result=await coalescer(outgoing,()=>exchangeGateway(outgoing,Math.max(1,Math.min(timeout,left,write&&cmd.action!=="cancel_order"?12000:2500))),
+      {kind:shortAccountWriter(db)?currentExecutionContext(db)?.kind:null});
     await verifyExecutionLease(db,allowCycleBudgetExceeded);return result;
   };
 }
@@ -3430,7 +3434,7 @@ async function qv3AfterProtection(db,p,ctx){
 }
 const exchangeGateway=gateway;
 const leaseOwners=contextualOwners(),cycleBudgets=contextualState("budget"),executionDispatchClaims=contextualState("claim");
-const shortWriterModes=new WeakMap(),accountHostScopes=new WeakMap();
+const shortWriterModes=new WeakMap(),accountHostScopes=new WeakMap(),analysisGatewayReads=new WeakMap();
 async function loadAccountExecutionMode(db){
  const r=await db.from("v17_execution_infrastructure_control").select("short_writer_enabled").eq("singleton",true).single();
  if(r.error||!r.data)throw Error("EXECUTION_INFRASTRUCTURE_CONTROL_UNAVAILABLE");
