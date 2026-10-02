@@ -24,7 +24,9 @@ export function createSchedulerOrchestrator({repository,runJob,recover,breaker,
   const running=new Map(),state={heartbeatAt:null,leader:false,fence:null,jobs:{},lastError:null};
   const note=(job,result)=>{
     state.jobs[job]={...(state.jobs[job]??{}),...result};
-    onEvent({job_key:job,...result});
+    // A telemetry sink can fail synchronously or reject asynchronously. Neither
+    // failure may terminate this job, another bulkhead, or the scheduler process.
+    try {Promise.resolve(onEvent({job_key:job,...result})).catch(()=>{});}catch{}
   };
   const fail=error=>{
     const classified=dependencyFailure(error);
@@ -73,10 +75,12 @@ export function createSchedulerOrchestrator({repository,runJob,recover,breaker,
         work=Promise.resolve().then(()=>runJob(claim,{signal:controller.signal,lease:heldLease}));
         const result=await Promise.race([work,timeoutPromise]);
         if (result?.status==='DB_DEGRADED') throw Error('DB_DEGRADED');
-        const succeeded=await repository.finish(heldLease,claim,{state:'SUCCEEDED',result:'SUCCEEDED',
+        if (result?.ok===false) throw Error('JOB_REPORTED_FAILURE');
+        const outcome=result?.skipped?'SKIPPED':'SUCCEEDED';
+        const succeeded=await repository.finish(heldLease,claim,{state:'SUCCEEDED',result:outcome,
           cursor:result?.cursor??null});
         if (!succeeded) throw Error('SCHEDULER_FENCED');
-        note(job.job_key,{lastSuccess:new Date(now()).toISOString(),result:'SUCCEEDED'});
+        note(job.job_key,{lastSuccess:new Date(now()).toISOString(),result:outcome});
       } catch(error) {
         const classified=dependencyFailure(error);
         note(job.job_key,{result:classified.code});
@@ -96,7 +100,11 @@ export function createSchedulerOrchestrator({repository,runJob,recover,breaker,
       }
     })();
     running.set(job.job_key,{task,controller});
-    task.finally(()=>running.delete(job.job_key));
+    // Attach a rejection handler to the final task as well. A failure in cleanup
+    // must not create an unhandled rejected promise in Node's strict mode.
+    task.then(()=>running.delete(job.job_key),error=>{
+      running.delete(job.job_key);fail(error);
+    });
   }
   async function tick() {
     if (stopped) return;

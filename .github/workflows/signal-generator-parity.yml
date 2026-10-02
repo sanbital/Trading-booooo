@@ -1,0 +1,26 @@
+name: Signal generator production parity
+on:
+  pull_request:
+    paths:
+      - supabase/functions/v10-lane-signal-generator/**
+      - deployment-evidence/signal-generator-v51-baseline.json
+      - tests/signal-generator-production-baseline.test.mjs
+      - .github/workflows/signal-generator-parity.yml
+permissions:
+  contents: read
+jobs:
+  production-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: node --test tests/signal-generator-production-baseline.test.mjs tests/leader20-generator.test.mjs
+      - run: deno check --no-config supabase/functions/v10-lane-signal-generator/index.ts
