@@ -6,7 +6,7 @@ async function fixture(t) {
   const {PGlite}=await import(pathToFileURL(process.env.PGLITE_MODULE).href),db=new PGlite();t.after(()=>db.close());
   await db.exec('create role anon;create role authenticated;create role service_role;');
   await db.exec('create table v17_execution_infrastructure_control(singleton boolean,short_writer_enabled boolean,recovered_postmaster_at timestamptz);create table leader20_control(singleton boolean,observation_enabled boolean,clock_capture_enabled boolean);create function leader20_claim_execution_wake(text) returns boolean language sql as $$select false$$;');
-  await db.exec(await readFile(new URL('../supabase/migrations/20261002101500_external_scheduler_expand.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../supabase/migrations/20261002103453_external_scheduler_expand.sql',import.meta.url),'utf8'));
   await db.exec(`insert into trading_scheduler_control(scheduler_key,enabled,recovery_complete,recovered_postmaster_at)
     values('test',true,true,pg_postmaster_start_time());
     insert into trading_scheduler_jobs(scheduler_key,job_key,enabled,period_ms,timeout_ms,recovery_mode,requires_recovery,target)
