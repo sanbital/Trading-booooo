@@ -17,9 +17,11 @@ export function retryDelayMs(failures,{baseMs=30000,maxMs=60000,random=Math.rand
 }
 export function createSchedulerOrchestrator({repository,runJob,recover,breaker,
   owner=crypto.randomUUID(),schedulerKey='trading-production',now=Date.now,timers=globalThis,
-  onEvent=()=>{},random=Math.random}) {
+  onEvent=()=>{},random=Math.random,recoveryTimeoutMs=30000}) {
   let stopped=true,clock,lease=null,refreshRunning=false,nextRefresh=0,recovered=false;
   let recoveryTask=null,recoveryController=null,jobsCache=[],catalogAt=-Infinity;
+  let recoveryFailures=0,nextRecovery=0,recoveryPermanent=false;
+  if(!Number.isInteger(recoveryTimeoutMs)||recoveryTimeoutMs<100||recoveryTimeoutMs>360000)throw Error('INVALID_RECOVERY_TIMEOUT');
   const due=new Map();
   const running=new Map(),state={heartbeatAt:null,leader:false,fence:null,jobs:{},lastError:null};
   const note=(job,result)=>{
@@ -34,7 +36,48 @@ export function createSchedulerOrchestrator({repository,runJob,recover,breaker,
     if (classified.retryable) breaker.open(now());
     lease=null;recovered=false;state.leader=false;
     recoveryController?.abort();
+    for(const r of running.values())r.controller.abort();
   };
+  function startRecovery(recoveringLease) {
+    const started=now(),controller=new AbortController();
+    recoveryController=controller;
+    let timeout,work;
+    state.recovery={...(state.recovery??{}),lastStart:new Date(started).toISOString(),result:'STARTED'};
+    const task=(async()=>{
+      try {
+        const deadline=new Promise((_,reject)=>{
+          timeout=timers.setTimeout(()=>{controller.abort();reject(Error('RECOVERY_TIMEOUT'));},recoveryTimeoutMs);
+        });
+        work=Promise.resolve().then(()=>recover(recoveringLease,{signal:controller.signal}));
+        const ok=await Promise.race([work,deadline]);
+        controller.signal.throwIfAborted();
+        if(lease?.fence!==recoveringLease.fence||lease?.owner!==recoveringLease.owner||stopped)return;
+        if(ok!==true)throw Error('RECOVERY_INCOMPLETE');
+        recovered=true;recoveryFailures=0;nextRecovery=0;
+        state.recovery={...state.recovery,result:'SUCCEEDED',lastSuccess:new Date(now()).toISOString(),
+          failures:0,retryAt:null,durationMs:now()-started};
+      } catch(error) {
+        if(lease?.fence!==recoveringLease.fence||lease?.owner!==recoveringLease.owner||stopped)return;
+        recovered=false;recoveryFailures++;
+        const classified=dependencyFailure(error);
+        recoveryPermanent=classified.permanent===true;
+        nextRecovery=now()+retryDelayMs(recoveryFailures,{random});
+        state.recovery={...state.recovery,result:error?.message==='RECOVERY_INCOMPLETE'?'RECOVERY_INCOMPLETE':classified.code,
+          failures:recoveryFailures,permanent:recoveryPermanent,durationMs:now()-started,
+          retryAt:recoveryPermanent?null:new Date(nextRecovery).toISOString()};
+      } finally {
+        if(timeout!==undefined)timers.clearTimeout(timeout);
+        controller.abort();
+        // Keep the recovery bulkhead if an adapter ignores cancellation. Other
+        // maintenance jobs and leader heartbeats continue, but entries stay frozen.
+        if(work)await work.catch(()=>{});
+      }
+    })();
+    recoveryTask=task;
+    task.then(()=>{if(recoveryTask===task)recoveryTask=null;},error=>{
+      if(recoveryTask===task)recoveryTask=null;fail(error);
+    });
+  }
   async function refresh() {
     if (refreshRunning || now()<nextRefresh || breaker.suppressed(now())) return;
     refreshRunning=true;
@@ -47,14 +90,10 @@ export function createSchedulerOrchestrator({repository,runJob,recover,breaker,
       state.leader=true;state.fence=lease.fence;
       state.heartbeatAt=new Date(now()).toISOString();nextRefresh=now()+3000;
       breaker.clear();state.lastError=null;
-      if (!recovered && !recoveryTask) {
-        // Recovery adapter must query open orders, positions, ambiguous orders,
-        // fills, native protection and capacity, in that order, before clearing freeze.
-        const recoveringLease=lease;
-        recoveryController=new AbortController();
-        recoveryTask=Promise.resolve().then(()=>recover(recoveringLease,{signal:recoveryController.signal}));
-        recoveryTask.then(ok=>{if(lease?.fence===recoveringLease.fence)recovered=ok===true;},fail)
-          .finally(()=>{recoveryTask=null;});
+      if (!recovered && !recoveryTask && !recoveryPermanent && now()>=nextRecovery) {
+        // A false readiness result also receives bounded backoff. Successful leader
+        // heartbeats must not reset the retry budget or create overlapping recovery.
+        startRecovery(lease);
       }
     } catch(error) {fail(error);}
     finally {refreshRunning=false;}
