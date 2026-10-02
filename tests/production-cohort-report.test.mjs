@@ -73,7 +73,7 @@ test('a passed quote check cannot inflate validation when latest 24-bucket valid
 });
 test('pre-order validation requires the same decision boundary proof inside its original authority deadline',async t=>{
  const f=await fixture(t);
- for(const [key,offset,expected]of [['bound',10,true],['after-deadline',130000,false],['before-buy',-10,false]]){
+ for(const [key,offset,expected]of [['bound',10,true],['at-deadline',120000,false],['after-deadline',130000,false],['before-buy',-10,false]]){
   const d=await f.decision(key);await f.dispatch(d);
   await f.db.query(`insert into v11_long_regime_orders values($1,$2,null,'OPEN_LONG',statement_timestamp()-interval '1 minute','123',1,$3,$4,'FILLED')`,
    [crypto.randomUUID(),d.signal,{entry_gpt_decision:{jobKey:d.key}},

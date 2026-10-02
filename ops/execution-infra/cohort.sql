@@ -32,8 +32,9 @@ with bounds as (
   left join public.leader20_clock_executions x on x.signal_id::text=c.signal_id and x.gpt_buy_completed_at=c.completed_at
   left join lateral (
     select bool_or(case when jsonb_typeof(o.response_payload#>'{v22EntryFinality,clockExecutionSafety,checked_at_ms}')='number'
-        then to_timestamp((o.response_payload#>>'{v22EntryFinality,clockExecutionSafety,checked_at_ms}')::numeric/1000)
-          between c.completed_at and least(d.valid_until,c.cutoff)
+        then to_timestamp((o.response_payload#>>'{v22EntryFinality,clockExecutionSafety,checked_at_ms}')::numeric/1000)>=c.completed_at
+          and to_timestamp((o.response_payload#>>'{v22EntryFinality,clockExecutionSafety,checked_at_ms}')::numeric/1000)<d.valid_until
+          and to_timestamp((o.response_payload#>>'{v22EntryFinality,clockExecutionSafety,checked_at_ms}')::numeric/1000)<=c.cutoff
           and o.response_payload->>'notDispatched' is distinct from 'true'
           and (o.response_payload#>>'{v22EntryFinality,clockExecutionSafety,validity_result}'='VALID' or
             (o.response_payload#>>'{v22EntryFinality,clockExecutionSafety,validity_result}'='UNCERTAIN'
