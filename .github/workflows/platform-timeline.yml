@@ -1,6 +1,12 @@
 name: Read-only platform resource timeline
 on:
   workflow_dispatch:
+    inputs:
+      sample_count:
+        description: "15s samples: 40=10m, 280=70m, 480=2h"
+        type: number
+        required: true
+        default: 40
 permissions:
   contents: read
 concurrency:
@@ -10,7 +16,7 @@ jobs:
   observe:
     if: github.repository == 'sanbital/Trading-booooo' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 125
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -20,6 +26,7 @@ jobs:
           node-version: 22
       - name: Observe without DB scan or trading requests
         env:
+          PLATFORM_SAMPLE_COUNT: ${{ inputs.sample_count }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: node ops/execution-infra/platform-sampler.mjs
       - uses: actions/upload-artifact@v4
