@@ -1,4 +1,4 @@
-import {assertActiveExecutionRequest,currentAccountOwner,currentExecutionContext,withWriterContext,assertAccountWriterContext} from './account-execution-context.mjs';
+import {assertActiveExecutionRequest,currentAccountOwner,currentExecutionContext,withWriterContext,assertAccountWriterContext} from './account-scope-context.mjs';
 // Only callers preparing a real mutation or fenced accounting commit enter here.
 // The existing logged orders/dispatch remain the journal; this adds no second outbox.
 export function createAccountCriticalSection({acquire,verify,heartbeat,release,now=Date.now,timers=globalThis,

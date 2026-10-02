@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {EXIT_AUTHORITY_VERSION} from '../../supabase/functions/_shared/deterministic/exit-authority.mjs';
 import {createNativeProtection,createProtectionLoop} from '../../supabase/functions/_shared/leader-native-protection.mjs';
 const clone=structuredClone;
 function fixture(){
@@ -72,7 +73,7 @@ test('replacement is acknowledged before old stop cancellation',async()=>{
 });
 test('resident soft profit stop keeps its reason and cannot be downgraded',async()=>{
  const f=fixture(),soft={...f.request,stopPrice:101,lastPrice:102,exitClass:'SOFT_PROTECTION',
-   authorityVersion:'AI_EXIT_AUTHORITY_2',protectionReason:'V17_PROFIT_LOCK'};
+   authorityVersion:EXIT_AUTHORITY_VERSION,protectionReason:'V17_PROFIT_LOCK'};
  const first=await f.api().ensure('position-1',soft),state=f.state(),order=state.protection.orders.find(x=>x.clientId===first.clientId);
  assert.equal(first.status,'PROTECTED');assert.equal(order.protectionReason,'V17_PROFIT_LOCK');assert.equal(order.spec.params.triggerPrice,101);
  const again=await f.api().ensure('position-1',{...soft,stopPrice:100});
@@ -148,7 +149,7 @@ test('loop does not start on construction or overlap ticks and can stop in fligh
 });
 
 test('T28 hard protection cannot be downgraded through legacy soft retirement',async()=>{
- const f=fixture(),hard={...f.request,exitClass:'HARD_SAFETY',authorityVersion:'AI_EXIT_AUTHORITY_2'};
+ const f=fixture(),hard={...f.request,exitClass:'HARD_SAFETY',authorityVersion:EXIT_AUTHORITY_VERSION};
  const first=await f.api().ensure('position-1',hard);
  await assert.rejects(()=>f.api().ensure('position-1',{...hard,stopPrice:96,legacySoftOrderIds:[first.clientId]}),/HARD_FLOOR_RETIREMENT_FORBIDDEN/);
  assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');
@@ -156,7 +157,7 @@ test('T28 hard protection cannot be downgraded through legacy soft retirement',a
 test('T28 legacy soft replacement failure never cancels prior resident protection',async()=>{
  const f=fixture(),first=await f.api().ensure('position-1',{...f.request,stopPrice:102,lastPrice:104});
  f.exchange.createStop=async()=>{throw Error('TIMEOUT')};
- const r=await f.api().ensure('position-1',{...f.request,exitClass:'HARD_SAFETY',authorityVersion:'AI_EXIT_AUTHORITY_2',legacySoftOrderIds:[first.clientId]});
+ const r=await f.api().ensure('position-1',{...f.request,exitClass:'HARD_SAFETY',authorityVersion:EXIT_AUTHORITY_VERSION,legacySoftOrderIds:[first.clientId]});
  assert.equal(r.status,'PROTECTED');assert.equal(f.calls.filter(x=>x[0]==='create').length,1);assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
  assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');
 });
@@ -164,9 +165,9 @@ test('T28 legacy soft replacement failure never cancels prior resident protectio
 for(const [label,requested,legacy] of [['O',97.5,false],['P',98,true]])
 test(`${label} acknowledged profit floor 101 survives lower hard request${legacy?' and legacy soft label':''}`,async()=>{
  const f=fixture(),first=await f.api().ensure('position-1',{...f.request,stopPrice:101,lastPrice:104,
-   exitClass:'SOFT_PROTECTION',authorityVersion:'AI_EXIT_AUTHORITY_2',protectionReason:'V17_PROFIT_LOCK'});
+   exitClass:'SOFT_PROTECTION',authorityVersion:EXIT_AUTHORITY_VERSION,protectionReason:'V17_PROFIT_LOCK'});
  const result=await f.api().ensure('position-1',{...f.request,stopPrice:requested,lastPrice:104,
-   exitClass:'HARD_SAFETY',authorityVersion:'AI_EXIT_AUTHORITY_2',legacySoftOrderIds:legacy?[first.clientId]:[]});
+   exitClass:'HARD_SAFETY',authorityVersion:EXIT_AUTHORITY_VERSION,legacySoftOrderIds:legacy?[first.clientId]:[]});
  assert.equal(result.status,'PROTECTED');assert.equal(result.clientId,first.clientId);
  const resident=f.state().protection.orders.find(x=>x.clientId===first.clientId);
  assert.equal(resident.spec.params.triggerPrice,101);assert.equal(resident.status,'ACTIVE');
@@ -176,7 +177,7 @@ test(`${label} acknowledged profit floor 101 survives lower hard request${legacy
 
 test('Q 101 to 102 waits for actual new ACK and durable ACTIVE before canceling 101',async()=>{
  const f=fixture(),request={...f.request,stopPrice:101,lastPrice:104,exitClass:'SOFT_PROTECTION',
-   authorityVersion:'AI_EXIT_AUTHORITY_2',protectionReason:'V17_PROFIT_LOCK'};
+   authorityVersion:EXIT_AUTHORITY_VERSION,protectionReason:'V17_PROFIT_LOCK'};
  const first=await f.api().ensure('position-1',request),create=f.exchange.createStop,cancel=f.exchange.cancelStop;
  let release,submitted,acked=false;
  const gate=new Promise(resolve=>{release=resolve;}),started=new Promise(resolve=>{submitted=resolve;});
@@ -199,7 +200,7 @@ test('Q 101 to 102 waits for actual new ACK and durable ACTIVE before canceling 
 for(const error of ['TIMEOUT','GW_400:Order would immediately trigger.'])
 test(`R failed 102 replacement keeps 101 ACTIVE: ${error}`,async()=>{
  const f=fixture(),request={...f.request,stopPrice:101,lastPrice:104,exitClass:'SOFT_PROTECTION',
-   authorityVersion:'AI_EXIT_AUTHORITY_2',protectionReason:'V17_PROFIT_LOCK'};
+   authorityVersion:EXIT_AUTHORITY_VERSION,protectionReason:'V17_PROFIT_LOCK'};
  const first=await f.api().ensure('position-1',request);
  f.exchange.createStop=async()=>{throw Error(error);};
  await f.api().ensure('position-1',{...request,stopPrice:102});

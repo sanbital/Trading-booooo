@@ -3,7 +3,7 @@
  * The host serializes operations using its existing execution lease and persists
  * position accounting + receipts in the SAME compare-and-swap transaction.
  */
-import {EXIT_AUTHORITY_VERSION,EXIT_CLASS} from './exit-authority.mjs';
+import {EXIT_AUTHORITY_VERSION,EXIT_CLASS} from './deterministic/exit-authority.mjs';
 import {freshPortfolio,sameQuantity} from './leader-ops-isolation.mjs';
 import {exitAttemptId,protectiveStopSpec} from './leader-exit-review.mjs';
 import {cumulativeFillDelta} from './leader-fill-evidence.mjs';

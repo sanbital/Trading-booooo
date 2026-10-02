@@ -1,5 +1,5 @@
 import {createAccountCriticalSection} from './account-critical-section.mjs';
-import {currentExecutionContext,withAnalysisContext,withLeaseCleanup,assertActiveExecutionRequest} from './account-execution-context.mjs';
+import {currentExecutionContext,withAnalysisContext,withLeaseCleanup,assertActiveExecutionRequest} from './account-scope-context.mjs';
 const unwrap=(r,code)=>{if(r?.error)throw Error(code);return r?.data;};
 export function createHostAccountScopes(db,{budget,onEvent=()=>{},timers=globalThis}={}){
  const rpc=async(name,args)=>unwrap(await db.rpc(name,args),name.toUpperCase()+'_UNAVAILABLE');

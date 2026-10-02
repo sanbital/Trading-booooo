@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import {createBudget} from '../supabase/functions/_shared/leader-ops-isolation.mjs';
 const source=readFileSync(new URL('../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8');
 function harness({budget=createBudget(),verify=async()=>{},transport=async()=>({algoId:'123'})}={}){
- const db={},calls=[],context={shortAccountWriter:()=>false,cycleBudgets:new WeakMap(),verifyExecutionLease:verify,
+ const db={from(){const b={select(){return b},eq(){return b},single:async()=>({data:{owner:'fixture-owner',fence:1}})};return b}},calls=[],context={currentExecutionContext:()=>null,leaseOwners:{get:()=>"fixture-owner"},hashJson:async()=>"fixture-command-sha",shortAccountWriter:()=>false,cycleBudgets:new WeakMap(),verifyExecutionLease:verify,
   exchangeGateway:async(...args)=>{calls.push(args);return transport(...args)},Error,Math,Object};
  vm.createContext(context);vm.runInContext(source.slice(source.indexOf('function scopedGateway('),source.indexOf('function capacityRefreshGateway('))+';this.gateway=scopedGateway;',context);
  return {run:context.gateway(db,budget),calls};

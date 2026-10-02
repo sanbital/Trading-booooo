@@ -1,5 +1,9 @@
 import * as executionContext from '../../supabase/functions/v10-lane-executor/account-execution-context.mjs';
 import {createHostAccountScopes} from '../../supabase/functions/v10-lane-executor/account-host-scopes.mjs';
+import {detachAudit} from '../../supabase/functions/_shared/deterministic/runtime.mjs';
+import {PROFILE} from '../../supabase/functions/_shared/deterministic/calibration.mjs';
+import {ENGINE} from '../../supabase/functions/_shared/deterministic/market-state.mjs';
+import * as deterministicExit from '../../supabase/functions/_shared/deterministic/exit-authority.mjs';
 import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
 import {validCapture} from '../dynamic-fixtures.mjs';
 import * as dynamicFlow from '../../supabase/functions/_shared/gpt-final-decision/dynamic-flow.mjs';
@@ -71,14 +75,12 @@ export function position(symbol='SAGAUSDT',quantity=7067.3,price=.01699){
 export function entryOrder(p){return {id:'order-'+p.id,signal_id:p.signal_id,position_id:p.id,symbol:p.symbol,intent:'OPEN_LONG',state:'FILLED',
  exchange_order_id:p.metadata.entryOrderId,client_order_id:'entry-client-'+p.id,requested_quantity:p.original_quantity,
  request_payload:{order:{side:'BUY',position_side:'LONG',position_effect:'OPEN'}},created_at:p.entry_at,updated_at:p.entry_at};}
-export function harness({positions=[],baseline=false,sourceRef=null,circuit=false,manual=[],settings={},signal=true,now=Date.parse('2026-09-10T16:16:00Z'),hook=()=>{},qv3Cutover=null,qv3Fetch=null,e1Enabled=false,x1Enabled=false,e1Tape=null,advanceTimers=false,booEnforcement='OBSERVE',shortWriter=false}={}) {
+export function harness({positions=[],baseline=false,sourceRef=null,circuit=false,manual=[],settings={},signal=true,now=Date.parse('2026-09-10T16:16:00Z'),hook=()=>{},qv3Cutover=null,qv3Fetch=null,e1Enabled=false,x1Enabled=false,e1Tape=null,advanceTimers=false,booEnforcement='OBSERVE'}={}) {
  const state={now,portfolioCount:0,lease:true,leaseOwner:null,quotes:{},stopFills:{},software:{},tradeHistory:{},orderHistory:{},calls:[],writes:[],circuits:[],hook,
   exchange:positions.map(p=>({market:p.symbol,side:p.side,quantity:p.remaining_quantity})),
   tables:{v11_long_regime_positions:clone(positions),v11_long_regime_orders:positions.map(entryOrder),v11_long_regime_decisions:[],
    v11_long_regime_runtime:[{singleton:true,revision:'V11-LONG-REGIME-1.0.1',live_enabled:true,circuit_open:circuit,
     incident_id:circuit?'incident-1':null,incident_generation:circuit?1:0,incident_kind:circuit?'KNOWN_EXIT_PENDING_RECONCILIATION':null}],
-   v17_execution_infrastructure_control:[{singleton:true,short_writer_enabled:shortWriter}],
-   v17_execution_lease:[{singleton:true,owner:null,fence:0}],v17_analysis_lease:[{singleton:true,owner:null,fence:0}],
    v17_operator_control:[{singleton:true,entry_enabled:true,legacy_entries_retired:true}],
    boo_entry_gate_control:[{singleton:true,enforcement:booEnforcement}],
    // Code and DB must agree or the executor fail-closes on V17_MARGIN_CONFIG_MISMATCH,
@@ -101,13 +103,13 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
  const db={from(table){let filters=[],patch=null,insert=null,limit=Infinity,rangeFrom=0,sort=[],single=false;const b={
   select(){return b;},eq(k,v){filters.push(r=>String(get(r,k))===String(v));return b;},in(k,vs){filters.push(r=>vs.includes(get(r,k)));return b;},
   or(expression){if(expression!=="response_payload->>v18ExposureFinal.is.null,response_payload->>v18ExposureFinal.neq.true")throw Error("unsupported test filter");filters.push(r=>r.response_payload?.v18ExposureFinal!==true);return b;},
-  lt(k,v){filters.push(r=>get(r,k)<v);return b;},lte(k,v){filters.push(r=>get(r,k)<=v);return b;},gte(k,v){filters.push(r=>get(r,k)>=v);return b;},order(k,o){sort.push([k,o?.ascending!==false]);return b;},
+  gte(k,v){filters.push(r=>get(r,k)>=v);return b;},order(k,o){sort.push([k,o?.ascending!==false]);return b;},
   limit(n){limit=n;return b;},range(from,to){rangeFrom=from;limit=to-from+1;return b;},
   update(v){patch=clone(v);return b;},insert(v){insert=clone(v);return b;},single(){single=true;return b;},maybeSingle(){single=true;return b;},
   async then(resolve,reject){try{
    await state.hook({type:'db',table,patch,insert,state});
-   if((patch||insert)&&(!state.lease||(shortWriter&&!executionContext.currentExecutionContext(db))))throw Error('V18_EXECUTION_FENCED');
-   let rows=(state.tables[table]??[]).filter(r=>filters.every(f=>f(r)));
+   if((patch||insert)&&!state.lease)throw Error('V18_EXECUTION_FENCED');
+   let rows=(table==='v17_execution_lease'?[{singleton:true,owner:state.leaseOwner??'test-owner',fence:1}]:(state.tables[table]??[])).filter(r=>filters.every(f=>f(r)));
    if(sort.length)rows.sort((a,b)=>{for(const [key,ascending] of sort){
      const cmp=String(get(a,key)).localeCompare(String(get(b,key)));if(cmp)return cmp*(ascending?1:-1);
    }return 0;});rows=rows.slice(rangeFrom,rangeFrom+limit);
@@ -118,17 +120,11 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
   }catch(e){if(reject)return reject(e);throw e;}}
  };return b;},async rpc(name,args){
   state.calls.push({rpc:name,args:clone(args)});await state.hook({type:'rpc',name,args,state});
-  if(name==='v17_acquire_analysis_lease'){const l=state.tables.v17_analysis_lease[0];if(l.owner)return{data:null};l.owner=args.p_owner;l.fence++;return{data:clone(l)};}
-  if(name==='v17_release_analysis_lease'){const l=state.tables.v17_analysis_lease[0];if(l.owner===args.p_owner)l.owner=null;return{data:true};}
-  if(name==='v17_require_analysis_scope'){const l=state.tables.v17_analysis_lease[0];if(l.owner!==args.p_owner||l.fence!==args.p_fence)throw Error('ANALYSIS_FENCED');return{data:null};}
-  if(name==='v17_heartbeat_analysis_lease')return{data:state.lease&&state.tables.v17_analysis_lease[0].owner===args.p_owner};
-  if(name==='v17_heartbeat_execution_lease')return{data:state.lease&&state.leaseOwner===args.p_owner};
-  if(name==='v17_verify_execution_lease')return {data:state.lease&&(!shortWriter||state.leaseOwner===args.p_owner)};
-  if(name==='v17_account_recovery_state')return{data:{ready:true,postmaster_at:'mock-postmaster'}};
+  if(name==='v17_verify_execution_lease')return {data:state.lease};
   if(name==='v11_cec0040_missing_targets')return {data:[]};
   if(name==='v11_cec0040_register_target')return {data:{ok:true}};
-  if(name==='v17_acquire_execution_lease'){if(state.leaseOwner)return{data:false};state.leaseOwner=args.p_owner;Object.assign(state.tables.v17_execution_lease[0],{owner:args.p_owner,fence:state.tables.v17_execution_lease[0].fence+1});return{data:state.lease};}
-  if(name==='v17_release_execution_lease'){if(state.leaseOwner===args.p_owner){state.leaseOwner=null;state.tables.v17_execution_lease[0].owner=null;}return{data:true};}
+  if(name==='v17_acquire_execution_lease'){if(state.leaseOwner)return{data:false};state.leaseOwner=args.p_owner;return{data:state.lease};}
+  if(name==='v17_release_execution_lease'){if(state.leaseOwner===args.p_owner)state.leaseOwner=null;return{data:true};}
   if(!state.lease)throw Error('V18_EXECUTION_FENCED');
   if(name==='leader20_reconcile_execution_dispatches')return{data:{inspected:0,reconciled:0,no_resubmit:true}};
   if(name==='v18_closed_protection_backlog'){
@@ -246,14 +242,16 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
   baseline?execFileSync('git',['show',BASE+':supabase/functions/v10-lane-executor/index.ts'],{cwd:root,encoding:'utf8'}):readFileSync(new URL('supabase/functions/v10-lane-executor/index.ts',root),'utf8');
  source=source.replace(/\r\n/g,'\n').replace(/^import .*;\n/gm,'').replace('const exchangeGateway=gateway;','const exchangeGateway=__gateway;');source=source.slice(0,source.indexOf('Deno.serve'));
  // Only exchange/DB/time boundaries are replaced. run/manage/open/close are actual source.
- source+='\ngateway=__gateway;this.runCycle=()=>runWithLease(__db);this.open=(...args)=>openBull(__db,...args);this.close=(...args)=>closePos(__db,...args);this.manage=(...args)=>manageLeader(__db,...args);this.setLease=()=>leaseOwners.set(__db,"test-owner");this.enableShort=()=>loadAccountExecutionMode(__db);this.periodic=operation=>accountHostScopes.get(__db).periodic(operation);this.mutate=operation=>withAccountMutation(__db,operation);this.actualShortCycle=()=>runLeaseCycleWithDispatchPriority(__db);';
+ source+='\ngateway=__gateway;this.runCycle=()=>runWithLease(__db);this.open=(...args)=>openBull(__db,...args);this.close=(...args)=>closePos(__db,...args);this.manage=(...args)=>manageLeader(__db,...args);this.setLease=()=>leaseOwners.set(__db,"test-owner");';
  const ctx={...executionContext,createHostAccountScopes,...dispatch,...exitAuthority,...retry,...lifecycle,...liveChase,...capacity,...cec,...b06133,...gpt,...fd1,FD1_TIME_REASONS:fd1.TIME_REASONS,...entryEvidence,...momentum,...review,...ops,createBudget:(opts={})=>ops.createBudget({...opts,clock:Clock.now}),...settlement,...entrySettlement,...entryOrderState,...dbOnly,...entryControl,...fillEvidence,...qv3,...e1,...slotSizing,...booBindings,...pullbackSetup,setupIsTerminal:pullbackSetup.isTerminal,
   fetchE1AggTrades:e1Tape??e1.fetchE1AggTrades,QV3_LIVE_CUTOVER:qv3Cutover,qv3Candles:(symbol,at,start)=>qv3.qv3Candles(symbol,at,start,qv3Fetch??(()=>{throw Error("NETWORK_FORBIDDEN")})),leaderPortfolioMatches:momentum.portfolioMatches,protectNewLeaderPosition,createGatewayProtection:baseline?baselineAdapter.createGatewayProtection:createGatewayProtection,
   Date:Clock,console,crypto,Map,Set,WeakMap,AbortController,TextEncoder,Response,Headers,fetch:()=>{throw Error('NETWORK_FORBIDDEN')},
   setTimeout:advanceTimers?(fn,ms)=>{state.now+=Number(ms)||0;return setTimeout(fn,0)}:setTimeout,clearTimeout,
   Deno:{env:{get:k=>k==='V17_NATIVE_STOP'?'true':k==='V23_E1_ENTRY_OVERRIDE'?(e1Enabled?'true':'false'):
     k==='V23_X1_FAST_OBSERVATION'?(x1Enabled?'true':'false'):''}},__gateway:gateway,__db:db};
- Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);vm.runInContext(source,ctx);ctx.setLease();
+ Object.assign(ctx,leader20LegacyBindings);
+ if(!baseline&&!sourceRef)Object.assign(ctx,{ENGINE,PROFILE,detachAudit,...deterministicExit,control:async()=>({enabled:false}),currentMarket:async()=>{throw Error('FIXTURE_SYMBOL_MARKET_DATA_UNAVAILABLE')}});
+ vm.createContext(ctx);vm.runInContext(source,ctx);ctx.setLease();
  // These historical suites exercise execution/reconciliation, not the strategy
  // admission that was introduced later. Model an approved candidate at that boundary;
  // tests/fd1-final-recheck.test.mjs separately runs the real GPT/detector authority.

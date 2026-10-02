@@ -1,0 +1,35 @@
+name: Deterministic engine verification (no deployment)
+on:
+  pull_request:
+    paths:
+      - 'supabase/functions/_shared/deterministic/**'
+      - 'supabase/functions/v10-lane-executor/**'
+      - 'supabase/functions/v10-lane-signal-generator/index.ts'
+      - 'supabase/migrations/20261002092245_deterministic_dynamic_state.sql'
+      - 'test-support/deterministic/**'
+      - '.github/workflows/deterministic-verification.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --prefix test-support/deterministic
+      - name: State, hot path, SQL, isolation and dependency verification
+        run: npm test --prefix test-support/deterministic
+      - name: Native stops, receipts, attribution and accounting regressions
+        run: >-
+          node --test test-support/v17-exit/native-protection.test.mjs
+          tests/entry-native-before-model.test.mjs test-support/v17-exit/exit-settle.test.mjs
+          test-support/v17-exit/native-fill-reconcile.test.mjs tests/native-submission-phase.test.mjs
+          tests/native-proof-program.test.mjs tests/closed-native-proof.test.mjs
+      - name: Preserved account critical sections and final gateway fences
+        run: |
+          export PGLITE_MODULE="$PWD/test-support/deterministic/node_modules/@electric-sql/pglite/dist/index.js"
+          node --test tests/account-critical-section.test.mjs tests/account-execution-context.test.mjs tests/account-analysis-sql.test.mjs gateway/order-writer-fence.test.mjs
