@@ -1,0 +1,45 @@
+{
+  "start_utc": "2026-10-02T06:44:22.387Z",
+  "end_utc": "2026-10-02T07:54:07.270Z",
+  "samples": 280,
+  "valid_metrics": 269,
+  "metrics_transport_timeouts": 11,
+  "health_transport_timeouts": 9,
+  "health_unhealthy_responses": 0,
+  "cpu_non_idle_non_iowait_percent": {
+    "p50": 75.31540504648063,
+    "p95": 90.83013532619674,
+    "p99": 95.35828449653702,
+    "max": 98.21780731867653
+  },
+  "iowait_percent_max": 22.928039702233146,
+  "memory_total_bytes": 2025492480.0,
+  "memory_available_bytes_min": 52690944.0,
+  "oom_kill_counter_min": 0.0,
+  "oom_kill_counter_max": 0.0,
+  "connection_peak_observed": 21.0,
+  "connection_limit": 90.0,
+  "swap_free_bytes_min": 307200.0,
+  "disk_io_busy_percent": {
+    "nvme0n1": {
+      "p99": 68.62119526095121,
+      "max": 91.76154914600694
+    },
+    "nvme1n1": {
+      "p99": 8.245755814987032,
+      "max": 44.62181885314285
+    }
+  },
+  "process_start_values": {
+    "postgresql": [
+      1790922954.87
+    ],
+    "gotrue": [
+      1790922961.97
+    ]
+  },
+  "postgresql_restarts_counter_values": [
+    0.0
+  ],
+  "covers_last_restart_preceding_resources": false
+}
