@@ -1,0 +1,33 @@
+{
+  "release_marker": "DISPATCH_NO_RESUBMIT_1",
+  "utc": "2026-10-02T07:03:33.832Z",
+  "kst": "2026-10-02T16:03:33.832+09:00",
+  "production_version": 185,
+  "production_bundle_sha256": "8605919e53c5a0fbfd758222445e8ca89a9a020ace23edb52e06c410ea6c3d46",
+  "main_commit": "9e8758a583e2bd91381a99ebc72243f8a4fb3437",
+  "pr": 303,
+  "files_verified": 93,
+  "source_difference_count": 0,
+  "migration_version": "20261002070129",
+  "local_tests": {
+    "passed": 1885,
+    "failed": 0,
+    "skipped": 0,
+    "new_sql_cases": 17
+  },
+  "immediate_verification": {
+    "utc": "2026-10-02T07:04:03.179307Z",
+    "kst": "2026-10-02T16:04:03.179307+09:00",
+    "live_enabled": true,
+    "circuit_open": false,
+    "last_error": null,
+    "open_positions": 0,
+    "ordinary_unresolved": 0,
+    "unknown_dispatches": 0,
+    "closed_native_backlog": 0,
+    "last_cycle_completed_at": "2026-10-02T07:04:00.099Z"
+  },
+  "rollback_source_version": 184,
+  "retain_no_resubmit_guard_on_rollback": true,
+  "writer_scheduler_cutover_complete": false
+}
