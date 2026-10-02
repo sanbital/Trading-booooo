@@ -18,7 +18,12 @@ export async function readVenue({app,token,commit,command,fetchImpl=fetch,now=Da
  if(d.ok!==true||d.result==null)throw Error('PREFLIGHT_SIGNED_READ_INCOMPLETE');return d.result;
 }
 export function reconcileHoldings({db,portfolio,openOrders,mode,now=Date.now()}){
- const failures=[],positions=db.positions??[],venue=portfolio?.positions??[];
+ // Closed float residue uses the preserved reconciliation tolerance. Never
+ // count it as held exposure or manufacture a stop; keep its history intact.
+ const closedDust=p=>p.state==='CLOSED'&&p.closed_at&&sameQuantity(Number(p.remaining_quantity),0)&&
+  p.metadata?.exitAccountingPending!==true&&p.metadata?.v18EntryAccountingPending!==true&&
+  (p.metadata?.exitProtection?.orders??[]).every(o=>o.terminal===true);
+ const failures=[],positions=(db.positions??[]).filter(p=>!closedDust(p)),venue=portfolio?.positions??[];
  if(!freshPortfolio(portfolio,now))failures.push('ACCOUNT_TRUTH_STALE_OR_INCOMPLETE');
  const same=positions.length===venue.length&&positions.every(p=>{
   const matches=venue.filter(x=>x.market===p.symbol&&x.side===p.side);
@@ -28,7 +33,7 @@ export function reconcileHoldings({db,portfolio,openOrders,mode,now=Date.now()})
  if(!confirmedLiveProtection(openOrders,positions,now))failures.push('EXCHANGE_PROTECTION_OR_OPEN_ORDER_MISMATCH');
  if((db.orders??[]).length)failures.push('UNRESOLVED_DB_ORDER');
  if(!supportedFuturesMode(mode,now))failures.push('POSITION_MODE_UNPROVEN');
- return {failures,exchange_positions:venue.length,db_positions:positions.length,ordinary_orders:Array.isArray(openOrders?.orders)?openOrders.orders.length:null,
+ return {failures,exchange_positions:venue.length,db_positions:positions.length,closed_quantity_dust_rows:(db.positions??[]).length-positions.length,ordinary_orders:Array.isArray(openOrders?.orders)?openOrders.orders.length:null,
   protective_orders:Array.isArray(openOrders?.algos)?openOrders.algos.length:null,position_mode:mode?.position_mode??null,
   observation_id:portfolio?.observation?.id??null,account_age_ms:now-portfolio?.observation?.requested_at_ms,orders_age_ms:now-openOrders?.observed_at_ms};
 }

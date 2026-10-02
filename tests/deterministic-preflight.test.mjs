@@ -40,6 +40,13 @@ test('quantity mismatch or absent native protection blocks held positions',()=>{
  const p=proof();p.db.positions.push({id:'p',symbol:'BTCUSDT',side:'LONG',remaining_quantity:1});p.portfolio.positions.push({market:'BTCUSDT',side:'LONG',quantity:2});
  const result=reconcileHoldings(p);assert.ok(result.failures.includes('EXCHANGE_DB_POSITION_MISMATCH'));assert.ok(result.failures.includes('EXCHANGE_PROTECTION_OR_OPEN_ORDER_MISMATCH'));
 });
+test('closed numerical residue preserves history without fabricating exposure; real or pending residuals block',()=>{
+ const p=proof(),dust={state:'CLOSED',closed_at:'2026-10-01T12:00:00Z',remaining_quantity:9e-13,metadata:{exitAccountingPending:false,exitProtection:{orders:[{terminal:true}]}}};
+ p.db.positions.push(dust);assert.deepEqual(reconcileHoldings(p).failures,[]);assert.equal(reconcileHoldings(p).closed_quantity_dust_rows,1);
+ for(const row of [{...dust,remaining_quantity:1e-6},{...dust,state:'OPEN'},{...dust,metadata:{exitAccountingPending:true}},{...dust,metadata:{exitProtection:{orders:[{terminal:false}]}}}]){
+  p.db.positions=[row];assert.ok(reconcileHoldings(p).failures.includes('EXCHANGE_DB_POSITION_MISMATCH'));
+ }
+});
 test('fill identity, actual quantity, price, fees, attribution and accounting all reconcile',()=>{
  const fill={market:'BTCUSDT',exchange_trade_id:1,exchange_order_id:'2',side:'BUY',quantity:1,price:100,fee_amount:.05,fee_asset:'USDT',source:'AUTOMATED',v17_position_id:'p',v17_order_id:'o',accounting_status:'ACCOUNTED'},
  trade={id:1,orderId:2,isBuyer:true,qty:'1',price:'100',commission:'.05',commissionAsset:'USDT',time:now};
