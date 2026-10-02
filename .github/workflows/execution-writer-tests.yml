@@ -8,6 +8,8 @@ on:
       - supabase/functions/_shared/account-writer-*.mjs
       - supabase/migrations/*account_writer*
       - tests/account-writer*.test.mjs
+      - tests/gateway-db-key-staging.test.mjs
+      - ops/execution-infra/stage-gateway-db-key.mjs
       - .github/workflows/execution-writer-tests.yml
   workflow_dispatch:
 permissions:
@@ -27,4 +29,4 @@ jobs:
         run: |
           export PGLITE_MODULE="$RUNNER_TEMP/infra-tests/node_modules/@electric-sql/pglite/dist/index.js"
           node --check gateway/server.mjs
-          node --test --test-reporter=tap tests/account-writer*.test.mjs gateway/*.test.mjs
+          node --test --test-reporter=tap tests/account-writer*.test.mjs tests/gateway-db-key-staging.test.mjs gateway/*.test.mjs
