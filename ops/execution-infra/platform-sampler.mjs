@@ -1,10 +1,11 @@
 // Independent read-only resource timeline. No trading endpoint, SQL scan or restart.
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {randomBytes,createCipheriv,publicEncrypt} from 'node:crypto';
+import {gzipSync} from 'node:zlib';
 export function encryptTimeline(timeline,publicKey){
  const key=randomBytes(32),iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv);
- const data=Buffer.concat([cipher.update(JSON.stringify(timeline)),cipher.final()]);
- return {version:1,key:publicEncrypt({key:publicKey,oaepHash:'sha256'},key).toString('base64'),iv:iv.toString('base64'),tag:cipher.getAuthTag().toString('base64'),data:data.toString('base64')};
+ const data=Buffer.concat([cipher.update(gzipSync(JSON.stringify(timeline))),cipher.final()]);
+ return {version:2,compression:'gzip',key:publicEncrypt({key:publicKey,oaepHash:'sha256'},key).toString('base64'),iv:iv.toString('base64'),tag:cipher.getAuthTag().toString('base64'),data:data.toString('base64')};
 }
 export async function observePlatform({fetchImpl=fetch,token,project,signal}){
  const read=async(path)=>{
@@ -17,7 +18,8 @@ export async function observePlatform({fetchImpl=fetch,token,project,signal}){
 }
 if(import.meta.url===new URL(process.argv[1],'file:').href){
  if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.GITHUB_REF!=='refs/heads/main')throw Error('READ_ONLY_SAMPLER_REPOSITORY_GUARD');
- const interval=15000,limit=280,key=readFileSync('ops/execution-infra/evidence-public.pem'),timeline={version:'PLATFORM_TIMELINE_1',commit:process.env.GITHUB_SHA,samples:[]};
+ const interval=15000,limit=Number(process.env.PLATFORM_SAMPLE_COUNT??280),key=readFileSync('ops/execution-infra/evidence-public.pem'),timeline={version:'PLATFORM_TIMELINE_1',commit:process.env.GITHUB_SHA,samples:[]};
+ if(!Number.isInteger(limit)||limit<20||limit>480)throw Error('READ_ONLY_SAMPLE_COUNT_INVALID');
  mkdirSync('infra-evidence',{recursive:true});
  const started=Date.now();
  for(let i=0;i<limit;i++){
