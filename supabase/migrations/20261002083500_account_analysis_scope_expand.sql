@@ -15,7 +15,8 @@ revoke all on public.v17_execution_infrastructure_control,public.v17_analysis_le
 grant all on public.v17_execution_infrastructure_control,public.v17_analysis_lease to service_role;
 alter table public.leader20_execution_dispatches add column if not exists claim_postmaster_at timestamptz;
 update public.leader20_execution_dispatches set claim_postmaster_at=pg_postmaster_start_time()
- where claim_owner is not null and claim_postmaster_at is null;
+ where claim_owner is not null and claim_postmaster_at is null
+   and executor_claimed_at>=pg_postmaster_start_time();
 create or replace function public.v17_stamp_dispatch_claim_generation() returns trigger language plpgsql set search_path='' as $fn$
 begin
  if new.claim_owner is not null and (new.claim_owner is distinct from old.claim_owner or
