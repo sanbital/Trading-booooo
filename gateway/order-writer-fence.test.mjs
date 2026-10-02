@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createOrderWriterFence,createGatewayAuthorizer,hasExchangeSideEffect} from './order-writer-fence.mjs';
+import {beforeExchangeMutation,createOrderWriterFence,createGatewayAuthorizer,hasExchangeSideEffect} from './order-writer-fence.mjs';
 const command={action:'create_order',exchange:'binance_futures',writer:{account_key:'binance_futures:futures',
   execution_key:'stable-key',owner:crypto.randomUUID(),fence:1}};
 test('expand deployment preserves legacy behavior while required mode fails closed',async()=>{
@@ -57,4 +57,14 @@ test('authorizer classifies DB timeout/DNS/reset/refused without leaking transpo
     const auth=createGatewayAuthorizer({url:'https://example.invalid',key:'fixture-only',fetchImpl:async()=>{throw error;}});
     await assert.rejects(auth(command.writer,{}),e=>e.code===code&&!e.message.includes('sensitive'));
   }
+});
+
+test('staged writer envelope is fenced again at final signed boundary even before mandatory cutover',async()=>{
+ let checks=0,venueCalls=0;const gate=createOrderWriterFence({required:false,authorize:async()=>++checks===1});
+ await assert.rejects(gate.run(command,async()=>{await beforeExchangeMutation({required:false,venue:'binance_futures',method:'POST',path:'/fapi/v1/order'});venueCalls++;}),/WRITER_FENCED/);assert.equal(checks,2);assert.equal(venueCalls,0);
+});
+test('legacy reduce-only management shares writer and releases it, while P10 BUY cannot borrow it',async()=>{
+ let acquired=0,released=0,executed=0;const gate=createOrderWriterFence({required:true,authorize:async()=>true,acquireLegacy:async()=>{acquired++;return {envelope:command.writer,release:async()=>released++};}});
+ await assert.rejects(gate.run({exchange:'binance_futures',action:'create_order',order:{side:'BUY',position_effect:'OPEN'}},()=>executed++),/FINAL_BUY_WRITER_REQUIRED/);assert.equal(acquired,0);
+ await gate.run({exchange:'binance_futures',action:'create_order',order:{side:'SELL',position_effect:'CLOSE'}},async()=>{await beforeExchangeMutation({required:true,venue:'binance_futures',method:'POST',path:'/fapi/v1/order'});executed++;});assert.equal(acquired,1);assert.equal(released,1);assert.equal(executed,1);
 });

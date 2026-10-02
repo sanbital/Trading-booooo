@@ -1,6 +1,11 @@
 import { readFuturesModeEvidence } from "./futures-mode-evidence.mjs";
 import { createV17StopCommands } from "./v17-stop-commands.mjs";
-import {beforeExchangeMutation,createGatewayAuthorizer,createOrderWriterFence,createGatewayLegacyLease} from "./order-writer-fence.mjs";
+import {
+  beforeExchangeMutation,
+  createGatewayAuthorizer,
+  createGatewayLegacyLease,
+  createOrderWriterFence,
+} from "./order-writer-fence.mjs";
 import http from "node:http";
 import crypto from "node:crypto";
 import dns from "node:dns";
@@ -53,9 +58,12 @@ const SHARED_SECRET = env("GATEWAY_SHARED_SECRET");
 const SUPABASE_URL = env("SUPABASE_URL").replace(/\/$/, "");
 const AUTOTRADE_TOKEN = env("AUTOTRADE_ACCESS_TOKEN");
 const ORDER_WRITER_REQUIRED = boolEnv("ORDER_WRITER_REQUIRED", false);
-const writerDatabase={url:SUPABASE_URL,key:env("SUPABASE_SERVICE_ROLE_KEY")};
-const orderWriterFence=createOrderWriterFence({required:ORDER_WRITER_REQUIRED,
- authorize:createGatewayAuthorizer(writerDatabase),acquireLegacy:createGatewayLegacyLease(writerDatabase)});
+const writerDatabase = { url: SUPABASE_URL, key: env("SUPABASE_SERVICE_ROLE_KEY") };
+const orderWriterFence = createOrderWriterFence({
+  required: ORDER_WRITER_REQUIRED,
+  authorize: createGatewayAuthorizer(writerDatabase),
+  acquireLegacy: createGatewayLegacyLease(writerDatabase),
+});
 const SCHEDULER_ENABLED = boolEnv("SCHEDULER_ENABLED", true);
 const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 12, 8, 3600) * 1000;
 const COLD_START_SCAN_MS = integerEnv("LOB_COLD_START_SCAN_SECONDS", 3, 1, 120) * 1000;
@@ -464,7 +472,7 @@ async function binanceRequest(
   try {
     // Sign BEFORE the DB gate: if this process is suspended afterwards the venue's
     // unchanged 5s recvWindow rejects that old signed request on resume.
-    await beforeExchangeMutation({required:ORDER_WRITER_REQUIRED,venue,method,path});
+    await beforeExchangeMutation({ required: ORDER_WRITER_REQUIRED, venue, method, path });
     const response = await fetch(
       `${binanceHost(venue)}${path}?${payload}&signature=${signature}`,
       {
@@ -2212,11 +2220,16 @@ async function tradeHistory(exchange, market, options = {}) {
   }
   const symbol = validateBinanceSymbol(market);
   const requestedLimit = Math.trunc(Number(options.limit ?? 1000));
-  const limit = Math.min(1000, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 1000));
+  const limit = Math.min(
+    1000,
+    Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 1000),
+  );
   const params = { symbol, limit };
   const fromId = Number(options.fromId);
-  if (options.fromId !== null && options.fromId !== undefined && options.fromId !== "" &&
-      Number.isInteger(fromId) && fromId >= 0) {
+  if (
+    options.fromId !== null && options.fromId !== undefined && options.fromId !== "" &&
+    Number.isInteger(fromId) && fromId >= 0
+  ) {
     params.fromId = fromId;
   }
   const futures = exchange === "binance_futures";
@@ -2248,7 +2261,10 @@ async function orderHistory(exchange, market, options = {}) {
   }
   const symbol = validateBinanceSymbol(market);
   const requestedLimit = Math.trunc(Number(options.limit ?? 1000));
-  const limit = Math.min(1000, Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 1000));
+  const limit = Math.min(
+    1000,
+    Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : 1000),
+  );
   const params = { symbol, limit };
   const startTime = Number(options.startTime);
   const endTime = Number(options.endTime);
@@ -2726,7 +2742,10 @@ function createServer() {
             // have USDⓈ-M futures enabled for it, which only a live call can prove.
             binance_futures: Boolean(BINANCE_API_KEY && BINANCE_SECRET_KEY),
           },
-          order_writer:{required:ORDER_WRITER_REQUIRED,active_accounts:orderWriterFence.activeAccounts()},
+          order_writer: {
+            required: ORDER_WRITER_REQUIRED,
+            active_accounts: orderWriterFence.activeAccounts(),
+          },
           scheduler_enabled: SCHEDULER_ENABLED,
           scheduler: schedulerState,
           intervals: {

@@ -37,10 +37,10 @@ export function createOrderWriterFence({required=false,authorize,acquireLegacy})
         legacy=await acquireLegacy(command);envelope=legacy?.envelope;
       }
       if (!envelope?.account_key || !envelope.execution_key || !envelope.owner ||
-        !/^[1-9][0-9]*$/.test(String(envelope.fence))) throw refusal('WRITER_ENVELOPE_REQUIRED');
+        !/^[1-9][0-9]*$/.test(String(envelope.fence))){await legacy?.release();throw refusal('WRITER_ENVELOPE_REQUIRED');}
       const expectedAccount=`${command.exchange}:futures`;
       if (command.exchange !== 'binance_futures' || envelope.account_key !== expectedAccount) {
-        throw refusal('WRITER_ACCOUNT_MISMATCH');
+        await legacy?.release();throw refusal('WRITER_ACCOUNT_MISMATCH');
       }
       const {writer,...payload}=command;
       const boundPayload=structuredClone(payload);
@@ -102,7 +102,8 @@ export function createGatewayLegacyLease({url,key,fetchImpl=fetch,timers=globalT
   const release=async()=>{timers.clearInterval(timer);try{await rpc('v17_release_execution_lease',{p_owner:owner});}catch{}};
   try{
    const acquired=await rpc('v17_acquire_gateway_writer',{p_owner:owner});
-   if(!acquired)throw refusal('ACCOUNT_WRITER_BUSY');active=true;
+   if(!acquired)throw refusal('ACCOUNT_WRITER_BUSY');
+   if(acquired.owner!==owner||!Number.isSafeInteger(Number(acquired.fence))||Number(acquired.fence)<1)throw refusal('WRITER_ACQUISITION_EVIDENCE_INVALID');active=true;
    const envelope={account_key:'binance_futures:futures',owner,fence:acquired.fence,
     execution_key:crypto.createHash('sha256').update(JSON.stringify(command)).digest('hex')};
    timer=timers.setInterval(()=>{if(!active)return;active=false;
