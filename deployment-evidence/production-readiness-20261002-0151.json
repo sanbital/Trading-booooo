@@ -1,0 +1,81 @@
+{
+  "audit_run_id": 36952895734,
+  "audit_commit": "9bb38b4da695c2f5957663435a0e1332217610a4",
+  "utc": "2026-10-02T01:51:23.681Z",
+  "kst": "2026-10-02T10:51:23.681+09:00",
+  "health": {
+    "ok": true,
+    "utc": "2026-10-02T01:51:34.480Z",
+    "value": [
+      {
+        "name": "db",
+        "healthy": false,
+        "status": "UNHEALTHY",
+        "error": "Failed to connect to database"
+      },
+      {
+        "name": "db_postgres_user",
+        "healthy": false,
+        "status": "UNHEALTHY",
+        "error": "Failed to connect to database"
+      },
+      {
+        "name": "rest",
+        "healthy": false,
+        "status": "UNHEALTHY",
+        "info": {
+          "db_schema": "public,graphql_public"
+        },
+        "error": "Failed to retrieve project's rest service health"
+      },
+      {
+        "name": "pooler",
+        "healthy": true,
+        "status": "ACTIVE_HEALTHY"
+      }
+    ]
+  },
+  "readiness_http": 544,
+  "pooler_5432_error": "CONNECTION_TIMEOUT",
+  "pooler_6543_error": "CONNECTION_TIMEOUT",
+  "rest_error": "TIMEOUT",
+  "exchange": {
+    "utc": "2026-10-02T01:52:22.482Z",
+    "positions_complete": true,
+    "positions": 0,
+    "orders_complete": true,
+    "open_orders": 0,
+    "conditional_orders": 0
+  },
+  "functions": [
+    {
+      "slug": "market-autotrader",
+      "version": 453,
+      "status": "ACTIVE",
+      "ezbr_sha256": "dbe902dfdb5f2157a9426f71ada747da200e586af79640adcbaf0af08176d7a5"
+    },
+    {
+      "slug": "market-v2-signal",
+      "version": 81,
+      "status": "ACTIVE",
+      "ezbr_sha256": "b391632e113f6eb4fda9efcbd5022f2fc1915aea7dfaa13323fee9962f04f43c"
+    },
+    {
+      "slug": "v10-lane-signal-generator",
+      "version": 51,
+      "status": "ACTIVE",
+      "ezbr_sha256": "3bf0ce7eb57b1d7ee2065176d3113d47990fc90a53eeef6f500f7a3a670777f8"
+    },
+    {
+      "slug": "v10-lane-executor",
+      "version": 183,
+      "status": "ACTIVE",
+      "ezbr_sha256": "96d6506b248f3add6958cf9f7165367df06800859f2c7c4bb0e59ad3c3f8ccd4"
+    }
+  ],
+  "limits": [
+    "No production trading path deployed by this task",
+    "Exchange snapshots do not establish DB unresolved-order count",
+    "No production post-deployment cohort available while DB readiness fails"
+  ]
+}

@@ -64,3 +64,9 @@ Fly scheduler process alive with DB circuit open; signed exchange read succeeded
 SQL cron/config/position/unknown-order backup unavailable. No resource-cause attribution established.
 Please provide: postmaster/container exit codes, OOM-killer and memory-pressure events, per-restart CPU/memory/disk I/O and connection peaks, recovery/WAL and replication state, autovacuum/lock/long-query telemetry, maintenance/software upgrades/restart actor history, and platform incident correlation.
 Do not assume a compute upgrade resolves the interrupted restart loop. Entry recovery must reconcile independent of compute tier.
+
+Independent audit run 36952895734 at 2026-10-02T01:51:23.681Z UTC / 10:51:23.681 KST:
+Health at 01:51:34.480 UTC / 10:51:34.480 KST: DB, postgres user and REST UNHEALTHY; pooler ACTIVE_HEALTHY.
+Both session pooler 5432 and transaction pooler 6543 returned upstream DB timeout. Existing service-role REST read timed out; SQL management returned HTTP 544. Project metadata ACTIVE_HEALTHY did not establish readiness.
+Signed complete exchange positions/open ordinary/open conditional snapshots were all zero at 01:52:22.482 UTC / 10:52:22.482 KST. DB unresolved ledger remains unavailable.
+No trading deployment, production restart or compute modification was performed.
