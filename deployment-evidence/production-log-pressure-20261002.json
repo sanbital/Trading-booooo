@@ -1,0 +1,71 @@
+{
+  "version": "READ_ONLY_LOG_AGGREGATES_20261002",
+  "window": {
+    "start": "2026-10-01T01:15:49.134Z",
+    "end": "2026-10-02T01:15:49.134Z"
+  },
+  "sources": [
+    {
+      "name": "causeFamilies",
+      "rows": [
+        {
+          "events": 228,
+          "family": "STATEMENT_TIMEOUT",
+          "first_at": "2026-10-01T01:20:11.171000",
+          "last_at": "2026-10-01T22:11:45.058000",
+          "source": "postgres_logs"
+        },
+        {
+          "events": 207,
+          "family": "STATEMENT_TIMEOUT",
+          "first_at": "2026-10-01T01:20:11.183355",
+          "last_at": "2026-10-01T22:10:40.087340",
+          "source": "postgrest_logs"
+        },
+        {
+          "events": 107,
+          "family": "CRON_STARTUP_TIMEOUT",
+          "first_at": "2026-10-01T01:20:26.641000",
+          "last_at": "2026-10-01T22:10:38.113000",
+          "source": "postgres_logs"
+        },
+        {
+          "events": 93,
+          "family": "CONNECTION_LIMIT",
+          "first_at": "2026-10-01T02:52:49.253591",
+          "last_at": "2026-10-01T21:52:27.316246",
+          "source": "postgrest_logs"
+        },
+        {
+          "events": 22,
+          "family": "DNS_FAILURE",
+          "first_at": "2026-10-01T03:17:20.820093",
+          "last_at": "2026-10-01T21:52:09.188191",
+          "source": "pgbouncer_logs"
+        }
+      ]
+    },
+    {
+      "name": "connectionSignatures",
+      "rows": [
+        {
+          "events": 93,
+          "first_at": "2026-10-01T02:52:49.253591",
+          "last_at": "2026-10-01T21:52:27.316246",
+          "signature": "maximum size of 30 connections",
+          "source": "postgrest_logs"
+        }
+      ]
+    },
+    {
+      "name": "restartCountsLatest",
+      "rows": [
+        {
+          "interrupted": 15,
+          "last_start": "2026-10-01T20:11:52.694000",
+          "starts": 15
+        }
+      ]
+    }
+  ]
+}

@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
-import {buildBatch} from '../supabase/functions/_shared/leader20/batch.mjs';
+import {buildHistorical20Batch as buildBatch} from '../test-support/historical-clock-batch.mjs';
 import {validateCapture120} from '../supabase/functions/_shared/gpt-final-decision/capture-context.mjs';
 import {selectEpoch} from '../supabase/functions/_shared/leader20/universe.mjs';
 const read=p=>readFile(new URL('../'+p,import.meta.url),'utf8');
 
-test('PostgreSQL fixed cutoff, 20-member claim, duplicate admission, expiry and held delegation',async t=>{
+test('historical PostgreSQL 20-member contract: cutoff, duplicate admission, expiry and held delegation',async t=>{
  const {PGlite}=await import(pathToFileURL(process.env.PGLITE_MODULE).href),db=new PGlite();t.after(()=>db.close());
  const q=async(s,a=[]) => (await db.query(s,a)).rows;
  const rpc=async(n,a=[]) => (await q(`select public.${n}(${a.map((_,i)=>'$'+(i+1)).join(',')}) r`,a))[0].r;
