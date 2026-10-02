@@ -73,10 +73,12 @@ export function createSchedulerOrchestrator({repository,runJob,recover,breaker,
         work=Promise.resolve().then(()=>runJob(claim,{signal:controller.signal,lease:heldLease}));
         const result=await Promise.race([work,timeoutPromise]);
         if (result?.status==='DB_DEGRADED') throw Error('DB_DEGRADED');
-        const succeeded=await repository.finish(heldLease,claim,{state:'SUCCEEDED',result:'SUCCEEDED',
+        if (result?.ok===false) throw Error('JOB_REPORTED_FAILURE');
+        const outcome=result?.skipped?'SKIPPED':'SUCCEEDED';
+        const succeeded=await repository.finish(heldLease,claim,{state:'SUCCEEDED',result:outcome,
           cursor:result?.cursor??null});
         if (!succeeded) throw Error('SCHEDULER_FENCED');
-        note(job.job_key,{lastSuccess:new Date(now()).toISOString(),result:'SUCCEEDED'});
+        note(job.job_key,{lastSuccess:new Date(now()).toISOString(),result:outcome});
       } catch(error) {
         const classified=dependencyFailure(error);
         note(job.job_key,{result:classified.code});

@@ -1,7 +1,7 @@
 name: Execution infrastructure complete regression
 on:
   pull_request:
-    branches: [main, infra/p10-retired-entry]
+    branches: [main, infra/p10-retired-entry, infra/regression-harness-repair]
     paths:
       - 'supabase/functions/**'
       - 'tests/**'

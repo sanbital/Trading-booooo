@@ -40,6 +40,7 @@ create table public.trading_execution_outbox (
     ('PENDING','CLAIMED','VALIDATING','SUBMITTING','ACKNOWLEDGED','PARTIALLY_FILLED',
      'FILLED','REJECTED','CANCELED','EXPIRED','UNKNOWN','RECONCILED')),
   attempt_count integer not null default 0,
+  next_attempt_at timestamptz not null default clock_timestamp(),
   claim_owner uuid,
   claim_fence bigint,
   claimed_at timestamptz,
@@ -59,6 +60,15 @@ create table public.trading_execution_outbox (
   updated_at timestamptz not null default clock_timestamp(),
   check (kind <> 'ENTRY' or (decision_id is not null and deadline is not null
     and authority_version is not null and client_order_id is not null)),
+  check (payload->>'action' <> 'create_order' or (kind in ('ENTRY','EXIT','PROTECTION')
+    and client_order_id is not null
+    and (payload#>>'{order,identifier}') is not distinct from client_order_id
+    and (payload#>>'{order,market}') is not distinct from symbol
+    and (payload#>>'{order,side}') is not distinct from side)),
+  check (payload->>'action' <> 'v17_create_stop' or (kind='PROTECTION'
+    and client_order_id is not null
+    and (payload#>>'{params,clientAlgoId}') is not distinct from client_order_id
+    and (payload#>>'{params,symbol}') is not distinct from symbol)),
   check ((terminal_at is null) = (terminal_reason is null)),
   check (state not in ('FILLED','REJECTED','CANCELED','EXPIRED','RECONCILED')
     or terminal_at is not null)
@@ -159,17 +169,27 @@ begin
   if not public.trading_writer_verify(p_account,p_owner,p_fence) then raise exception 'WRITER_FENCED'; end if;
   select * into c from public.trading_writer_control where account_key=p_account;
   -- Never expire a possibly submitted order. It must be reconciled by identity.
-  update public.trading_execution_outbox set state='EXPIRED',terminal_reason='DEADLINE_EXPIRED',
-    terminal_at=t,last_error_code='DEADLINE_EXPIRED',updated_at=t
-  where account_key=p_account and kind='ENTRY' and terminal_at is null and deadline<=t
-    and submitting_at is null and state in ('PENDING','CLAIMED','VALIDATING');
+  with expired as (
+    update public.trading_execution_outbox set state='EXPIRED',terminal_reason='DEADLINE_EXPIRED',
+      terminal_at=t,last_error_code=coalesce(last_error_code,
+        case when attempt_count=0 then 'UNCLAIMED_DEADLINE_EXPIRED' else 'DEADLINE_EXPIRED' end),updated_at=t
+    where account_key=p_account and kind='ENTRY' and terminal_at is null and deadline<=t
+      and submitting_at is null and state in ('PENDING','CLAIMED','VALIDATING')
+    returning execution_key,correlation_id,last_error_code
+  ) insert into public.trading_execution_events(execution_key,correlation_id,state,reason,fence,evidence)
+    select execution_key,correlation_id,'EXPIRED','DEADLINE_EXPIRED',p_fence,
+      jsonb_build_object('last_infrastructure_error',last_error_code) from expired;
   select * into d from public.trading_execution_outbox
   where account_key=p_account and terminal_at is null
+    and next_attempt_at<=t
     and (state='PENDING' or state in ('SUBMITTING','ACKNOWLEDGED','PARTIALLY_FILLED','UNKNOWN')
       or (state in ('CLAIMED','VALIDATING') and claim_fence is distinct from p_fence))
     and (kind<>'ENTRY' or submitting_at is not null or (not c.recovery_required
       and c.recovered_generation=c.recovery_generation
-      and c.recovered_postmaster_at=pg_postmaster_start_time()))
+      and c.recovered_postmaster_at=pg_postmaster_start_time()
+      and not exists(select 1 from public.trading_execution_outbox ambiguous
+        where ambiguous.account_key=p_account and ambiguous.terminal_at is null
+          and ambiguous.state in ('SUBMITTING','UNKNOWN'))))
   order by case when state in ('SUBMITTING','ACKNOWLEDGED','PARTIALLY_FILLED','UNKNOWN') then 0
     when kind='RECONCILE' then 0 when kind in ('PROTECTION','EXIT') then 1
     when kind='ENTRY' then 2 else 3 end,created_at,execution_key
@@ -216,6 +236,9 @@ begin
     raise exception 'ENTRY_RECOVERY_OR_DEADLINE_BLOCK';
   end if;
   update public.trading_execution_outbox set state=p_state,last_error_code=p_reason,
+    next_attempt_at=case when p_state in ('PENDING','UNKNOWN','PARTIALLY_FILLED') then
+      t+least(30000,1000*power(2,least(greatest(attempt_count-1,0),5))) * interval '1 millisecond'
+      else t end,
     validated_at=case when p_state='VALIDATING' then t else validated_at end,
     submitting_at=case when p_state='SUBMITTING' then t else submitting_at end,
     acknowledged_at=case when p_state='ACKNOWLEDGED' then coalesce(acknowledged_at,t) else acknowledged_at end,
@@ -231,6 +254,15 @@ begin
   return to_jsonb(d);
 end $$;
 
+create function public.trading_writer_recovery_status(p_account text) returns jsonb
+language sql security definer set search_path = '' as $$
+ select jsonb_build_object('account_key',c.account_key,'generation',c.recovery_generation,
+   'postmaster_at',pg_postmaster_start_time(),'event_cursor',
+   (select coalesce(max(e.id),0) from public.trading_execution_events e
+     join public.trading_execution_outbox d using(execution_key) where d.account_key=p_account))
+ from public.trading_writer_control c where c.account_key=p_account
+$$;
+
 -- A worker cannot clear entry freeze with only an HTTP health response.
 create function public.trading_writer_recovery_complete(p_account text,p_owner uuid,p_fence bigint,
   p_generation bigint,p_evidence jsonb) returns boolean
@@ -239,6 +271,11 @@ declare n integer;
 begin
   perform 1 from public.trading_writer_leases where account_key=p_account for update;
   if not public.trading_writer_verify(p_account,p_owner,p_fence) then raise exception 'WRITER_FENCED'; end if;
+  if (p_evidence->>'postmaster_at')::timestamptz is distinct from pg_postmaster_start_time()
+    or (p_evidence->>'event_cursor')::bigint is distinct from
+      (select coalesce(max(e.id),0) from public.trading_execution_events e
+        join public.trading_execution_outbox d using(execution_key) where d.account_key=p_account)
+    then raise exception 'RECOVERY_CHECKPOINT_CHANGED'; end if;
   if not (p_evidence @> '{"db_ready":true,"open_orders_complete":true,"positions_complete":true,
     "unknown_reconciled":true,"fills_attributed":true,"protection_complete":true,"capacity_recalculated":true}')
     then raise exception 'RECOVERY_EVIDENCE_INCOMPLETE'; end if;
@@ -279,7 +316,7 @@ do $$ declare t text; f record; begin
   for f in select p.oid::regprocedure signature from pg_proc p join pg_namespace n on n.oid=p.pronamespace
     where n.nspname='public' and p.proname in ('trading_execution_enqueue','trading_writer_acquire',
       'trading_writer_verify','trading_writer_heartbeat','trading_writer_release','trading_execution_claim',
-      'trading_execution_transition','trading_writer_recovery_complete','trading_gateway_authorize') loop
+      'trading_execution_transition','trading_writer_recovery_status','trading_writer_recovery_complete','trading_gateway_authorize') loop
     execute format('revoke all on function %s from public,anon,authenticated',f.signature);
     execute format('grant execute on function %s to service_role',f.signature);
   end loop;

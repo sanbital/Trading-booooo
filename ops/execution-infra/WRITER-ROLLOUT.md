@@ -19,6 +19,18 @@ Gateway `order-writer-fence.mjs` binds the submitted command to the exact durabl
 payload and current account fence immediately before side effects. Read-only exchange
 proofs remain available when DB admission fails. Gateway mode defaults to disabled.
 
+Follow-up adapters add exact signed command transport, same-client-ID exchange query
+using existing entry/exit receipt guards, corroborated never-placed proof with the
+existing six-hour retention bound, and partial-fill finality enforcement. DB constraints
+bind the reserved client ID to the actual submitted JSON payload. Ambiguous attempts
+back off without blocking higher-priority protection; their presence freezes all entries.
+
+`account-writer-recovery.mjs` runs ordered readiness, open-order, position, unknown-order,
+fill, protection and capacity adapters outside the writer lease. Only the final short
+DB completion holds that lease. Postmaster/generation and a durable event cursor reject
+stale recovery evidence. Existing v183 validation/position/protection callbacks are
+still not wired to these new workers, so this remains a disabled expand stage.
+
 The new isolated tests use real PostgreSQL functions via PGlite, not a duplicate JS
 state machine. They verify unique identities, claim takeover, stale fencing/heartbeat,
 crash after submission, same-ID timeout recovery, negative lookup uncertainty,
