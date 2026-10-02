@@ -1,6 +1,10 @@
 import { readFuturesModeEvidence } from "./futures-mode-evidence.mjs";
 import { createV17StopCommands } from "./v17-stop-commands.mjs";
-import { beforeExchangeMutation, createGatewayAuthorizer, createOrderWriterFence } from "./order-writer-fence.mjs";
+import {
+  beforeExchangeMutation,
+  createGatewayAuthorizer,
+  createOrderWriterFence,
+} from "./order-writer-fence.mjs";
 import http from "node:http";
 import crypto from "node:crypto";
 import dns from "node:dns";
@@ -455,7 +459,7 @@ async function binanceRequest(
   }
   guardRate(venue, "rest");
   await syncBinanceTime(false);
-  await beforeExchangeMutation({required:ORDER_WRITER_REQUIRED,venue,method,path});
+  await beforeExchangeMutation({ required: ORDER_WRITER_REQUIRED, venue, method, path });
   const signed = {
     ...parameters,
     recvWindow: Math.min(5_000, Math.max(1_000, Number(parameters.recvWindow) || 5_000)),
