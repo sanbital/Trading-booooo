@@ -5,11 +5,11 @@ const root=new URL('../',import.meta.url);
 function valid(){const at=new Date().toISOString(),symbols=Array.from({length:20},(_,i)=>'S'+i+'USDT'),postmaster=at;
  return {sourceCommit:'a'.repeat(40),control:{version:ENGINE,source_commit:'a'.repeat(40),enabled:false},leader20:{active_strategy:'PAUSED',watch_limit:20},batch:{enabled:false},gpt:{mode:'OFF'},runtime:{circuit_open:false,protection_health:'FLAT',last_cycle_completed_at:at},operator:{entry_enabled:true,legacy_entries_retired:true},settings:{pause_new_entries:false},scheduler:{enabled:true,recovery_complete:true,recovered_postmaster_at:postmaster,heartbeat_at:at,expires_at:new Date(Date.now()+15000).toISOString()},postmaster,
  jobs:[['v11-long-regime-executor','v10-lane-executor'],['leader20-observer-tick','v10-lane-signal-generator']].map(([job_key,endpoint])=>({job_key,enabled:true,period_ms:5000,target:{endpoint,body:{mode:'run'}},last_success:at})),
- captures:[...symbols,'BTCUSDT'].map(symbol=>({symbol,status:'AVAILABLE',buckets:24})),diagnostic:{version:ENGINE,members:20,results:symbols.map(symbol=>({symbol,technical:true,capture_end_ms:Date.now()}))},providerCalls:0};
+ captures:[...symbols,'BTCUSDT'].map(symbol=>({symbol,status:'AVAILABLE',buckets:24})),diagnostic:{version:ENGINE,members:20,results:symbols.map(symbol=>({symbol,technical:true,capture_end_ms:Date.now()}))},readiness:{authority:ENGINE,entry_enabled:false,native_stop_enabled:true,hard_stop_pct:.025,maxSlots:10,sizingContract:{targetMarginUsdt:150,leverage:3},position_mode:{supported:true,mode:'ONE_WAY'}},providerCalls:0};
 }
 test('activation refuses real production failure modes and duplicate authority',()=>{
  assert.doesNotThrow(()=>assertActivation(valid()));
- for(const mutate of [v=>v.runtime.circuit_open=true,v=>v.jobs[0].enabled=false,v=>v.jobs[0].target.body={},v=>v.captures.pop(),v=>v.captures[0].status='UNAVAILABLE',v=>v.diagnostic.results[0].technical=false,v=>v.providerCalls=1,v=>v.batch.enabled=true,v=>v.gpt.mode='ENFORCE',v=>v.scheduler.recovered_postmaster_at='old',v=>v.control.source_commit='b'.repeat(40),v=>v.jobs.push({...v.jobs[0],job_key:'duplicate'})]){
+ for(const mutate of [v=>v.runtime.circuit_open=true,v=>v.jobs[0].enabled=false,v=>v.jobs[0].target.body={},v=>v.captures.pop(),v=>v.captures[0].status='UNAVAILABLE',v=>v.diagnostic.results[0].technical=false,v=>v.providerCalls=1,v=>v.batch.enabled=true,v=>v.gpt.mode='ENFORCE',v=>v.readiness.native_stop_enabled=false,v=>v.scheduler.recovered_postmaster_at='old',v=>v.control.source_commit='b'.repeat(40),v=>v.jobs.push({...v.jobs[0],job_key:'duplicate'})]){
   const v=valid();mutate(v);assert.throws(()=>assertActivation(v));
  }
 });
