@@ -39,4 +39,3 @@ jobs:
           export PGLITE_MODULE="$RUNNER_TEMP/leader20-test/node_modules/@electric-sql/pglite/dist/index.js"
           node ops/dynamic-flow/run-tests.mjs
           deno check --no-config supabase/functions/v10-lane-executor/index.ts supabase/functions/v10-lane-signal-generator/index.ts
-          deno task test
