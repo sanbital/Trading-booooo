@@ -1,0 +1,22 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {readFile,readdir} from 'node:fs/promises';import {pathToFileURL} from 'node:url';
+async function fixture(t){
+ const {PGlite}=await import(pathToFileURL(process.env.PGLITE_MODULE).href),db=new PGlite();t.after(()=>db.close());
+ await db.exec(`create role anon;create role authenticated;create role service_role;
+ create table v17_execution_lease(singleton boolean primary key,owner uuid,expires_at timestamptz);
+ insert into v17_execution_lease values(true,null,'-infinity');
+ -- PGlite has no external postmaster; tests explicitly control a simulated generation.
+ create table test_postmaster(started_at timestamptz);insert into test_postmaster values('2026-10-02T06:35:57Z');
+ create function public.test_postmaster_start() returns timestamptz language sql as 'select started_at from public.test_postmaster';`);
+ const dir=new URL('../supabase/migrations/',import.meta.url),files=(await readdir(dir)).filter(x=>x.endsWith('_execution_lease_postmaster_fence.sql'));assert.equal(files.length,1);
+ await db.exec((await readFile(new URL(files[0],dir),'utf8')).replaceAll('pg_postmaster_start_time()','public.test_postmaster_start()'));
+ const owner=crypto.randomUUID(),other=crypto.randomUUID();
+ const call=async(name,params=[])=> (await db.query(`select ${name}(${params.map((_,i)=>'$'+(i+1)).join(',')}) value`,params)).rows[0].value;
+ const row=async()=> (await db.query('select * from v17_execution_lease')).rows[0];
+ const restart=()=>db.exec("update test_postmaster set started_at=started_at+interval '1 minute'");
+ return {db,owner,other,call,row,restart};
+}
+test('a live owner is single writer and retains the original 150 second TTL',async t=>{const f=await fixture(t);assert.equal(await f.call('v17_acquire_execution_lease',[f.owner]),true);assert.equal(await f.call('v17_acquire_execution_lease',[f.other]),false);assert.equal(await f.call('v17_verify_execution_lease',[f.owner]),true);const r=await f.row();assert.equal(r.fence,1);assert.ok(Date.parse(r.expires_at)-Date.parse(r.heartbeat_at)>=149000);});
+test('DB restart immediately rejects old ownership for reads, commits and heartbeat',async t=>{const f=await fixture(t);await f.call('v17_acquire_execution_lease',[f.owner]);const r=await f.row();await f.restart();assert.equal(await f.call('v17_verify_execution_lease',[f.owner]),false);await assert.rejects(f.call('v18_require_lease',[f.owner]),/V18_EXECUTION_FENCED/);assert.equal(await f.call('v17_heartbeat_execution_lease',[f.owner,r.fence]),false);});
+test('after restart a new writer acquires without waiting for the old TTL and fences the old process',async t=>{const f=await fixture(t);await f.call('v17_acquire_execution_lease',[f.owner]);const r=await f.row();await f.restart();assert.equal(await f.call('v17_acquire_execution_lease',[f.other]),true);assert.equal((await f.row()).fence,r.fence+1);assert.equal(await f.call('v17_verify_execution_lease',[f.owner]),false);assert.equal(await f.call('v17_verify_execution_lease',[f.other]),true);});
+test('same generation heartbeat does not change fence, expire authority or revive a dead holder',async t=>{const f=await fixture(t);await f.call('v17_acquire_execution_lease',[f.owner]);const r=await f.row();assert.equal(await f.call('v17_heartbeat_execution_lease',[f.owner,r.fence]),true);assert.equal((await f.row()).fence,r.fence);assert.equal(await f.call('v17_heartbeat_execution_lease',[f.owner,r.fence+1]),false);assert.equal(await f.call('v17_heartbeat_execution_lease',[f.other,r.fence]),false);await f.db.exec("update v17_execution_lease set expires_at=clock_timestamp()-interval '1 second'");assert.equal(await f.call('v17_heartbeat_execution_lease',[f.owner,r.fence]),false);await assert.rejects(f.call('v18_require_lease',[f.owner]),/V18_EXECUTION_FENCED/);});
+test('verification keeps 30 second submit reserve and writes keep the 1 second reserve',async t=>{const f=await fixture(t);await f.call('v17_acquire_execution_lease',[f.owner]);await f.db.exec("update v17_execution_lease set expires_at=clock_timestamp()+interval '20 seconds'");assert.equal(await f.call('v17_verify_execution_lease',[f.owner]),false);await f.call('v18_require_lease',[f.owner]);await f.db.exec("update v17_execution_lease set expires_at=clock_timestamp()+interval '0.5 seconds'");await assert.rejects(f.call('v18_require_lease',[f.owner]),/V18_EXECUTION_FENCED/);});
