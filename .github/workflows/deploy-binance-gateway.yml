@@ -150,6 +150,14 @@ jobs:
           flyctl secrets unset --stage -a "${FLY_BINANCE_APP_NAME}" \
             UPBIT_ACCESS_KEY UPBIT_SECRET_KEY UPBIT_MAX_ORDER_KRW UPBIT_MAX_DAILY_BUY_KRW || true
 
+      - name: Stage database credential for disabled account writer
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_DATABASE_KEY_APP: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        run: node ops/execution-infra/stage-gateway-db-key.mjs
+
       - name: Deploy one always-on Binance gateway Machine
         shell: bash
         working-directory: gateway
