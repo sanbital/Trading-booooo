@@ -51,6 +51,27 @@ if(selectedDbUrl){
   }catch{process.env.SUPABASE_DB_URL=selectedDbUrl;}
  }
 }
+if(selectedDbUrl)await record('transaction_pooler_probe',async()=>{
+ const current=process.env.SUPABASE_DB_URL;
+ try{
+  const u=new URL(selectedDbUrl);
+  if(!u.hostname.endsWith('.pooler.supabase.com'))return{ok:false,error:'TRANSACTION_POOLER_NOT_CONFIGURED'};
+  u.port='6543';process.env.SUPABASE_DB_URL=u.href;
+  const result=direct('select 1');if(!result.ok)process.env.SUPABASE_DB_URL=current;return result;
+ }catch{process.env.SUPABASE_DB_URL=current;return{ok:false,error:'TRANSACTION_POOLER_CONFIG_INVALID'};}
+});
+await record('service_rest_probe',async()=>{
+ // This external read can use an existing PostgREST connection even when a new SQL
+ // connection fails. Keys and Authorization never enter evidence or log state.
+ const keysResponse=await fetch(`https://api.supabase.com/v1/projects/${project}/api-keys?reveal=true`,{
+  headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN},signal:AbortSignal.timeout(5000)});
+ if(!keysResponse.ok)return{ok:false,error:'REST_KEY_LOOKUP_UNAVAILABLE',http:keysResponse.status};
+ const keys=await keysResponse.json(),key=Array.isArray(keys)?keys.find(k=>k.name==='service_role')?.api_key:null;
+ if(!key)return{ok:false,error:'REST_SERVICE_KEY_UNAVAILABLE'};
+ const response=await fetch(`https://${project}.supabase.co/rest/v1/v11_long_regime_runtime?select=singleton,live_enabled,circuit_open&limit=1`,{
+  headers:{apikey:key,authorization:'Bearer '+key},signal:AbortSignal.timeout(5000)});
+ return response.ok?{ok:true,utc:new Date().toISOString(),rows:await response.json()}:{ok:false,http:response.status};
+});
 await record('readiness',()=>sql("select now() utc,now() at time zone 'Asia/Seoul' kst,pg_postmaster_start_time() started_at"));
 if(ev.results.readiness.ok){
  const queries={
