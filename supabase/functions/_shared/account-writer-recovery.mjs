@@ -5,7 +5,7 @@
 export function createWriterRecovery({repository,account,openOrders,positions,
   reconcile,attributeFills,protection,capacity,onEvent=()=>{}}) {
   return async ({signal}={}) => {
-    const observe=(stage,result)=>{try{onEvent({stage,result});}catch{}};
+    const observe=(stage,result)=>{try{Promise.resolve(onEvent({stage,result})).catch(()=>{});}catch{}};
     let lease;
     try {
       const begin=await repository.recoveryStatus(account);

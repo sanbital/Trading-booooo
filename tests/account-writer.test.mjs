@@ -120,6 +120,12 @@ test('validation authority rejection is durable and has no exchange side effect'
   const row=await f.row(r.execution_key);
   assert.equal(row.state,'REJECTED');assert.equal(row.terminal_reason,'AUTHORITY_EXPIRED');assert.equal(f.submits(),0);
 });
+test('asynchronous telemetry rejection cannot turn a filled order into an infrastructure failure',async t=>{
+  const f=await fixture(t),r=request();await f.repo.enqueue(r);
+  const result=await f.turn({onEvent:async()=>{throw Error('telemetry sink unavailable');}});
+  assert.equal(result.status,'FILLED');assert.equal((await f.row(r.execution_key)).state,'FILLED');
+  assert.equal(f.submits(),1);
+});
 
 for(const [field,code] of [['authority','AUTHORITY_EXPIRED'],['freshness','MARKET_DATA_STALE'],
   ['capacity','CAPACITY_REJECTED'],['circuitClosed','CIRCUIT_OPEN']]) {
