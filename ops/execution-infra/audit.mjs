@@ -154,7 +154,7 @@ await record('functions',async()=>{
  const r=await fetch(`https://api.supabase.com/v1/projects/${project}/functions`,{headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN},signal:AbortSignal.timeout(15000)});return r.ok?{ok:true,rows:await r.json()}:{ok:false,http:r.status};
 });
 const metrics=ev.results.live_safety_metrics?.rows?.[0];
-const alerts=metrics?evaluateSafetyMetrics(metrics):['SAFETY_METRICS_UNAVAILABLE'];
+const alerts=metrics?evaluateSafetyMetrics(metrics,{now:Date.parse(metrics.utc)}):['SAFETY_METRICS_UNAVAILABLE'];
 ev.alerts=alerts;seal();
 for(const code of alerts)console.log(`::error title=Execution infrastructure::${code}`);
 console.log('Encrypted evidence saved; no production changes.');
