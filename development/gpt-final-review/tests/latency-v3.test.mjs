@@ -3,13 +3,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync,existsSync} from 'node:fs';
 import {WIRE_OUTPUT_SCHEMA,OUTPUT_SCHEMA,MODEL,LIMITS,VERSION,validateShape,validateAnswer,expandWireAnswer,toWireAnswer,compactInput,parseApiResponse,decisionIdentity} from '../../../supabase/functions/_shared/gpt-final-review/contract.mjs';
-import {FinalReviewCoordinator,MemoryReviewStore} from '../../../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
+import {FinalReviewCoordinator,MemoryReviewStore as BaseMemoryReviewStore} from '../../../supabase/functions/_shared/gpt-final-review/coordinator.mjs';
 import {CandleReadCache} from '../../../supabase/functions/_shared/gpt-final-review/candle-cache.mjs';
 import {collectMarket} from '../../../supabase/functions/_shared/gpt-final-review/market.mjs';
 import {payloadFor} from '../../../supabase/functions/_shared/gpt-final-review/openai.mjs';
 import {gptFilterExecutable,gptReviewReadyToResume,runWithGptReview,setTestCoordinator} from '../../../supabase/functions/v10-lane-executor/gpt-final-review-adapter.mjs';
 import {T,candidate,bars,packet,answer,transport,config,marketData,rawResponse} from './helpers.mjs';
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
+// Match the durable store's snapshot CAS in this fixture, without changing the
+// byte-preserved production module graph merely to repair a memory-only test.
+class MemoryReviewStore extends BaseMemoryReviewStore {
+ async snapshot(key,owner,record){const old=this.rows.get(key);
+  assert.ok(old?.owner===owner&&old.state==='RUNNING','REVIEW_SNAPSHOT_CAS');
+  this.rows.set(key,{...old,record:structuredClone(record)});return true;
+ }
+}
 function service({decision='PASS',store=new MemoryReviewStore(),now=()=>T+1000,hold=null,mode='ENFORCE',fetchFn=null}={}){
  return new FinalReviewCoordinator({config:config(mode),store,now,apiKey:()=> 'MOCK_ONLY',market:async()=>marketData(),fetchFn:fetchFn??transport({decision,hold})});
 }
