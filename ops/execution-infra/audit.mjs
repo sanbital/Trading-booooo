@@ -2,6 +2,7 @@
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {randomBytes,createCipheriv,publicEncrypt,createHash,createHmac} from 'node:crypto';
+import {summarizeCohort} from './cohort-summary.mjs';
 const project='etaajwpernzrcdrifdnw';
 const event=process.env.GITHUB_EVENT_PATH?JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8')):{};
 const fullAudit=process.env.GITHUB_EVENT_NAME!=='schedule'||event.schedule==='23 0 * * *';
@@ -103,6 +104,9 @@ if(ev.results.readiness.ok){
  };
  const routine=new Set(['settings','activity','leases','positions','unresolved_orders','net_queue','stats']);
  for(const [name,query]of Object.entries(queries))if(fullAudit||routine.has(name))await record(name,()=>sql(query));
+ if(ev.results.same_decision_cohort?.ok)await record('same_decision_cohort_summary',async()=>({
+   ok:true,value:summarizeCohort(ev.results.same_decision_cohort.rows),
+ }));
 }
 await record('exchange_read_only',async()=>{
  const app=process.env.FLY_BINANCE_APP_NAME,token=process.env.LEARNING_ACCESS_TOKEN;
