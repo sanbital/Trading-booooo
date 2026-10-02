@@ -36,3 +36,11 @@ test('real HTTP 204 from a void PostgreSQL maintenance RPC records a completed j
  assert.equal(request.url,'https://db.example/rest/v1/rpc/leader20_clock_telemetry_maintain');
  assert.deepEqual(JSON.parse(request.body),{});
 });
+
+
+test('successful empty HTTP 200 RPC body is accepted; a malformed JSON body still fails',async()=>{
+ const repository=createSchedulerRepository({url:'https://db.example',key:'test-key',fetchImpl:async()=>new Response('',{status:200})});
+ assert.equal(await repository.rpc('leader20_clock_telemetry_maintain',{}),null);
+ const broken=createSchedulerRepository({url:'https://db.example',key:'test-key',fetchImpl:async()=>new Response('broken',{status:200})});
+ await assert.rejects(broken.rpc('leader20_clock_telemetry_maintain',{}),SyntaxError);
+});
