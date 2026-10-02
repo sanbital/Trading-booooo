@@ -84,3 +84,11 @@ test('permanent 4xx requests are marked for durable job disablement',async()=>{
   f.repository.finish=async(l,c,r)=>{permanent=r.permanent;return true;};
   await f.tick();await f.tick();assert.equal(permanent,true);await f.scheduler.stop();
 });
+test('HTTP 200 with failed endpoint outcome never advances the success clock or cursor',async()=>{
+  const f=fixture({runJob:async()=>({ok:false,error:'DB_TIMEOUT',cursor:'UNCOMMITTED'})});
+  let finished;
+  f.repository.finish=async(l,c,r)=>{finished=r;return true;};
+  await f.tick();await f.tick();assert.equal(finished.state,'FAILED');assert.equal(finished.cursor,undefined);
+  assert.equal(f.scheduler.state.jobs['new-signal'].lastSuccess,undefined);
+  await f.scheduler.stop();
+});
