@@ -16,8 +16,9 @@ async function addCapture(pg,symbol,{malformed=false}={}){
    bucket_complete:true,book_complete:true,trade_sequence_complete:true,coverage_25:true,flow_causal:true,trade_count:50,trade_event_at:book,trade_received_at:book,
    mid:malformed?'corrupt':p.mid,spread_bps:1.5,bid_25_usdt:20000,ask_25_usdt:18000,buy_quote_5s:3000,sell_quote_5s:1000,
    exchange_at:book,received_at:book,buy_vwap_450:p.mid*1.00015,sell_vwap_450:p.mid*.99985};
-  await pg.query("insert into doa_capture.live_micro(kind,symbol,at,received_at,payload) values('micro',$1,$2,$3,$4)",[symbol,end,new Date(p.end_ms+100).toISOString(),payload]);
+ await pg.query("insert into doa_capture.live_micro(kind,symbol,at,received_at,payload) values('micro',$1,$2,$3,$4)",[symbol,end,new Date(p.end_ms+100).toISOString(),payload]);
  }
+ await pg.exec('update doa_capture.control set heartbeat_at=clock_timestamp() where id=1');
  return at;
 }
 test('new migration applies without any provider/history schema and has restricted RPC grants',async()=>{

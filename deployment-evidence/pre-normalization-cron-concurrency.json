@@ -1,0 +1,267 @@
+[
+  {
+    "utc": "2026-10-02 11:14:22.381425+00",
+    "kst": "2026-10-02 20:14:22.381425",
+    "actual_cron_peak_after_external": 10,
+    "active": [
+      {
+        "jobid": 1,
+        "jobname": "trading-account-raw-retention",
+        "schedule": "*/5 * * * *",
+        "command_md5": "46e244364371fb98bb248c6cb6eeab8d"
+      },
+      {
+        "jobid": 2,
+        "jobname": "trading-account-hourly-rollup",
+        "schedule": "7 * * * *",
+        "command_md5": "ab10a3b1e3e98e7351cd17d23c381c8f"
+      },
+      {
+        "jobid": 3,
+        "jobname": "trading-account-hourly-retention",
+        "schedule": "17 3 * * *",
+        "command_md5": "0598a756e8b4591001e98393a834018e"
+      },
+      {
+        "jobid": 4,
+        "jobname": "trading-cron-log-retention",
+        "schedule": "47 3 * * *",
+        "command_md5": "8a7dacdd42959bdff26e74c482c59ff3"
+      },
+      {
+        "jobid": 7,
+        "jobname": "entry-admission-stall-detector",
+        "schedule": "*/5 * * * *",
+        "command_md5": "b989edc17195779dfd6e276658ee6e94"
+      },
+      {
+        "jobid": 10,
+        "jobname": "exchange-trade-sync-every-minute",
+        "schedule": "* * * * *",
+        "command_md5": "2ee8fd2436e0772cc9902ba218f73f5f"
+      },
+      {
+        "jobid": 17,
+        "jobname": "market-regime-v2-retention",
+        "schedule": "17 * * * *",
+        "command_md5": "60f63634b4a21af350545892f43ec6f7"
+      },
+      {
+        "jobid": 26,
+        "jobname": "market-risk-overlay-gap-detector",
+        "schedule": "2-59/5 * * * *",
+        "command_md5": "b3e4468c51fd345a2c1bbdde06d56c3f"
+      },
+      {
+        "jobid": 27,
+        "jobname": "mf-collector",
+        "schedule": "3-59/5 * * * *",
+        "command_md5": "ad3660f791839739dd9a1cb4ecfad6b5"
+      },
+      {
+        "jobid": 28,
+        "jobname": "mf-collect-latest",
+        "schedule": "7 * * * *",
+        "command_md5": "b295c4a2b19abed9a5ccc606ce3e7855"
+      },
+      {
+        "jobid": 29,
+        "jobname": "mf-collect-latest-2",
+        "schedule": "37 * * * *",
+        "command_md5": "0422c9ff93de2a1b40d9d6db6b1e63f4"
+      },
+      {
+        "jobid": 31,
+        "jobname": "v10-usdm-forward-retention",
+        "schedule": "37 3 * * *",
+        "command_md5": "370507b1e1cdd72718497f6ddf174504"
+      },
+      {
+        "jobid": 34,
+        "jobname": "v10-lane-runtime-health-v3",
+        "schedule": "4,19,34,49 * * * *",
+        "command_md5": "8452435d3703c1afb148502cbaf4453d"
+      },
+      {
+        "jobid": 35,
+        "jobname": "v10-lane-executor-health-v3",
+        "schedule": "8,18,28,38,48,58 * * * *",
+        "command_md5": "aca6754a1bb70fff8122f764dca1ca6e"
+      },
+      {
+        "jobid": 49,
+        "jobname": "v11-long-regime-generator",
+        "schedule": "*/5 * * * *",
+        "command_md5": "13cbeaec287dd4ffd2986552b4032dd2"
+      },
+      {
+        "jobid": 61,
+        "jobname": "v14-bear-risk-guardian-every-minute",
+        "schedule": "* * * * *",
+        "command_md5": "8ffc80e27cedb8db64766cf76d33c54d"
+      },
+      {
+        "jobid": 66,
+        "jobname": "v15-range-r7-guardian-every-minute",
+        "schedule": "* * * * *",
+        "command_md5": "f0950fcdb4c04ef0162e66731411c429"
+      },
+      {
+        "jobid": 79,
+        "jobname": "boo-recovery-db-monitor-20260916",
+        "schedule": "* * * * *",
+        "command_md5": "b920d62af755f863bece9625481f0956"
+      },
+      {
+        "jobid": 88,
+        "jobname": "fd1-final-recheck-track-5m",
+        "schedule": "*/5 * * * *",
+        "command_md5": "42bc38c9476a7728b06abbcd1daf0a67"
+      },
+      {
+        "jobid": 96,
+        "jobname": "v17-closed-fill-accounting-5m",
+        "schedule": "3-59/5 * * * *",
+        "command_md5": "5ff24c78ef791cbf3902f7debcfd0e46"
+      },
+      {
+        "jobid": 101,
+        "jobname": "doa-capture-retention",
+        "schedule": "17 3 * * *",
+        "command_md5": "c862e22844eebfe6fc3ea069e16e4f3f"
+      },
+      {
+        "jobid": 106,
+        "jobname": "self-evolution-research-minute",
+        "schedule": "*/5 * * * *",
+        "command_md5": "b7c84340ec3dd71c14c17c6bc99b9da6"
+      },
+      {
+        "jobid": 108,
+        "jobname": "leader20-private-archive",
+        "schedule": "*/2 * * * *",
+        "command_md5": "aa64527609bd0883c8e6e98ba6b01fa6"
+      },
+      {
+        "jobid": 111,
+        "jobname": "gpt-final-review-expire",
+        "schedule": "* * * * *",
+        "command_md5": "df7a80a21ceb61623d38ad91e431825f"
+      },
+      {
+        "jobid": 147,
+        "jobname": "leader20-clock-telemetry-maintenance-1m",
+        "schedule": "* * * * *",
+        "command_md5": "bf71a832276be7bd8b4736d42c563844"
+      },
+      {
+        "jobid": 152,
+        "jobname": "leader20-entry-reservation-sweep",
+        "schedule": "* * * * *",
+        "command_md5": "378f65adc13535422bdf5cddcaf903d9"
+      }
+    ],
+    "durations": [
+      {
+        "jobid": 1,
+        "runs": 5,
+        "p99_ms": 170.72668
+      },
+      {
+        "jobid": 2,
+        "runs": 1,
+        "p99_ms": 36.675
+      },
+      {
+        "jobid": 7,
+        "runs": 5,
+        "p99_ms": 55.49844
+      },
+      {
+        "jobid": 10,
+        "runs": 28,
+        "p99_ms": 57.13791
+      },
+      {
+        "jobid": 26,
+        "runs": 6,
+        "p99_ms": 77.9332
+      },
+      {
+        "jobid": 27,
+        "runs": 6,
+        "p99_ms": 1238.104
+      },
+      {
+        "jobid": 28,
+        "runs": 1,
+        "p99_ms": 67.158
+      },
+      {
+        "jobid": 34,
+        "runs": 2,
+        "p99_ms": 79.26702
+      },
+      {
+        "jobid": 35,
+        "runs": 3,
+        "p99_ms": 72.004
+      },
+      {
+        "jobid": 49,
+        "runs": 5,
+        "p99_ms": 34.8602
+      },
+      {
+        "jobid": 61,
+        "runs": 28,
+        "p99_ms": 35.32574
+      },
+      {
+        "jobid": 66,
+        "runs": 28,
+        "p99_ms": 29.92089
+      },
+      {
+        "jobid": 79,
+        "runs": 28,
+        "p99_ms": 87.3386
+      },
+      {
+        "jobid": 88,
+        "runs": 5,
+        "p99_ms": 72.98804
+      },
+      {
+        "jobid": 96,
+        "runs": 6,
+        "p99_ms": 198.81005
+      },
+      {
+        "jobid": 106,
+        "runs": 5,
+        "p99_ms": 65.22724
+      },
+      {
+        "jobid": 108,
+        "runs": 14,
+        "p99_ms": 41.51713
+      },
+      {
+        "jobid": 111,
+        "runs": 28,
+        "p99_ms": 102.51512
+      },
+      {
+        "jobid": 147,
+        "runs": 28,
+        "p99_ms": 1255.13106
+      },
+      {
+        "jobid": 152,
+        "runs": 28,
+        "p99_ms": 63.93803
+      }
+    ]
+  }
+]

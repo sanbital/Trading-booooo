@@ -1,3 +1,4 @@
+import { createInFlightRead } from "./venue-read-flight.mjs";
 import { createSchedulerOrchestrator } from "./scheduler-orchestrator.mjs";
 import { createScheduledJobRunner, createSchedulerRepository } from "./scheduler-repository.mjs";
 import { readFuturesModeEvidence } from "./futures-mode-evidence.mjs";
@@ -1205,9 +1206,13 @@ function validateFuturesLeverage(value) {
   return leverage;
 }
 
+const futuresExchangeInfoFlight = createInFlightRead();
 async function binanceFuturesExchangeInfo(symbol) {
   const market = validateBinanceSymbol(symbol);
-  const data = await publicBinanceFutures("/fapi/v1/exchangeInfo");
+  const data = await futuresExchangeInfoFlight(
+    "BINANCE_FUTURES_EXCHANGE_INFO",
+    () => publicBinanceFutures("/fapi/v1/exchangeInfo"),
+  );
   const row = (Array.isArray(data?.symbols) ? data.symbols : []).find((item) =>
     String(item?.symbol).toUpperCase() === market
   );

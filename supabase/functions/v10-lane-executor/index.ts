@@ -2,6 +2,7 @@
 // Decision authority is deterministic. Existing lease, receipt and reconciliation infrastructure remains intact.
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import {admitSchedulerRequest} from '../_shared/scheduler-admission.mjs';
+import {createAnalysisReadCoalescer} from './analysis-read-coalescer.mjs';
 import {createHostAccountScopes} from './account-host-scopes.mjs';
 import {currentExecutionContext,currentAccountOwner,contextualOwners,contextualState,executionContextHeaders,assertActiveExecutionRequest} from './account-scope-context.mjs';
 import {ENGINE,decidePosition} from '../_shared/deterministic/market-state.mjs';
@@ -32,7 +33,7 @@ const RELEASE_SCOPE=Object.freeze({SYMBOL:'SYMBOL',ACCOUNT:'ACCOUNT'}),CAPACITY_
 const env=n=>(Deno.env.get(n)||'').trim(),GW=env('BINANCE_FUTURES_ORDER_GATEWAY_URL').replace(/\/$/,'')||env('BINANCE_ORDER_GATEWAY_URL').replace(/\/$/,'')||env('ORDER_GATEWAY_URL').replace(/\/$/,''),SEC=env('BINANCE_FUTURES_GATEWAY_SHARED_SECRET')||env('BINANCE_GATEWAY_SHARED_SECRET')||env('GATEWAY_SHARED_SECRET');
 const NATIVE_STOP_ENABLED=env('V17_NATIVE_STOP')==='true',EXECUTION_LEASE_TTL_SECONDS=150;
 const leaseOwners=contextualOwners(),cycleBudgets=contextualState('budget');
-const shortWriterModes=new WeakMap(),accountHostScopes=new WeakMap();
+const shortWriterModes=new WeakMap(),accountHostScopes=new WeakMap(),analysisGatewayReads=new WeakMap();
 async function loadAccountExecutionMode(db){
  const r=await db.from('v17_execution_infrastructure_control').select('short_writer_enabled').eq('singleton',true).single();
  if(r.error||!r.data)throw Error('EXECUTION_INFRASTRUCTURE_CONTROL_UNAVAILABLE');
@@ -453,7 +454,7 @@ function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
     // A post-fill capacity refresh is a read-only safety barrier, not another trading
     // attempt. Give that one barrier its own tiny budget so the previous fill cannot
     // consume the very read required to prove whether another slot is safe.
-    const write=["create_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action);
+    const write=["create_order","cancel_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action);
     let left;
     try{
       const cycleLeft=!allowCycleBudgetExceeded&&cycle&&cycle!==budget?cycle.take(cost):Infinity;
@@ -477,7 +478,10 @@ function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
       }
       outgoing={...cmd,writer:{account_key:'binance_futures:futures',owner:c.owner,fence:c.fence,execution_key:await hashJson(cmd)}};
     }
-    const result=await exchangeGateway(outgoing,Math.max(1,Math.min(timeout,left,write?12000:2500)));
+    let coalescer=analysisGatewayReads.get(db);
+    if(!coalescer){coalescer=createAnalysisReadCoalescer();analysisGatewayReads.set(db,coalescer);}
+    const result=await coalescer(outgoing,()=>exchangeGateway(outgoing,Math.max(1,Math.min(timeout,left,write&&cmd.action!=="cancel_order"?12000:2500))),
+      {kind:shortAccountWriter(db)?currentExecutionContext(db)?.kind:null});
     await verifyExecutionLease(db,allowCycleBudgetExceeded);return result;
   };
 }
@@ -532,7 +536,12 @@ function iocAttemptEvidence({attemptNo,quote,quantity,limitPrice,at,prior=null,p
       totalWorstMargin:plan.totalWorstMargin??null}}:{})};
 }
 async function decideEntry(db,pair,candidateSymbol,openOrders,opts={}) {
-  return decideEntryWith(await opsControls(db),pair,candidateSymbol,openOrders,opts);
+  const controls=await opsControls(db);
+  if(shortAccountWriter(db)&&!freshPortfolio(pair.pf)){
+    Object.assign(pair,await readOpsPair(db,opsGateway(db),candidateSymbol));
+    openOrders=await opsGateway(db)({action:'v18_open_orders'},5000);
+  }
+  return decideEntryWith(controls,pair,candidateSymbol,openOrders,opts);
 }
 function decideEntryWith(controls,pair,candidateSymbol,openOrders,{proposedMargin=0,cashBuffer=0,managementFailures=[],existingPositionId=null}={}) {
   return evaluateEntryDecision({candidateSymbol,classification:pair.match,portfolio:pair.pf,openOrders,
@@ -1035,7 +1044,8 @@ async function openBull(db,s,openPositions,manual=null,attempt={},managementFail
  await requireEntryAuthority(db,s);await requireLeaderEntryControls(db);
  const f=s.features,seed=f.deterministic,gw=opsGateway(db),start=Date.now();
  if(f.sizingContractVersion!==SLOT_SIZING_CONTRACT.version||Number(f.targetMarginUsdt)!==MARGIN||Number(f.leverage)!==LEV||Number(f.exitPolicy?.stopPct)!==POLICY.stopPct)throw Error('SIZING_OR_STOP_CONTRACT_CHANGED');
- const [pair,openOrders,info,fees,mode,controls]=await Promise.all([readOpsPair(db,gw,s.symbol),gw({action:'v18_open_orders'},2500),gw({action:'symbol_info',market:s.symbol},2500),gw({action:'fees',market:s.symbol},2500),gw({action:'futures_position_mode'},2000),opsControls(db)]);
+ let [pair,openOrders,info,fees,mode,controls]=await Promise.all([readOpsPair(db,gw,s.symbol),gw({action:'v18_open_orders'},2500),gw({action:'symbol_info',market:s.symbol},2500),gw({action:'fees',market:s.symbol},2500),gw({action:'futures_position_mode'},2000),opsControls(db)]);
+ if(shortAccountWriter(db)&&!freshPortfolio(pair.pf)){pair=await readOpsPair(db,gw,s.symbol);openOrders=await gw({action:'v18_open_orders'},5000);}
  const fee=gatewayTakerFeeRate(fees,s.symbol);if(!Number.isFinite(fee)||fee>0.0005||!supportedFuturesMode(mode,Date.now(),5000))return {entered:false,reason:'ACCOUNT_FEE_OR_POSITION_MODE_UNVERIFIED'};
  await currentMarket(db,s.symbol,{return24h:seed.return24h,rank:seed.rank});
  const filters=symbolFilters(info),initialQuote=await gw({action:'quote',market:s.symbol},2000),sized=sizeEntry(Number(initialQuote.best_ask),filters.quantityStep,filters),
@@ -1131,10 +1141,18 @@ async function run(db,{recoveryReady=true}={}){
  pair=await readOpsPair(db);
  const at=new Date().toISOString(),health=managed.some(x=>x.error)||!pair.match.ok?'DEGRADED':pair.positions.length===0?'FLAT':
   pair.positions.every(p=>p.metadata?.exitProtection?.health==='PROTECTED'&&(p.metadata.exitProtection.orders??[]).some(o=>!o.terminal&&['ACTIVE','NEW'].includes(o.status)))?'PROTECTED':'SOFTWARE_ONLY';
- const w=await withAccountMutation(db,()=>db.from('v11_long_regime_runtime').update({last_cycle_started_at:new Date(started).toISOString(),last_cycle_completed_at:at,last_entry_evaluated_at:at,
+ const heartbeat={last_cycle_started_at:new Date(started).toISOString(),last_cycle_completed_at:at,last_entry_evaluated_at:at,
   last_account_evidence_at:new Date(pair.pf.observation.requested_at_ms).toISOString(),protection_health:health,entry_block_reason:entry.entered?null:entry.reason,
-  last_error:['DEGRADED','SOFTWARE_ONLY'].includes(health)?'DETERMINISTIC_CYCLE_DEGRADED':null,...(['FLAT','PROTECTED'].includes(health)?{last_success_at:at}:{}),...(managed.length&&!managed.some(x=>x.error)?{last_management_success_at:at}:{}),...(health==='PROTECTED'?{last_position_protection_success_at:at}:{}),...(entry.entered?{last_entry_at:at}:{}),updated_at:at}).eq('singleton',true));
- if(w.error)throw Error('HEARTBEAT_WRITE');return {ok:true,patch:PATCH,authority:ENGINE,managed,reconciliation,entry,recovery,symbolRecovery,protectionHealth:health,total_runtime_ms:Date.now()-started};
+  ...(managed.length&&!managed.some(x=>x.error)?{last_management_success_at:at}:{}),...(health==='PROTECTED'?{last_position_protection_success_at:at}:{}),...(entry.entered?{last_entry_at:at}:{}),updated_at:at};
+ await writeRuntimeTelemetry(db,heartbeat,['FLAT','PROTECTED'].includes(health),at);
+ return {ok:true,patch:PATCH,authority:ENGINE,managed,reconciliation,entry,recovery,symbolRecovery,protectionHealth:health,total_runtime_ms:Date.now()-started};
+}
+async function writeRuntimeTelemetry(db,heartbeat,successful,at){
+ await withAccountMutation(db,async()=>{
+  const wr=await db.from('v11_long_regime_runtime').update(heartbeat).eq('singleton',true);if(wr.error)throw Error('HEARTBEAT_WRITE');
+  const diagnostic=successful?{last_error:null,last_success_at:at}:{last_error:'DETERMINISTIC_CYCLE_DEGRADED'};
+  const dr=await db.from('v11_long_regime_runtime').update(diagnostic).eq('singleton',true).eq('circuit_open',false);if(dr.error)throw Error('HEARTBEAT_DIAGNOSTIC_WRITE');
+ });
 }
 Deno.serve(async req=>{
  if(req.method!=='POST')return res(405,{ok:false,error:'POST_ONLY'});

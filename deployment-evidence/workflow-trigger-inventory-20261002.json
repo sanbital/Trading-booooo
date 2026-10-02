@@ -1,0 +1,2103 @@
+{
+  "utc": "2026-10-02T11:20:00Z",
+  "kst": "2026-10-02T20:20:00+09:00",
+  "items": [
+    {
+      "path": ".github/workflows/account-writer-gateway-stage.yml",
+      "name": "Stage account writer gateway without activating cutover",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/activate-cec0040-20260920.yml",
+      "name": "Activate CEC0040 enforcement",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/adaptive-search-v6130.yml",
+      "name": "Adaptive Search v6.13.0",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/apply-exit-finalization-v7612.yml",
+      "name": "Apply exit finalization v7.6.12",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/apply-exit-idempotency-v7611.yml",
+      "name": "Apply exit idempotency v7.6.11",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/apply-exit-invariants-v769.yml",
+      "name": "Apply exit invariants v7.6.9",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-futures-entry-fix-pr.yml",
+      "name": "Apply Futures Entry Fix PR",
+      "triggers": [
+        "pull_request"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/apply-futures-entry-fix-target.yml",
+      "name": "Apply Futures Entry Fix Target",
+      "triggers": [
+        "pull_request_target"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/apply-futures-final-m1-advisory-v767.yml",
+      "name": "Apply futures final M1 advisory v7.6.7",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-futures-terminalization-v7613.yml",
+      "name": "Apply futures order terminalization v7.6.13",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/apply-late-recovery-v7610.yml",
+      "name": "Apply late recovery v7.6.10",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-lob-entry-quality-guard-20260813.yml",
+      "name": "Apply extreme mover entry guard 2026-08-14",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/apply-p10-orphan-entry-self-heal-r2.yml",
+      "name": "Apply and deploy P10 orphan entry self-heal R2",
+      "triggers": [
+        "pull_request_target"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/apply-p10-orphan-entry-self-heal.yml",
+      "name": "Apply and deploy P10 orphan entry self-heal",
+      "triggers": [
+        "pull_request_target"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/apply-p10-regime-transition-router-20260829.yml",
+      "name": "Apply P10 Regime Transition Exit Router",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-pnl-entry-guard-v766.yml",
+      "name": "Apply v7.6.6 PnL and entry guard",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-pre-t1-positive-net-guard-v768.yml",
+      "name": "Apply pre-T1 positive-net exit guard v7.6.8",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-prebreakout-burst-strategy.yml",
+      "name": "Apply pre-breakout burst strategy",
+      "triggers": [
+        "push",
+        "issues",
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-range-exit-v2-r2-20260829.yml",
+      "name": "Apply RANGE Exit V2 research R2",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-range-exit-v2-r3-20260829.yml",
+      "name": "Apply RANGE Exit V2 research R3",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-range-exit-v2-r4-20260829.yml",
+      "name": "Apply RANGE Exit V2 source-only R4",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-range-exit-v2-research-20260829.yml",
+      "name": "Apply RANGE Exit V2 research and launch full-universe replay",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-regime-hysteresis-stage1-20260901.yml",
+      "name": "Apply Regime Hysteresis Stage1",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-regime-hysteresis-stage1-r2-20260901.yml",
+      "name": "Apply Regime Hysteresis Stage1 R2",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-scalp-policy-v7-1-0.yml",
+      "name": "Guard v7.3.0 executable-stop parity",
+      "triggers": [
+        "push",
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/apply-v10-regime-transition-exit-20260901.yml",
+      "name": "Apply V10 Regime Transition Exit",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-v10-regime-transition-exit-r2-20260901.yml",
+      "name": "Apply V10 Regime Transition Exit R2",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-v10-regime-transition-exit-r3-20260901.yml",
+      "name": "Apply V10 Regime Transition Exit R3",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-v10-regime-transition-exit-r4-20260901.yml",
+      "name": "Apply V10 Regime Transition Exit R4",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/apply-v730-migration.yml",
+      "name": "Apply v7.3.0 exit-policy migration",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/audit-current-futures-closed-nonzero-v7613.yml",
+      "name": "Audit current futures closed-nonzero history v7.6.13",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/audit-exit-idempotency-v7611.yml",
+      "name": "Audit exit idempotency v7.6.11",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/audit-orphan-pending-futures-sells-v7613.yml",
+      "name": "Audit orphan pending futures sells v7.6.13",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/audit-v7612-progress.yml",
+      "name": "Audit v7.6.12 progress",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/audit-v7612-recovery-progress2.yml",
+      "name": "Audit v7.6.12 recovery progress 2",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/audit-zro-closed-trigger.yml",
+      "name": "Audit ZRO closed trigger",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/audit-zro-post-repair.yml",
+      "name": "Audit ZRO post repair",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/automation-coti-forensic.yml",
+      "name": "Automation COTI Forensic",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/automation-entry-cohort-summary.yml",
+      "name": "Automation Entry Cohort Summary",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/automation-performance-probe.yml",
+      "name": "Automation Performance Probe",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/automation-performance-readonly-20260904.yml",
+      "name": "One-shot Post-fix Performance Readonly 20260904",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/automation-performance-summary.yml",
+      "name": "Automation Performance Summary",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/automation-schema-probe.yml",
+      "name": "Automation Schema Probe",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/backtest-calibration.yml",
+      "name": "Weekly Backtest Calibration",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/backtest-probe.yml",
+      "name": "Backtest Probe (measure only)",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/binance-24h-logic-replay.yml",
+      "name": "Binance 24h Logic Replay",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/binance-marketwide-replay.yml",
+      "name": "Binance Market-Wide Replay",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/btc-market-sensor-release.yml",
+      "name": "BTC market sensor release and ten minute audit",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/capture-transport-diagnostics.yml",
+      "name": "Capture transport diagnostics",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/closed-native-reconciliation.yml",
+      "name": "Reconcile closed native stop records",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/collector-production-evidence.yml",
+      "name": "Collector production evidence",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/collector-resilience-tests.yml",
+      "name": "Collector resilience regression",
+      "triggers": [
+        "push",
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/collector-watchdog.yml",
+      "name": "Collector watchdog",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/continue-range-exit-v2-full-20260829.yml",
+      "name": "Continue RANGE Exit V2 full-universe validation",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/continuous-capture-20260926.yml",
+      "name": "Existing collector coverage recovery release",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/cost-aware-search-v6132.yml",
+      "name": "Cost Aware Search v6.13.2",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/dashboard-config-cache-sync.yml",
+      "name": "Dashboard Config Cache Sync",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/debug-zro-repair.yml",
+      "name": "Debug guarded ZRO repair",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deepseek-research-ci.yml",
+      "name": "AI strategy and capture regression",
+      "triggers": [
+        "push",
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/deploy-b06133-concurrent4-20260920.yml",
+      "name": "Deploy B06133 concurrent 4",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/deploy-b06133-entry-selection-20260920.yml",
+      "name": "Deploy B06133 entry selection",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/deploy-binance-gateway.yml",
+      "name": "Deploy Binance Static-IP Gateway (Paris)",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "fallback",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/deploy-boo-entry-gate-margin30-20260916.yml",
+      "name": "Deploy BOO entry gate and 30 USDT margin",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/deploy-cec0040-shadow-20260920.yml",
+      "name": "Deploy and activate CEC0040",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-entry-status-scan-stage-funnel.yml",
+      "name": "Deploy entry-status scan-stage funnel",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-executor-observation-ordering-20260916.yml",
+      "name": "Deploy executor observation ordering",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/deploy-half-hold-tp5-sl4-v750.yml",
+      "name": "Deploy half-hold TP5 SL4 v7.5.0",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-late-recovery-v7610.yml",
+      "name": "Deploy late recovery v7.6.10",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/deploy-lob-entry-quality-guard-20260813.yml",
+      "name": "Deploy verified LOB entry quality guard 2026-08-13",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/deploy-m1-core-score-observation-tolerance.yml",
+      "name": "Deploy M1 core score observation tolerance",
+      "triggers": [
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-market-autotrader-v707.yml",
+      "name": "Deploy pre-breakout burst strategy",
+      "triggers": [
+        "push",
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "fallback",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-market-performance.yml",
+      "name": "Deploy Market Performance Dashboard",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-order-gateway.yml",
+      "name": "Deploy Upbit Static-IP Gateway (Tokyo)",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "fallback",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/deploy-p10-preorder-hotfix-now.yml",
+      "name": "Deploy P10 pre-order ownership hotfix now",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-regime-hysteresis-consumers-20260901.yml",
+      "name": "Deploy Regime Hysteresis Consumers",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-regime-router-v1-research.yml",
+      "name": "Deploy isolated Regime Router research",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-regime-router-v5-research.yml",
+      "name": "Deploy isolated Regime Router V5 research",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-residual-tp10-sl4-v752.yml",
+      "name": "Deploy residual TP10 SL4 v7.5.2",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-residual-tp50-sl10-v751.yml",
+      "name": "Deploy residual TP50 SL10 v7.5.1",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-top10-15s-composite-pressure.yml",
+      "name": "Deploy Top10 15s composite pressure",
+      "triggers": [
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-v17-exit-reliability-20260908.yml",
+      "name": "Deploy V17 Exit Reliability",
+      "triggers": [
+        "workflow_dispatch",
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-v18-db-only-reconciliation-20260912.yml",
+      "name": "Deploy V18 DB-only reconciliation",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-v19-scope-aware-entry-control-20260912.yml",
+      "name": "Deploy V19 scope-aware entry control",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-v20-qv3-evidence-20260912.yml",
+      "name": "Deploy V20 QV3 audit evidence",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/deploy-v21-post-fill-drift-20260913.yml",
+      "name": "Deploy V21 post-fill drift guard",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/deploy-v24-entry-gate-20260915.yml",
+      "name": "Deploy V24 entry gate",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/deploy-v25-pullback-reaccel-entry-20260917.yml",
+      "name": "Deploy V25 pullback/re-acceleration entry timing",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/deploy-v26-entry-evidence-20260918.yml",
+      "name": "Deploy V26 entry-evidence repair",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/deploy-v27-entry-dispatch-latency-20260918.yml",
+      "name": "Deploy V27 entry dispatch latency",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/diagnose-prebreakout-patch.yml",
+      "name": "Diagnose pre-breakout patch",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/dynamic-flow-release-20260927.yml",
+      "name": "Dynamic flow lifecycle production release",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/entry-evidence-tests.yml",
+      "name": "Entry evidence regression",
+      "triggers": [
+        "pull_request",
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/evidence-uncertainty-v6132.yml",
+      "name": "Evidence Uncertainty v6.13.2",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/execution-infra-baseline.yml",
+      "name": "Verify preserved production v183 baseline",
+      "triggers": [
+        "pull_request",
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/execution-infrastructure-audit.yml",
+      "name": "Execution infrastructure encrypted audit",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/execution-regression-tests.yml",
+      "name": "Execution infrastructure complete regression",
+      "triggers": [
+        "pull_request"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/external-scheduler-cutover.yml",
+      "name": "Deliberate external scheduler and account writer flags",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/finalize-residual-tp50-sl10-v751.yml",
+      "name": "Finalize residual TP50 SL10 v7.5.1",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/finalize-zro-closed-audit-v7612.yml",
+      "name": "Finalize closed ZRO audit v7.6.12",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/finalize-zro-repair-and-resume.yml",
+      "name": "Finalize ZRO repair and resume entries",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/find-stale-manual-fill-contamination.yml",
+      "name": "Find stale manual fill contamination",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/fix-dashboard-freshness-20260828.yml",
+      "name": "Fix dashboard freshness 20260828",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/forensic-exit-idempotency-v7611.yml",
+      "name": "Forensic exit idempotency v7.6.11",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/forensic-futures-closed-nonzero.yml",
+      "name": "Forensic futures closed nonzero",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/forensic-futures-current-nonzero.yml",
+      "name": "Forensic current futures nonzero closed rows",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/forensic-zro-compact.yml",
+      "name": "Forensic ZRO compact",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/forensic-zro-reconcile.yml",
+      "name": "Forensic ZRO reconcile loop",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/forward-learning.yml",
+      "name": "Forward Learning and Auto Promotion",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/gateway-symbol-maintenance.yml",
+      "name": "Gateway one-character symbol maintenance",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/gpt-final-review-release-20260923.yml",
+      "name": "GPT final review release (manual)",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/harden-pnl-cost-basis-review3.yml",
+      "name": "Harden futures cost basis review 3",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/hotfix-autotrader-rate-gate-20260905.yml",
+      "name": "Hotfix autotrader DB execution gate",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/hotfix-gateway-engine-parity-v738.yml",
+      "name": "Hotfix gateway engine parity v7.3.8",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/hotfix-p10-futures-200-per-slot.yml",
+      "name": "Hotfix P10 Futures 200 Per Slot",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/hotfix-p10-futures-exact-200.yml",
+      "name": "Legacy P10 Exact 200 Validation",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/hotfix-p10-futures-margin-200.yml",
+      "name": "Hotfix P10 Futures Margin 200",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/hotfix-v10-live-capacity-snapshot-20261001.yml",
+      "name": "Hotfix V10 live capacity snapshot fallback",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/incident-recover-v10-lane-executor-20260919.yml",
+      "name": "Incident recovery -- restore v10-lane-executor (margin-only change)",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/inspect-current-scan-status.yml",
+      "name": "Inspect current scan status",
+      "triggers": [
+        "issues",
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/launch-range-exit-v2-20260829.yml",
+      "name": "Launch RANGE Exit V2 research",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/leader20-capacity-release.yml",
+      "name": "Leader10 monthly cost and private archive release",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/leader20-check.yml",
+      "name": "Leader20 candidate verification",
+      "triggers": [
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/leader20-multislot-hotfix-release.yml",
+      "name": "Leader20 multi-slot hotfix release",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/leader20-release.yml",
+      "name": "Leader20 deployment and observation",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/leader20-resource-optimize.yml",
+      "name": "Optimize existing capture resources and verify capacity",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/lob-calibration.yml",
+      "name": "LOB Calibration",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/main.deploy-supabase.yml",
+      "name": "Deploy Supabase Trading Engine",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/native-stop-read-proof.yml",
+      "name": "Native stop encrypted read proof",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/p10-exact-200-production.yml",
+      "name": "P10 Exact 200 Production Deploy",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/patch-autotrader-v714.yml",
+      "name": "Validate autotrader executable-stop policy",
+      "triggers": [
+        "push",
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/patch-dashboard-account-return-display.yml",
+      "name": "Patch Dashboard Account Return Display",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/patch-dashboard-futures-return-label.yml",
+      "name": "Patch Dashboard Futures Return Label",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/patch-futures-entry-leakage-v2.yml",
+      "name": "Patch Futures Entry Leakage V2",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/patch-futures-entry-leakage.yml",
+      "name": "Patch Futures Entry Leakage",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/patch-p10-preorder-latch-ownership.yml",
+      "name": "Patch P10 pre-order latch ownership",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "dead",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/platform-timeline-chunks.yml",
+      "name": "Export existing encrypted platform evidence in bounded chunks",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/platform-timeline.yml",
+      "name": "Read-only platform resource timeline",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/pre-execution-validity-bootstrap-20260930.yml",
+      "name": "Bootstrap pre-execution BUY validity production release",
+      "triggers": [
+        "workflow_dispatch",
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/pre-execution-validity-release-20260930.yml",
+      "name": "Pre-execution BUY validity production release",
+      "triggers": [
+        "workflow_dispatch",
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/production-cohort-tests.yml",
+      "name": "Verify production cohort reporting",
+      "triggers": [
+        "pull_request"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/protection-arbitration-release-20260927.yml",
+      "name": "Protection arbitration release (AI_PROTECTION_ARBITRATION_1)",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/range-exit-v2-full-validation-20260829.yml",
+      "name": "RANGE Exit V2 Full Validation",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/range-exit-v2-rollup-final-20260829.yml",
+      "name": "RANGE Exit V2 Rollup Final",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/read-position-constraint.yml",
+      "name": "Read trading position constraint",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/read-zro-geometry.yml",
+      "name": "Read ZRO geometry",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/recover-exit-idempotency-v7611.yml",
+      "name": "Recover exit idempotency v7.6.11 rollout",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/recover-v7612-zro-repair-v2.yml",
+      "name": "Recover v7.6.12 ZRO repair v2",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/recover-v7612-zro-repair-v3.yml",
+      "name": "Recover v7.6.12 ZRO repair v3",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/recover-v7612-zro-repair.yml",
+      "name": "Recover v7.6.12 ZRO repair rollout",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/regime-router-v1-backtest.yml",
+      "name": "Regime Router V1 full-market backtest",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/release-db-singleflight-collector-20260930.yml",
+      "name": "Release dynamic capture recovery 20260930",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/repair-and-rollout-exit-invariants.yml",
+      "name": "Repair dashboard and roll out exit invariants",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/repair-v10-executor-identity-20260901.yml",
+      "name": "Repair V10 Executor Identity",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/repair-v10-generator-executor-bridge-20260901.yml",
+      "name": "Repair V10 Generator Executor Bridge",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/research-binance-30d-marketwide.yml",
+      "name": "Research Binance 30d Marketwide Replay",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/resume-after-zro-v7612.yml",
+      "name": "Resume after verified ZRO v7.6.12",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/rollout-fill-attribution-and-finalize-zro.yml",
+      "name": "Rollout futures attribution guard and finalize ZRO",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/run-regime-router-v1-job.yml",
+      "name": "Run isolated Regime Router V3 job",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/run-regime-router-v4-job.yml",
+      "name": "Run Regime Router V4 full-market backtest",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/run-regime-router-v5-job.yml",
+      "name": "Run Regime Router V5 rolling research job",
+      "triggers": [
+        "workflow_dispatch",
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/scalp-calibration.yml",
+      "name": "Scalp Calibration",
+      "triggers": [
+        "schedule",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/self-evolution-validation.yml",
+      "name": "Self evolution validation",
+      "triggers": [
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/signal-generator-parity.yml",
+      "name": "Signal generator production parity",
+      "triggers": [
+        "pull_request"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/sync-dashboard-version-v751.yml",
+      "name": "Sync dashboard version v7.5.1",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/sync-version-6124.yml",
+      "name": "Synchronize v6.12.4 release version",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/timeout-exit-integrity.yml",
+      "name": "Timeout Exit Integrity",
+      "triggers": [
+        "push",
+        "workflow_run",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/toggle-v17-native-stop.yml",
+      "name": "Toggle V17 Native Stop",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/top20-book-bootstrap.yml",
+      "name": "Top20 collector book initialization",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/top20-clock-release.yml",
+      "name": "Top20 clock capture release",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/trading-control.yml",
+      "name": "Auto Trading Control",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-audit-freeze.yml",
+      "name": "V10 Audit Freeze",
+      "triggers": [
+        "workflow_dispatch",
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-continuation-confirm.yml",
+      "name": "V10 RANGE BEAR Independent Confirmation",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-continuation-research.yml",
+      "name": "V10 Continuation RANGE BEAR Research",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-continuation-xs.yml",
+      "name": "V10 Cross-Sectional RANGE BEAR Research",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-lanes-v3-parity.yml",
+      "name": "V10 Lanes V3 Parity",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-lanes-v3-signal-check.yml",
+      "name": "V10 Lanes V3 Signal Generator Check",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-r3-final-test.yml",
+      "name": "V10 R3 Locked Final Test",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-r3-mechanisms.yml",
+      "name": "V10 R3 RANGE BEAR Mechanism Discovery",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-r4-robustness.yml",
+      "name": "V10 R4 Robustness Surface",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-r5-range-2026-supplement-v2.yml",
+      "name": "V10 R5 RANGE 2026 Supplemental OOS V2",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/v10-r5-range-confirm.yml",
+      "name": "V10 R5 RANGE Locked Confirmation",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-r5-range-final-test.yml",
+      "name": "V10 R5 RANGE Final Test",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-r5-three-period.yml",
+      "name": "V10 R5 Three-Period Tactical Validation",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-r7-research-v2.yml",
+      "name": "V10 R7 New Mechanism Research V2",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-r7-research-v3.yml",
+      "name": "V10 R7 New Mechanism Research V3",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v10-r7-research.yml",
+      "name": "V10 R7 New Mechanism Research",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v18-approved-incident-recovery.yml",
+      "name": "V18 approved TAC incident recovery",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v18-postgres-deployment-gate.yml",
+      "name": "V18 PostgreSQL and PostgREST deployment gate",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/v18-selective-gateway-release.yml",
+      "name": "V18 selective Binance gateway release",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/v21-account-market-evidence-20260913.yml",
+      "name": "V21 account market evidence 2026-09-13",
+      "triggers": [
+        "push"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/validate-dashboard.yml",
+      "name": "Validate Trading Dashboard",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/verify-deploy-p10-regime-transition-20260829.yml",
+      "name": "Verify and Deploy P10 Regime Transition",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/verify-futures-exit-policy.yml",
+      "name": "Verify futures exit policy",
+      "triggers": [
+        "pull_request"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/verify-m1-core-score-production.yml",
+      "name": "Verify M1 core score production",
+      "triggers": [
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/verify-prebreakout-runtime.yml",
+      "name": "Verify pre-breakout runtime",
+      "triggers": [
+        "push",
+        "issues",
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/verify-top10-15s-composite-pressure.yml",
+      "name": "Verify Top10 15s composite pressure",
+      "triggers": [
+        "pull_request",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/verify-v21-post-fill-drift-20260913.yml",
+      "name": "Verify deployed V21 post-fill drift guard",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/verify-zro-zero-balance.yml",
+      "name": "Verify ZRO zero balance",
+      "triggers": [
+        "push"
+      ],
+      "classification": "migration/one-shot",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": true
+    },
+    {
+      "path": ".github/workflows/version-sync-v6130.yml",
+      "name": "Version Sync v6.13.0",
+      "triggers": [
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    },
+    {
+      "path": ".github/workflows/workflow-lint.yml",
+      "name": "Workflow Lint",
+      "triggers": [
+        "pull_request",
+        "push",
+        "workflow_dispatch"
+      ],
+      "classification": "production active",
+      "evidence": "static trigger and deployment command inventory; execution owner not assumed",
+      "automatic_mutation_possible": false
+    }
+  ],
+  "limit": "Static inventory is not runtime usage proof. Unknown owners and fallback files retained; only proven retired automatic trigger disabled."
+}

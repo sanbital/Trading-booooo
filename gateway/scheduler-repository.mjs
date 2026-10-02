@@ -15,7 +15,11 @@ export function createSchedulerRepository({url,key,fetchImpl=fetch}) {
       ...(body===undefined?{}:{body:JSON.stringify(body)}),
     });
     if(!response.ok)throw error(response.status);
-    return response.json();
+    // PostgreSQL void RPCs return HTTP 204 with no JSON document. The SQL
+    // completed successfully; parsing that empty body is not a job failure.
+    if(response.status===204)return null;
+    const bodyText=await response.text();
+    return bodyText.trim()?JSON.parse(bodyText):null;
   };
   const args=l=>({p_scheduler:l.scheduler_key,p_owner:l.owner,p_fence:l.fence});
   const rpc=(name,body,signal)=>request(`rpc/${name}`,body,signal);
@@ -40,9 +44,9 @@ export function createScheduledJobRunner({url,repository,staticTokens={},fetchIm
   return async(job,{signal})=>{
     const target=job.target;
     if(target?.rpc) {
-      const bound={leader20_execution_expire:{max:100,fallback:30},gpt_final_review_recover_ready:{max:100,fallback:30},trading_scheduler_trim_ticks:{max:5000,fallback:5000}}[target.rpc];
+      const bound={gpt_final_review_expire:{max:100,fallback:30},leader20_clock_telemetry_maintain:{args:{}},leader20_entry_reservation_sweep:{args:{}},leader20_execution_expire:{max:100,fallback:30},gpt_final_review_recover_ready:{max:100,fallback:30},trading_scheduler_trim_ticks:{max:5000,fallback:5000}}[target.rpc];
       if(!bound)throw Object.assign(Error('UNREGISTERED_JOB_RPC'),{status:400});
-      return repository.rpc(target.rpc,{p_limit:Math.min(bound.max,Math.max(1,target.limit??bound.fallback))},signal);
+      return repository.rpc(target.rpc,bound.args??{p_limit:Math.min(bound.max,Math.max(1,target.limit??bound.fallback))},signal);
     }
     if(!ALLOWED_ENDPOINTS.has(target?.endpoint))throw Object.assign(Error('UNREGISTERED_JOB_ENDPOINT'),{status:400});
     const header=AUTH_HEADERS[target.endpoint];
@@ -58,6 +62,8 @@ export function createScheduledJobRunner({url,repository,staticTokens={},fetchIm
       }),
     });
     if(!response.ok)throw error(response.status);
-    return response.json();
+    const result=await response.json();
+    if(result?.ok===false)throw Object.assign(Error('ENDPOINT_REPORTED_FAILURE'),{status:503});
+    return result;
   };
 }

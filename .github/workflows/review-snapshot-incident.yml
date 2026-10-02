@@ -1,0 +1,50 @@
+name: Review exact snapshot telemetry incident without circuit reset
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        type: string
+        required: true
+      expected_commit:
+        type: string
+        required: true
+      gateway_commit:
+        type: string
+        required: true
+      executor_version:
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: review-snapshot-epoch-145
+  cancel-in-progress: false
+jobs:
+  review:
+    if: github.repository == 'sanbital/Trading-booooo' && github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Review signed fresh venue proof and classify exact epoch
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          REVIEW_VERSION: ${{ inputs.version }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          REVIEW_GATEWAY_COMMIT: ${{ inputs.gateway_commit }}
+          REVIEW_EXECUTOR_VERSION: ${{ inputs.executor_version }}
+        run: node ops/execution-infra/review-snapshot-incident.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: snapshot-review-${{ github.run_id }}
+          path: infra-evidence/*.encrypted.json
+          retention-days: 30
+          if-no-files-found: error
