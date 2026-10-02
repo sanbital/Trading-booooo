@@ -1,0 +1,53 @@
+{
+  "observed_utc": "2026-10-02T02:54:39Z",
+  "observed_kst": "2026-10-02 11:54:39 KST",
+  "production_complete": false,
+  "trading_deployment": false,
+  "db_probe": {
+    "start_utc": "2026-10-02T02:54:23Z",
+    "end_utc": "2026-10-02T02:54:39Z",
+    "start_kst": "2026-10-02 11:54:23 KST",
+    "result": "DB_CONNECTION_TIMEOUT",
+    "actual_settings_observed": false
+  },
+  "candidate": {
+    "commit": "0f5b796d23f4526746611dd6e79084f1fcd29bdb",
+    "run": 36957402707,
+    "tests": 1894,
+    "passed": 1894,
+    "failed": 0,
+    "skipped": 0,
+    "finished_utc": "2026-10-02T02:51:18.749Z",
+    "finished_kst": "2026-10-02 11:51:18.749 KST"
+  },
+  "scheduler_stage": {
+    "commit": "91574a8d70a3c28fac935ed464722d496a8c6af1",
+    "isolated_run": 36957617548,
+    "result": "success",
+    "live_recovery_binding_complete": false
+  },
+  "retired_workflows": {
+    "merge_commit": "bc20343b1493af5f80f7b23ad55a142b3f58a072",
+    "merged_utc": "2026-10-02T02:47:14Z",
+    "merged_kst": "2026-10-02 11:47:14 KST",
+    "workflows": [
+      {
+        "id": 362538481,
+        "state": "disabled_manually"
+      },
+      {
+        "id": 362560048,
+        "state": "disabled_manually"
+      }
+    ],
+    "required_reviewers_verified": false
+  },
+  "remaining": [
+    "actual executor validation/order/fill/position/protection bindings",
+    "live schema/cron/config/ledger backups",
+    "measured writer critical-section p99",
+    "reconciliation-first recovery registration",
+    "staged trading deployment and scheduler cutover",
+    "30-minute/2-hour/24-hour same-decision production evidence"
+  ]
+}
