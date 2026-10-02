@@ -1,12 +1,13 @@
 name: Verify execution writer infrastructure
 on:
   pull_request:
-    branches: [main]
+    branches: [main, infra/regression-harness-repair]
     paths:
       - gateway/**
       - supabase/functions/_shared/account-order-writer.mjs
+      - supabase/functions/_shared/account-writer-*.mjs
       - supabase/migrations/*account_writer*
-      - tests/account-writer.test.mjs
+      - tests/account-writer*.test.mjs
       - .github/workflows/execution-writer-tests.yml
   workflow_dispatch:
 permissions:
@@ -26,4 +27,4 @@ jobs:
         run: |
           export PGLITE_MODULE="$RUNNER_TEMP/infra-tests/node_modules/@electric-sql/pglite/dist/index.js"
           node --check gateway/server.mjs
-          node --test --test-reporter=tap tests/account-writer.test.mjs gateway/*.test.mjs
+          node --test --test-reporter=tap tests/account-writer*.test.mjs gateway/*.test.mjs
