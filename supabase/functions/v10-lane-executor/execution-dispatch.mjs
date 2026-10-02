@@ -45,3 +45,10 @@ const DRAINABLE_FINAL_STATES=new Set([
 export function executionDispatchAllowsNext(finalization){
   return finalization?.updated===true&&DRAINABLE_FINAL_STATES.has(String(finalization?.row?.state??''));
 }
+
+/** No new entry or exchange call. Completes only same-decision durable truth. */
+export async function reconcileExecutionDispatches(db){
+  const r=await db.rpc('leader20_reconcile_execution_dispatches',{p_limit:20});
+  if(r.error)throw Error(`EXECUTION_DISPATCH_RECONCILIATION:${r.error.message}`);
+  return r.data;
+}

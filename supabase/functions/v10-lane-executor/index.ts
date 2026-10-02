@@ -30,7 +30,7 @@ import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Sc
 import {E1_POLICY,advanceE1,e1QuoteEvidence,fetchE1AggTrades,startE1} from "../_shared/leader-e1-runtime.mjs";
 import {V24_ADAPTER_VERSION,v24EntryGate} from "./v24-entry-adapter.mjs";
 import {IOC_RETRY_POLICY,planAggressiveIocRetry} from "./entry-ioc-retry.mjs";
-import {EXECUTION_DISPATCH_STATE,claimExecutionDispatch,transitionExecutionDispatch,restrictExecutionDispatchCandidates,executionDispatchAllowsNext} from "./execution-dispatch.mjs";
+import {EXECUTION_DISPATCH_STATE,claimExecutionDispatch,transitionExecutionDispatch,restrictExecutionDispatchCandidates,executionDispatchAllowsNext,reconcileExecutionDispatches} from "./execution-dispatch.mjs";
 import {RETRY_RECONCILIATION_VERSION,retryProofCandidate,parentTradeStart,proveUnplacedPartialRetry} from "./entry-retry-reconciliation.mjs";
 import {ENTRY_LIFECYCLE_VERSION,lifecycleNote,noteChanged,gptTerminalReason,expiredTriggerReason,agedOutReason,mergeLifecycleNote,technicalFailureNote,isSymbolLocalSelectionError} from "./entry-lifecycle.mjs";
 import {ENTRY_CAPACITY_VERSION,UNUSED_SLOT_REASON,accountStopReason,budgetCovers,entryCapacity,ledgerEntry,slotCostUsdt,slotReasonOf,unusedSlotAccounting} from "./entry-capacity.mjs";
@@ -2455,6 +2455,7 @@ async function run(db) {
     pair=await readOpsPair(db);
     pendingAge=Math.max(0,...pair.orders.filter(o=>["PLANNED","DISPATCHED","PARTIALLY_FILLED","UNKNOWN","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state)).map(o=>(Date.now()-Date.parse(o.created_at))/1000),...pair.match.issues.filter(i=>i.positionId).map(i=>(Date.now()-Date.parse(pair.positions.find(p=>p.id===i.positionId)?.last_evaluated_at))/1000));
     reconciliation=await reconcileOps(db,pair);
+    await reconcileExecutionDispatches(db);
     pair=await readOpsPair(db);
     health=managed.some(x=>x.error||x.skipped)?"DEGRADED":!pair.match.ok?"DEGRADED":pair.positions.length===0?"FLAT":
       pair.positions.every(p=>protectedIds.has(p.id)||(p.metadata?.exitProtection?.health==="PROTECTED"&&
@@ -3547,6 +3548,7 @@ async function claimAndExecuteDispatchUnderAccountLease(db,signalId=null){
     skipped:claim.reason??"EXECUTION_DISPATCH_NOT_CLAIMABLE"};
 }
 async function drainExecutionDispatchesUnderAccountLease(db,signalId=null){
+  await reconcileExecutionDispatches(db);
   const completed=[];let last=null,terminalizedWithoutClaim=0;
   // Top10 is the immutable per-slot universe and MAX_SLOTS is the account ceiling.
   // This bound prevents a malformed outbox from turning one lease into an open loop.

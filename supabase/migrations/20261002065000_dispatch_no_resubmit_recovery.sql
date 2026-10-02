@@ -20,7 +20,7 @@ declare
   at_time timestamptz:=clock_timestamp();
   remaining_ms numeric; existing_order uuid;
 begin
-  if p_owner is null or p_min_remaining_ms<1000 or p_min_remaining_ms>60000 then
+  if p_owner is null or p_min_remaining_ms is null or p_min_remaining_ms<1000 or p_min_remaining_ms>60000 then
     raise exception 'EXECUTION_CLAIM_INPUT';
   end if;
 
@@ -151,6 +151,11 @@ begin
   update public.leader20_execution_dispatches set state=next_state,order_id=coalesce(p_order_id,order_id),
    claim_lease_until=least(valid_until,at_time+interval '90 seconds'),updated_at=at_time
    where signal_id=p_signal_id returning * into d;
+ elsif next_state='UNKNOWN' then
+  update public.leader20_execution_dispatches set state='UNKNOWN',order_id=coalesce(p_order_id,order_id),
+   claim_owner=null,claim_lease_until=null,terminal_at=null,terminal_reason=null,
+   last_error=left(coalesce(p_error,'SUBMISSION_OUTCOME_UNKNOWN'),500),updated_at=at_time
+   where signal_id=p_signal_id returning * into d;
  else
   update public.leader20_execution_dispatches set state=next_state,order_id=coalesce(p_order_id,order_id),
    terminal_at=at_time,terminal_reason=next_state,last_error=left(p_error,500),claim_lease_until=null,
@@ -173,7 +178,7 @@ declare d public.leader20_execution_dispatches%rowtype;o public.v11_long_regime_
  at_time timestamptz:=clock_timestamp();settled int:=0;seen int:=0;total numeric;target numeric;posid uuid;
  evidence jsonb;executed numeric;requested numeric;
 begin
- if p_limit not between 1 and 50 then raise exception 'DISPATCH_RECONCILIATION_LIMIT';end if;
+ if p_limit is null or p_limit not between 1 and 50 then raise exception 'DISPATCH_RECONCILIATION_LIMIT';end if;
  for d in select * from public.leader20_execution_dispatches
    where state='UNKNOWN' or (state='ORDER_SUBMITTING' and claim_lease_until<=at_time)
    order by updated_at,signal_id for update skip locked limit p_limit
@@ -231,3 +236,5 @@ end $$;
 revoke all on function public.leader20_reconcile_execution_dispatches(integer) from public,anon,authenticated;
 grant execute on function public.leader20_reconcile_execution_dispatches(integer) to service_role;
 comment on function public.leader20_reconcile_execution_dispatches(integer) is 'DISPATCH_NO_RESUBMIT_1: same-decision durable receipt and position proof only; no exchange submit or stale BUY replay.';
+
+create index if not exists leader20_dispatch_recovery_pending on public.leader20_execution_dispatches(updated_at,signal_id) where state in ('UNKNOWN','ORDER_SUBMITTING');

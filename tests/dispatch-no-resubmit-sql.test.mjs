@@ -77,3 +77,6 @@ for(const [name,opts] of [['wrong decision',{wrongDecision:true}],['missing attr
  const f=await fixture(t),id=await f.insert({state:'UNKNOWN'});await orderEvidence(f,id,opts);const r=await f.db.query('select leader20_reconcile_execution_dispatches(20) result');
  assert.equal(r.rows[0].result.reconciled,0);assert.equal((await f.row(id)).state,'UNKNOWN');assert.equal((await f.claim(id)).claimed,false);
 });
+test('invalid limits cannot open an unbounded recovery scan',async t=>{
+ const f=await fixture(t);for(const limit of [null,0,51])await assert.rejects(f.db.query('select leader20_reconcile_execution_dispatches($1)',[limit]),/DISPATCH_RECONCILIATION_LIMIT/);
+});
