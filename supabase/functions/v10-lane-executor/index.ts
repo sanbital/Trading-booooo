@@ -1902,11 +1902,19 @@ function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
     // A post-fill capacity refresh is a read-only safety barrier, not another trading
     // attempt. Give that one barrier its own tiny budget so the previous fill cannot
     // consume the very read required to prove whether another slot is safe.
-    const cycleLeft=!allowCycleBudgetExceeded&&cycle&&cycle!==budget?cycle.take(cost):Infinity;
-    const left=Math.min(budget.take(cost),cycleLeft);
-    await verifyExecutionLease(db,allowCycleBudgetExceeded);
     const write=["create_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action);
-    if(allowCycleBudgetExceeded&&write)throw Error("CAPACITY_REFRESH_WRITE_FORBIDDEN");
+    let left;
+    try{
+      const cycleLeft=!allowCycleBudgetExceeded&&cycle&&cycle!==budget?cycle.take(cost):Infinity;
+      left=Math.min(budget.take(cost),cycleLeft);
+      await verifyExecutionLease(db,allowCycleBudgetExceeded);
+      if(allowCycleBudgetExceeded&&write)throw Error("CAPACITY_REFRESH_WRITE_FORBIDDEN");
+    }catch(error){
+      // Never stamp the verification AFTER transport as a pre-send refusal.
+      if(write)throw Object.assign(new Error(String(error?.message??error)),
+        {exchangeSubmissionAttempted:false,submissionPhase:"PRE_SEND"});
+      throw error;
+    }
     const result=await exchangeGateway(cmd,Math.max(1,Math.min(timeout,left,write?12000:2500)));
     await verifyExecutionLease(db,allowCycleBudgetExceeded);return result;
   };

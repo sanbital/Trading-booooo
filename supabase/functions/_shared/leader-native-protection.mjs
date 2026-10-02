@@ -16,7 +16,7 @@ const eq=(a,b)=>Math.abs(a-b)<=Math.max(1e-10,Math.abs(b)*1e-8);
 // an exact exchange receipt resolves them.
 const DEFINITIVE_CREATE_REJECTION=/^(?:V18_STOP_OWNERSHIP_CHANGED|GW_400:Order would immediately trigger\.?)$/;
 const definitiveRejectedSubmission=o=>o?.terminal!==true&&!o?.ackAt&&!o?.algoId&&!o?.actualOrderId&&
-  DEFINITIVE_CREATE_REJECTION.test(String(o?.submitError??''));
+  (o?.submissionEvidence?.phase==='NOT_SENT'||DEFINITIVE_CREATE_REJECTION.test(String(o?.submitError??'')));
 
 // Persist what is actually known, rather than leaving the last successful label in
 // place forever.  In particular, a terminal REJECTED order is not PROTECTED.
@@ -253,6 +253,11 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
     catch(error){
       const after=copy(state),item=after.protection.orders.find(x=>x.clientId===clientId);
       item.submitError=String(error?.message??error);
+      // Only the host's explicit pre-transport marker proves no mutation was sent.
+      // The same budget/lease error after transport remains UNKNOWN: never infer
+      // submission phase from an error name, an abort or a missing lookup.
+      if(error?.exchangeSubmissionAttempted===false&&error?.submissionPhase==='PRE_SEND')
+        item.submissionEvidence={phase:'NOT_SENT',source:'HOST_PRE_TRANSPORT',at:clock(),error:item.submitError};
       if(definitiveRejectedSubmission(item)){
         item.status='REJECTED';item.terminal=true;
         item.terminalResolution={kind:'DEFINITIVE_CREATE_REJECTION',at:clock(),
