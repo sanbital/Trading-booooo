@@ -48,10 +48,16 @@ export function createGatewayProtection(db,gateway,verifyLease) {
   async queryStop(clientAlgoId,symbol){const a=await gateway({action:'v17_query_stop',clientAlgoId,symbol});
    if(a.actualOrderId)bindings.set(String(a.actualOrderId),{clientAlgoId,symbol});return a;},
   async createStop(params){
-   const pf=await gateway({action:'p10_portfolio'},2500);
-   const rows=pf?.positions?.filter(p=>(p.market??p.symbol)===params.symbol)??[];
-   if(!freshPortfolio(pf)||rows.length!==1||rows[0].side!=='LONG'||Number(rows[0].quantity)!==params.quantity)throw Error('V18_STOP_OWNERSHIP_CHANGED');
-   await verifyLease();return gateway({action:'v17_create_stop',params});},
+   // These checks precede the mutation gateway call. Persist that fact even when
+   // a read times out; the later mutation call must keep its own transport phase.
+   try{
+    const pf=await gateway({action:'p10_portfolio'},2500);
+    const rows=pf?.positions?.filter(p=>(p.market??p.symbol)===params.symbol)??[];
+    if(!freshPortfolio(pf)||rows.length!==1||rows[0].side!=='LONG'||Number(rows[0].quantity)!==params.quantity)throw Error('V18_STOP_OWNERSHIP_CHANGED');
+    await verifyLease();
+   }catch(error){throw Object.assign(new Error(String(error?.message??error)),
+     {exchangeSubmissionAttempted:false,submissionPhase:'PRE_SEND'});}
+   return gateway({action:'v17_create_stop',params});},
   async cancelStop(clientAlgoId,symbol){await verifyLease();return gateway({action:'v17_cancel_stop',clientAlgoId,symbol});},
   async readPortfolio(){return gateway({action:'p10_portfolio'},2500);},
   async getFill(actualOrderId,symbol){const b=bindings.get(String(actualOrderId));

@@ -207,3 +207,30 @@ test(`R failed 102 replacement keeps 101 ACTIVE: ${error}`,async()=>{
  assert.equal(resident.status,'ACTIVE');assert.equal(resident.spec.params.triggerPrice,101);
  assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
 });
+
+for(const error of ['V18_API_BUDGET_EXHAUSTED','V17_EXECUTION_LEASE_EXPIRED','The signal has been aborted']) {
+ test(`explicit pre-transport ${error} terminates without querying or resubmitting`,async()=>{
+  const f=fixture();f.exchange.createStop=async()=>{throw Object.assign(Error(error),{exchangeSubmissionAttempted:false,submissionPhase:'PRE_SEND'})};
+  const r=await f.api().ensure('position-1',f.request),o=r.state.protection.orders[0];
+  assert.equal(o.terminal,true);assert.equal(o.submissionEvidence.phase,'NOT_SENT');
+  const before=await f.store.load('position-1'),closed=clone(before);closed.position.state='CLOSED';closed.position.remainingQuantity=0;
+  await f.store.compareAndSwap('position-1',before.version,closed);f.calls.length=0;
+  const after=await f.api().ensure('position-1',f.request);
+  assert.equal(after.state.protection.health,'POSITION_CLOSED');assert.deepEqual(f.calls,[]);
+ });
+ test(`unmarked or post-transport ${error} remains ambiguous even with negative lookup`,async()=>{
+  const f=fixture();f.exchange.createStop=async()=>{throw Error(error)};
+  await f.api().ensure('position-1',f.request);const before=await f.store.load('position-1'),closed=clone(before);
+  closed.position.state='CLOSED';closed.position.remainingQuantity=0;closed.protection.orders[0].status='CANCEL_PENDING';
+  await f.store.compareAndSwap('position-1',before.version,closed);
+  const state=await f.api().refresh('position-1');assert.equal(state.protection.orders[0].terminal,false);
+  assert.equal(state.protection.health,'RECONCILIATION_PENDING');
+ });
+}
+test('acceptance followed by budget failure recovers the same client ID without a second POST',async()=>{
+ const f=fixture(),create=f.exchange.createStop;
+ f.exchange.createStop=async p=>{await create(p);throw Error('V18_API_BUDGET_EXHAUSTED')};
+ assert.equal((await f.api().ensure('position-1',f.request)).status,'RECONCILIATION_PENDING');
+ assert.equal((await f.api().ensure('position-1',f.request)).status,'PROTECTED');
+ assert.equal(f.calls.filter(x=>x[0]==='create').length,1);
+});
