@@ -967,6 +967,33 @@ async function reconcileNativeCloseBeforeDispatch(db,p,fraction,gw=opsGateway(db
     return null;
   }
 }
+// No AI/capture/scan in this protection phase. Uses the same hard floor and already
+// GPT-approved resident levels as manageLeader; no new exit/entry policy.
+async function installEntryNativeProtection(db,p,gw,manualSymbols=[]){
+  await verifyExecutionLease(db);
+  const latest=await db.from("v11_long_regime_positions").select("*").eq("id",p.id).single();
+  if(latest.error||!latest.data)throw Error("ENTRY_NATIVE_POSITION_READ");p=latest.data;
+  if(p.state!=="OPEN")return {status:p.state==="CLOSED"?"CLOSED":"RECONCILIATION_PENDING",position:p};
+  const meta=rec(p.metadata),r5=[EXIT_REVIEW_R5.policyVersion,P142_POLICY_VERSION].includes(meta.leaderExitPolicyVersion),
+    policy={...POLICY,...(r5?EXIT_REVIEW_R5:{}),...rec(meta.leaderExitPolicy)},
+    [q,info]=await Promise.all([leaderQuote(p,{gateway:gw,quoteRetryBudget:{remaining:1}}),gw({action:"symbol_info",market:p.symbol},5000)]),
+    tick=N(info?.price_tick??info?.tick_size),step=N(info?.quantity_step??info?.step_size),
+    hard=hardSafetyState(p,{bid:q.bid,now:q.detectedAtMs,peak:Math.max(N(p.peak_price),q.observedBidPeak??0,q.bid),policy,r5,priceTick:tick}),
+    residentLevel=Math.max(0,...(meta.exitProtection?.orders??[]).filter(o=>o?.terminal!==true&&["ACTIVE","NEW"].includes(o.status))
+      .map(o=>N(o?.spec?.params?.triggerPrice))),
+    approved=approvedProtection(p,hard,q.bid,{residentLevel}),
+    strongest=approved.active&&approved.level>hard.hardFloor?{level:approved.level,reason:approved.reason,exitClass:approved.exitClass}:
+      {level:hard.hardFloor,reason:hard.hardReason,exitClass:EXIT_CLASS.HARD_SAFETY};
+  // A crossed existing hard/approved floor uses the original immediate close path.
+  if(q.bid<=strongest.level)return {status:"RESIDENT_EXIT_REQUIRED",position:p};
+  const installed=await createGatewayProtection(db,gw,()=>verifyExecutionLease(db)).ensure(p.id,{
+    exitClass:strongest.exitClass,authorityVersion:EXIT_AUTHORITY_VERSION,legacySoftOrderIds:legacySoftOrders(p,hard),
+    protectionReason:strongest.reason,stopPrice:strongest.level,priceTick:tick,quantityStep:step,
+    exchangeQuantity:Number(p.remaining_quantity),positionMode:"ONE_WAY",manualSymbols,lastPrice:q.bid});
+  const after=await db.from("v11_long_regime_positions").select("*").eq("id",p.id).single();
+  if(after.error||!after.data)throw Error("ENTRY_NATIVE_POST_INSTALL_READ");
+  return {...installed,position:after.data};
+}
 async function closePos(db,p,fraction,reason,ctx={}) {
   const gw=ctx.gateway??opsGateway(db);
   await verifyExecutionLease(db);
@@ -1533,7 +1560,8 @@ if(first.receipt.quantity>0){
   currentPosition=await settleKnownEntry(db,first.oi,first.settledRaw,gateway,{registerTarget:false});
   lastProtection=await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:currentPosition,
     manualSymbols:manualRows.map(x=>x.symbol),readPortfolio:()=>gateway({action:"p10_portfolio"},5000),
-    manage:ctx=>manageLeader(db,currentPosition,{...ctx,gateway})});
+    installNative:(p,c)=>installEntryNativeProtection(db,p,gateway,c.manualSymbols),
+    manage:ctx=>manageLeader(db,ctx.positionSnapshot??currentPosition,{...ctx,gateway})});
   const firstFull=first.receipt.quantity+Math.max(1e-12,step*1e-8)>=sized.amount;
   if(firstFull){
     try{await registerCec0040Target(db,currentPosition,s)}catch(error){console.error("CEC0040_TARGET_REGISTER_DEFERRED",currentPosition.id,String(error?.message??error))}
@@ -1707,7 +1735,8 @@ if(second.receipt.quantity>0){
   currentPosition=await settleKnownEntry(db,second.oi,second.settledRaw,gateway,{registerTarget:false});
   lastProtection=await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:currentPosition,
     manualSymbols:retryPair.manual.map(x=>x.symbol),readPortfolio:()=>gateway({action:"p10_portfolio"},5000),
-    manage:ctx=>manageLeader(db,currentPosition,{...ctx,gateway})});
+    installNative:(p,c)=>installEntryNativeProtection(db,p,gateway,c.manualSymbols),
+    manage:ctx=>manageLeader(db,ctx.positionSnapshot??currentPosition,{...ctx,gateway})});
   try{await registerCec0040Target(db,currentPosition,s)}catch(error){console.error("CEC0040_TARGET_REGISTER_DEFERRED",currentPosition.id,String(error?.message??error))}
   const finalQty=N(currentPosition.original_quantity),targetQty=retrySized.amount,complete=finalQty+Math.max(1e-12,step*1e-8)>=targetQty;
   return{entered:true,reason:complete?"IOC_RETRY_FILLED":"PARTIAL_FILL_ABORT:IOC_RETRY_EXHAUSTED",positionId:currentPosition.id,
@@ -2130,7 +2159,7 @@ async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
       const raw=await gw({action:"get_order",market:o.symbol,identifier:o.client_order_id,exchange_order_id:o.exchange_order_id});
       if(o.intent==="OPEN_LONG") {
         const pos=await settleKnownEntry(db,o,raw,gw);
-        if(pos?.state==="OPEN")await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos,manualSymbols:pair.manual.map(x=>x.symbol),readPortfolio:()=>gw({action:"p10_portfolio"}),manage:ctx=>manageLeader(db,pos,{...ctx,gateway:gw})});
+        if(pos?.state==="OPEN")await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos,manualSymbols:pair.manual.map(x=>x.symbol),readPortfolio:()=>gw({action:"p10_portfolio"}),installNative:(p,c)=>installEntryNativeProtection(db,p,gw,c.manualSymbols),manage:ctx=>manageLeader(db,ctx.positionSnapshot??pos,{...ctx,gateway:gw})});
         const complete=!pos||pos.metadata?.v18EntryAccountingPending!==true;
         results.push({orderId:o.id,outcome:complete?"RESOLVED":"UNRESOLVED",inspectionPerformed:true,evidenceSecured:true,
           quantityResolved:true,attributionComplete:true,accountingComplete:complete,settled:complete,
