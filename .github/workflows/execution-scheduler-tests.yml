@@ -1,0 +1,35 @@
+name: Verify external scheduler infrastructure
+on:
+  pull_request:
+    branches: [main, infra/account-writer-expand]
+    paths:
+      - gateway/**
+      - supabase/functions/**
+      - supabase/migrations/*scheduler*
+      - tests/scheduler-*.test.mjs
+      - .github/workflows/execution-scheduler-tests.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.5.6
+      - name: Install isolated PostgreSQL runtime
+        run: npm install --prefix "$RUNNER_TEMP/infra-tests" --ignore-scripts --no-audit --no-fund @electric-sql/pglite@0.3.14
+      - name: Verify fencing, durable ticks, failover, catchup and cutover
+        run: |
+          export PGLITE_MODULE="$RUNNER_TEMP/infra-tests/node_modules/@electric-sql/pglite/dist/index.js"
+          node --test --test-reporter=tap tests/account-writer.test.mjs tests/scheduler-*.test.mjs gateway/*.test.mjs
+      - name: Check modified endpoint graphs
+        run: deno check --no-config supabase/functions/v10-lane-executor/index.ts supabase/functions/v10-lane-signal-generator/index.ts supabase/functions/market-v2-signal/index.ts supabase/functions/market-autotrader/index.ts

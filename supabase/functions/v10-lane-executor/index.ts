@@ -1,4 +1,5 @@
 // @ts-nocheck
+import {admitSchedulerRequest} from '../_shared/scheduler-admission.mjs';
 import {storedDynamicReplay} from "../_shared/gpt-final-decision/stored-replay.mjs";
 import {EXIT_AUTHORITY_VERSION,EXIT_CLASS,PROTECTION_ACTIONS,PROTECTION_ARBITRATION_VERSION,exitClass,hardSafetyState,softCandidate,approvedProtection,exitContext,legacySoftOrders,assertExitAuthority,positionGeneration} from "../_shared/exit-authority.mjs";
 import {entryExecutionWindow,normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode,entryPriceEvidence} from "./entry-evidence.mjs";
@@ -3597,6 +3598,10 @@ Deno.serve(async req=>{
   // review request duplicates the same wake and inherits its short DB signal lifetime.
   const body=await req.json().catch(()=>({})),mode=String(body.mode||"run").toLowerCase();
   try{
+    if(body.scheduler||env('EXTERNAL_SCHEDULER_ADMISSION')==='true'){
+      const admission=await admitSchedulerRequest({endpoint:'v10-lane-executor',body,rpc:(name,args)=>db.rpc(name,args)});
+      if(!admission.allowed)return res(200,{ok:true,skipped:admission.reason});
+    }
     if(mode==="preflight"||mode==="diagnostic"){
       const [m,sn,pf,q,i,rt,op,cec]=await Promise.all([
         market(db),snap(db),gateway({action:"p10_portfolio"}),

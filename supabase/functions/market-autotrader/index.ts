@@ -1,5 +1,6 @@
 // Trading-booooo v8.0.0 — existing P10/I46 LONG + S096 RSI-momentum SHORT orchestration.
 // Private service-role function. No withdrawal or transfer route exists. Futures short
+import { admitSchedulerRequest } from "../_shared/scheduler-admission.mjs";
 // orders are accepted only through explicit, direction-safe OPEN/CLOSE intent.
 
 import {
@@ -12797,6 +12798,10 @@ Deno.serve(async (request: Request) => {
   try {
     requiredConfiguration();
     const body = await request.json().catch(() => ({})) as JsonRecord;
+    if (body.scheduler || env("EXTERNAL_SCHEDULER_ADMISSION") === "true") {
+      const admission = await admitSchedulerRequest({endpoint:"market-autotrader",body,rpc});
+      if (!admission.allowed) return response({ok:true,skipped:admission.reason});
+    }
     action = String(body.action || "status").toLowerCase();
 
     // Acquire the existing per-cycle lease BEFORE the first settings read. The old ordering
