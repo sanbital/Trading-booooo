@@ -48,17 +48,16 @@ Deno.test("signal producer stamps only S096 shorts with frozen research identity
   assert(source.includes("partialFraction: 0"));
 });
 
-Deno.test("executor accepts exact S096 only and retains both fixed SHORT exits", async () => {
+Deno.test("retired P10 entry scan retains both fixed SHORT exits", async () => {
   const source = await Deno.readTextFile(
     new URL("supabase/functions/market-autotrader/index.ts", ROOT),
   );
-  assert(source.includes('if (row.side === "SHORT" && !isS096ShortSignal(row)) continue;'));
-  assert(source.includes('reason: "market already tracked"'));
-  assert(source.includes("positionSlots - active.length"));
+  const scan=source.slice(source.indexOf("async function p10ScanCycle("),source.indexOf("async function p10FetchJson("));
+  assert(scan.includes("P10_ENTRY_PATH_RETIRED"));
+  assert(!scan.includes("enterP10Signal("));
+  assert(!scan.includes("loadP10Signals("));
   assert(source.includes("evaluateS096ShortExit"));
   assert(source.includes("evaluateS37ShortExit"));
-  assert(source.includes("binance_futures_short_enabled === true"));
-  assert(source.includes('if (left.side !== right.side) return left.side === "LONG" ? -1 : 1;'));
   assert(source.includes("directional_exit_policy: isS096ShortSignal(signal)"));
   assert(source.includes('? "S096_FIXED_1P5R"'));
   assert(source.includes("!s37Position && !s096Position && shouldLoadCompletedPolicyBar"));
