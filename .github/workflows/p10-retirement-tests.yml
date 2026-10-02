@@ -1,0 +1,30 @@
+name: Verify P10 retired entry and preserved management
+on:
+  pull_request:
+    branches: [main, infra/external-scheduler-expand]
+    paths:
+      - supabase/functions/market-autotrader/**
+      - tests/p10-retired-entry.test.mjs
+      - tests/db-timeout-isolation.test.mjs
+      - .github/workflows/p10-retirement-tests.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.5.6
+      - name: Execute real P10 scan and production DB admission helper in isolation
+        run: node --test --test-reporter=tap tests/p10-retired-entry.test.mjs tests/db-timeout-isolation.test.mjs
+      - name: Verify existing entry/exit reconciliation and ownership safeguards
+        run: deno test --no-config --allow-read supabase/functions/market-autotrader/p10-entry-latch-ownership.test.ts supabase/functions/market-autotrader/p10-entry-reconciliation.test.ts supabase/functions/market-autotrader/p10-exit-durable-reconciliation.test.ts supabase/functions/market-autotrader/p10-exit-preflight.test.ts
+      - name: Check preserved management endpoint
+        run: deno check --no-config supabase/functions/market-autotrader/index.ts

@@ -11,15 +11,17 @@ const entryStart = source.indexOf("async function enterP10Signal(");
 const scanStart = source.indexOf("async function p10ScanCycle(");
 const scanEnd = source.indexOf("async function p10FetchJson(");
 
-Deno.test("scan-level entry catch never owns post-submit reconciliation latch", () => {
+Deno.test("retired scan never attempts entries or owns post-submit reconciliation latch", () => {
   assert(entryStart >= 0 && scanStart > entryStart && scanEnd > scanStart);
   const scanSource = source.slice(scanStart, scanEnd);
   assertEquals(
     scanSource.includes('latchP10EntrySafety("P10_ENTRY_RECONCILIATION_REQUIRED")'),
     false,
   );
-  assert(scanSource.includes("P10_ENTRY_PREORDER_ERROR"));
-  assert(scanSource.includes("P10_ENTRY_POLICY_BLOCK"));
+  assert(scanSource.includes("P10_ENTRY_PATH_RETIRED"));
+  assertEquals(scanSource.includes("loadP10Signals()"), false);
+  assertEquals(scanSource.includes("enterP10Signal("), false);
+  assert(scanSource.includes("reconcileFeeLedger(cycleId)"));
 });
 
 Deno.test("post-submit entry path retains reconciliation latch ownership", () => {
