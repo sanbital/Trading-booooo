@@ -1,0 +1,20 @@
+{
+  "migration_version": "20261002081602",
+  "function": "leader20_clock_expire",
+  "first_bounded_run_start_utc": "2026-10-02T08:16:37.005607Z",
+  "first_bounded_run_start_kst": "2026-10-02T17:16:37.005607+09:00",
+  "elapsed_ms": 295.617,
+  "checked_slots": 32,
+  "reconciled_slots": 4,
+  "cron_resumed": {"job_id":147,"name":"leader20-clock-telemetry-maintenance-1m","schedule":"* * * * *","active":true},
+  "before_completed_runs": 2,
+  "before_mean_exec_ms": 117505.5,
+  "before_reexamined_slots":135,
+  "before_active_query_utc":"2026-10-02T08:09:37.621863Z",
+  "before_active_query_duration_ms":80013.316,
+  "before_active_query_wait_event":null,
+  "measurement_limit":"Different historical workload size; first bounded run is not a percentage of incidents solved.",
+  "production_restart_injected":false,
+  "trading_policy_changed":false,
+  "sql_tests_passed":8
+}
