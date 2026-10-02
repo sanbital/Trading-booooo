@@ -13,9 +13,13 @@ test('signal generator retains all 15 production v51 dependencies byte for byte'
     assert.equal(hash(readFileSync(new URL(path,root))),entry.sha256,path);
   }
 });
-test('generator entrypoint differs from production only by dependency relocation',()=>{
+test('generator retains production byte identity outside dependency relocation and scheduler admission',()=>{
   const entry=readFileSync(new URL(manifest.entrypoint.path,root),'utf8');
-  const original=entry.replaceAll(manifest.relocation.to,manifest.relocation.from);
+  const schedulerImport="import {admitSchedulerRequest} from '../_shared/scheduler-admission.mjs';\n";
+  const schedulerGuard="if(['run','leader20-observe'].includes(mode)){const a=await admitSchedulerRequest({endpoint:'v10-lane-signal-generator',body,rpc:(name,args)=>db.rpc(name,args)});if(!a.allowed)return reply(200,{ok:true,skipped:a.reason});}";
+  assert.equal(entry.split(schedulerImport).length,2);assert.equal(entry.split(schedulerGuard).length,2);
+  assert.ok(entry.indexOf(schedulerGuard)>entry.indexOf("return reply(401"));
+  const original=entry.replace(schedulerImport,'').replace(schedulerGuard,'').replaceAll(manifest.relocation.to,manifest.relocation.from);
   assert.equal(hash(original),manifest.entrypoint.original_sha256);
 });
 test('relative imports in the frozen graph cannot escape into the executor shared graph',()=>{

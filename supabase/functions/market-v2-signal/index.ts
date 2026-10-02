@@ -1,4 +1,5 @@
 // @ts-nocheck
+import {admitSchedulerRequest} from '../_shared/scheduler-admission.mjs';
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import {
   S096_RESEARCH_PROTOCOL,
@@ -732,6 +733,8 @@ Deno.serve(async (req) => {
     if (!["upbit_spot", "binance_spot", "binance_futures"].includes(venue)) {
       return json({ ok: false, error: "invalid venue" }, 400);
     }
+    const schedulerAdmission=await admitSchedulerRequest({endpoint:"market-v2-signal",body,rpc:(name,args)=>rest(`rpc/${name}`,{method:"POST",body:JSON.stringify(args),signal:AbortSignal.timeout(2500)})});
+    if(!schedulerAdmission.allowed)return json({ok:true,skipped:schedulerAdmission.reason});
     const result = await runVenue(venue);
     return json({
       ok: true,

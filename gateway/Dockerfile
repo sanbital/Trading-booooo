@@ -1,6 +1,8 @@
 FROM node:22-alpine
 WORKDIR /app
 COPY server.mjs ./server.mjs
+COPY scheduler-orchestrator.mjs ./scheduler-orchestrator.mjs
+COPY scheduler-repository.mjs ./scheduler-repository.mjs
 COPY order-writer-fence.mjs ./order-writer-fence.mjs
 COPY futures-mode-evidence.mjs ./futures-mode-evidence.mjs
 COPY v17-stop-commands.mjs ./v17-stop-commands.mjs

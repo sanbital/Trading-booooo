@@ -1,4 +1,5 @@
 // @ts-nocheck
+import {admitSchedulerRequest} from '../_shared/scheduler-admission.mjs';
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import {scanMarket} from './_production-v51/_shared/leader-market-v17.mjs';
 import {leaderControl,generateLeader20} from './_production-v51/_shared/leader20/runtime.mjs';
@@ -81,6 +82,6 @@ Deno.serve(async req=>{
   let body;try{body=await req.json();}catch{return reply(400,{ok:false,error:'INVALID_JSON'});}
   const mode=String(body?.mode||'run').toLowerCase();
   if(!['run','preflight','diagnostic','leader20-observe'].includes(mode))return reply(400,{ok:false,error:'INVALID_MODE'});
-  try{return reply(200,await generate(db,{diagnostic:['preflight','diagnostic'].includes(mode),leader20Only:mode==='leader20-observe'}));}
+  try{if(['run','leader20-observe'].includes(mode)){const a=await admitSchedulerRequest({endpoint:'v10-lane-signal-generator',body,rpc:(name,args)=>db.rpc(name,args)});if(!a.allowed)return reply(200,{ok:true,skipped:a.reason});}return reply(200,await generate(db,{diagnostic:['preflight','diagnostic'].includes(mode),leader20Only:mode==='leader20-observe'}));}
   catch(e){return reply(503,{ok:false,patch:PATCH,error:e instanceof Error?e.message:String(e)});}
 });

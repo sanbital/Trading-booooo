@@ -60,7 +60,7 @@ jobs:
             if curl -fsS --max-time 2 http://127.0.0.1:8099/health > /tmp/writer-health.json; then break; fi
             sleep 1
           done
-          node -e "const h=require('/tmp/writer-health.json');if(h.build!=='2026-10-02-account-writer-fence-1'||h.order_writer.required!==false)throw Error('BOOT_CONTRACT')"
+          node -e "const h=require('/tmp/writer-health.json');if(h.build!=='2026-10-02-external-clock-1'||h.order_writer.required!==false)throw Error('BOOT_CONTRACT')"
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
       - name: Preserve encrypted current machine manifests
         env:
