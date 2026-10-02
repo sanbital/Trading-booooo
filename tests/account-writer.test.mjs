@@ -145,6 +145,11 @@ test('exchange lookup no order without conclusive never-placed evidence stays UN
 test('uncertain reconciliation backs off so protection proceeds while all new entries freeze',async t=>{
   const f=await fixture(t),r=request();await f.repo.enqueue(r);
   f.exchange.submitFenced=async()=>{throw Error('exchange timeout');};await f.turn();
+  const retry=await f.row(r.execution_key);
+  assert.ok(Date.parse(retry.next_attempt_at)-Date.parse(retry.updated_at)>=999);
+  // Hold the retry in its future slot while checking priority. Wall-clock load in
+  // the full concurrent suite must not turn this into a race with the one-second retry.
+  await f.pg.query("update trading_execution_outbox set next_attempt_at=clock_timestamp()+interval '1 minute' where execution_key=$1",[r.execution_key]);
   const entry=request(),protect=request({kind:'PROTECTION'});
   await f.repo.enqueue(entry);await f.repo.enqueue(protect);
   const lease=await f.lease(),claimed=await f.repo.claim(lease);
@@ -152,7 +157,6 @@ test('uncertain reconciliation backs off so protection proceeds while all new en
   await f.repo.transition(claimed,lease,'REJECTED','FIXTURE_PROTECTION_DONE');
   assert.equal(await f.repo.claim(lease),null,'UNKNOWN does not hot-loop or allow a new entry');
   assert.equal((await f.row(entry.execution_key)).state,'PENDING');
-  assert.ok(Date.parse((await f.row(r.execution_key)).next_attempt_at)>Date.now());
 });
 
 test('partial fill is not FILLED and stays available for identity reconciliation',async t=>{
