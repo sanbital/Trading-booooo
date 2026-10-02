@@ -4,6 +4,15 @@ on:
     - cron: '7,17,27,37,47,57 * * * *'
     - cron: '23 0 * * *'
   workflow_dispatch:
+    inputs:
+      deterministic_preflight:
+        description: Read signed account truth and deterministic cutover gates only
+        type: boolean
+        default: false
+      expected_commit:
+        description: Required exact source SHA for deterministic preflight
+        type: string
+        required: false
 concurrency:
   group: execution-infrastructure-read-only-observation
   cancel-in-progress: false
@@ -29,7 +38,14 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_APP_NAME: ${{ secrets.FLY_APP_NAME }}
           FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
-        run: node ops/execution-infra/audit.mjs
+          DETERMINISTIC_PREFLIGHT: ${{ inputs.deterministic_preflight }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          if [ "$DETERMINISTIC_PREFLIGHT" = true ]; then
+            node ops/deterministic/preflight.mjs
+          else
+            node ops/execution-infra/audit.mjs
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:

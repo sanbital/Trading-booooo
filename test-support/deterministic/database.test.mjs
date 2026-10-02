@@ -7,8 +7,8 @@ async function setup(){const pg=new PGlite();await pg.exec(fs.readFileSync(new U
 async function snapshot(pg,margin=305){await pg.query("insert into trading_account_snapshots values('binance_futures',clock_timestamp(),true,$1,'[]')",[margin]);}
 async function publish(pg){const now=Date.now(),members=Array.from({length:20},(_,i)=>({symbol:'SYMBOL'+i+'USDT',rank:i+1,price_change_percent:20-i,quote_volume:1e8}));
  return (await pg.query('select deterministic_publish_universe($1,$2) result',[{members,requested_at:new Date(now).toISOString(),observed_at:new Date(now).toISOString(),next_refresh_at:new Date(now+60000).toISOString()},'a'.repeat(64)])).rows[0].result;}
-async function addCapture(pg,symbol,{malformed=false}={}){
- const at=Date.now(),s=scenario({at}),points=s.raw.trajectory;
+async function addCapture(pg,symbol,{malformed=false,at=Date.now()}={}){
+ const s=scenario({at}),points=s.raw.trajectory;
  // The 25th preceding boundary is required to derive the first of the 24 returns.
  const preceding={...points[0],start_ms:points[0].start_ms-5000,end_ms:points[0].start_ms,mid:100};
  for(const p of [preceding,...points]){
@@ -51,7 +51,10 @@ test('unavailable account truth permits no reservation',async()=>{
  assert.equal(r.reserved,false);assert.equal(r.reason,'ACCOUNT_SNAPSHOT_STALE_OR_INCOMPLETE');await pg.close();
 });
 test('one malformed symbol is isolated from healthy 24 x 5 second capture',async()=>{
- const pg=await setup();await addCapture(pg,'GOODUSDT');const at=await addCapture(pg,'BADUSDT',{malformed:true});
+ // Both symbols share one causal cutoff, including the 100ms receive delay.
+ // Sequential inserts must not move one symbol across a five-second boundary.
+ const pg=await setup(),at=Math.floor((Date.now()-500)/5000)*5000+500;
+ await addCapture(pg,'GOODUSDT',{at});await addCapture(pg,'BADUSDT',{malformed:true,at});
  const r=(await pg.query('select deterministic_market_context($1,$2) result',[['GOODUSDT','BADUSDT'],new Date(at).toISOString()])).rows[0].result;
  assert.equal(r.GOODUSDT.status,'AVAILABLE');assert.equal(r.GOODUSDT.buckets,24);assert.equal(r.BADUSDT.reason,'MALFORMED_SYMBOL_CAPTURE');await pg.close();
 });

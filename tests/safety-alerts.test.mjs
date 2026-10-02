@@ -10,3 +10,9 @@ test('manual circuit and active writer heartbeat failure raise explicit alerts',
  assert.deepEqual(evaluateSafetyMetrics({runtime:{circuit_open:true,incident_kind:'MANUAL_REVIEW_REQUIRED'},writer:{owner:'writer',expires_at:'2026-10-02T12:00:10Z',heartbeat_at:'2026-10-02T11:59:40Z'}},{now}),['CIRCUIT_MANUAL_REVIEW_REQUIRED','WRITER_HEARTBEAT_STALE']);
  assert.deepEqual(evaluateSafetyMetrics({writer:{owner:null,expires_at:'2026-10-02T12:00:10Z'}},{now}),[]);
 });
+
+
+test('snapshot-relative heartbeat assessment does not age while independent audit evidence is collected',()=>{
+ const utc='2026-10-02T12:00:00Z',m={utc,scheduler:{enabled:true,heartbeat_at:'2026-10-02T11:59:59Z',recovered_postmaster_at:'2026-10-02T11:00:00Z'},postmaster_at:'2026-10-02T11:00:00Z',fill_attribution_missing:1,stale_buy_submitted:1,scheduler_recent_failed_jobs:1};
+ assert.deepEqual(evaluateSafetyMetrics(m,{now:Date.parse(m.utc)}),['FILL_ATTRIBUTION_MISSING','STALE_BUY_SUBMITTED','SCHEDULER_RECENT_FAILED_JOBS']);
+});
