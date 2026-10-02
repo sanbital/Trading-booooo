@@ -1,0 +1,41 @@
+{
+  "scope": "Only these two completed historical releases were classified and retired; remaining workflows are not declared dead.",
+  "observed_utc": "2026-10-02T02:45:56Z",
+  "observed_kst": "2026-10-02 11:45:56 KST",
+  "workflows": [
+    {
+      "workflow": "deploy-b06133-entry-selection-20260920.yml",
+      "classification": "migration/one-shot (completed; automatic trigger retired)",
+      "caller": "historical release branch push",
+      "last_verified_success": {
+        "run_id": 35499800236,
+        "started_utc": "2026-09-20T08:31:42Z",
+        "started_kst": "2026-09-20 17:31:42 KST"
+      },
+      "completed_manifest": "deployment-evidence/b06133-20260920.json",
+      "deployed_utc": "2026-09-20T08:32:12.008Z",
+      "version_marker": "B06133_ENTRY_SELECTION_1",
+      "production_endpoint": "v10-lane-executor",
+      "workflow_state_before": "active",
+      "deployment_environment": "production",
+      "environment_required_reviewers_verified": false
+    },
+    {
+      "workflow": "deploy-b06133-concurrent4-20260920.yml",
+      "classification": "migration/one-shot (completed; automatic trigger retired)",
+      "caller": "historical release branch push",
+      "last_verified_success": {
+        "run_id": 35502193992,
+        "started_utc": "2026-09-20T09:23:52Z",
+        "started_kst": "2026-09-20 18:23:52 KST"
+      },
+      "completed_manifest": "deployment-evidence/b06133-concurrent4-20260920.json",
+      "deployed_utc": "2026-09-20T09:24:16.611Z",
+      "version_marker": "B06133-CONCURRENT-4-1",
+      "production_endpoint": "v10-lane-executor",
+      "workflow_state_before": "active",
+      "deployment_environment": "production",
+      "environment_required_reviewers_verified": false
+    }
+  ]
+}
