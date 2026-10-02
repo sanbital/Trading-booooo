@@ -1,0 +1,24 @@
+{
+  "proof_version": "CLOSED_NATIVE_ABSENCE_1",
+  "migration_version": "20261002061335",
+  "main_commit": "4941f85a1e1c7ae017d41e42644b572a1986b719",
+  "pr": 301,
+  "workflow_run": 36972931374,
+  "artifact_id": 11211588910,
+  "utc": "2026-10-02T06:19:08.216708Z",
+  "kst": "2026-10-02T15:19:08.216708+09:00",
+  "http": 200,
+  "resolved": 7,
+  "already_terminal": 0,
+  "historical_submission": "NOT_INFERRED",
+  "exchange_mutations": 0,
+  "pnl_reapplication": false,
+  "independent_db_verification": {
+    "utc": "2026-10-02T06:48:08.4833Z",
+    "kst": "2026-10-02T15:48:08.4833+09:00",
+    "proof_events": 7,
+    "closed_native_backlog": 0,
+    "open_positions": 0,
+    "ordinary_unresolved": 0
+  }
+}
