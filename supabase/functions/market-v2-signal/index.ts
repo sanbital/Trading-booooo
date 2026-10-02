@@ -717,9 +717,12 @@ Deno.serve(async (req) => {
     if (!await authorize(req)) return json({ ok: false, error: "unauthorized" }, 401);
     const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
     if (body.scheduler || env("EXTERNAL_SCHEDULER_ADMISSION") === "true") {
-      const admission = await admitSchedulerRequest({endpoint:NAME,body,
-        rpc:(name,args)=>rest(`rpc/${name}`,{method:"POST",body:JSON.stringify(args)})});
-      if (!admission.allowed) return json({ok:true,skipped:admission.reason});
+      const admission = await admitSchedulerRequest({
+        endpoint: NAME,
+        body,
+        rpc: (name, args) => rest(`rpc/${name}`, { method: "POST", body: JSON.stringify(args) }),
+      });
+      if (!admission.allowed) return json({ ok: true, skipped: admission.reason });
     }
     const action = String(body?.action || "status");
     if (action === "status") {
