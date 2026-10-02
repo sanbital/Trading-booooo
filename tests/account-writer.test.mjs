@@ -120,6 +120,38 @@ test('validation authority rejection is durable and has no exchange side effect'
   const row=await f.row(r.execution_key);
   assert.equal(row.state,'REJECTED');assert.equal(row.terminal_reason,'AUTHORITY_EXPIRED');assert.equal(f.submits(),0);
 });
+test('asynchronous telemetry rejection cannot turn a filled order into an infrastructure failure',async t=>{
+  const f=await fixture(t),r=request();await f.repo.enqueue(r);
+  const result=await f.turn({onEvent:async()=>{throw Error('telemetry sink unavailable');}});
+  assert.equal(result.status,'FILLED');assert.equal((await f.row(r.execution_key)).state,'FILLED');
+  assert.equal(f.submits(),1);
+});
+
+for(const [field,code] of [['authority','AUTHORITY_EXPIRED'],['freshness','MARKET_DATA_STALE'],
+  ['capacity','CAPACITY_REJECTED'],['circuitClosed','CIRCUIT_OPEN']]) {
+  test(`boundary ${field} refusal after SUBMITTING records the exact reason without UNKNOWN`,async t=>{
+    const f=await fixture(t),r=request();await f.repo.enqueue(r);
+    let validations=0;
+    await f.turn({validate:async()=>++validations===1?valid:{...valid,[field]:false}});
+    const row=await f.row(r.execution_key);
+    assert.equal(row.state,'REJECTED');assert.equal(row.terminal_reason,code);
+    assert.equal(row.result.pre_submit_refused,true);assert.equal(f.submits(),0);
+  });
+}
+test('deadline consumed by SUBMITTING IO expires before any exchange call',async t=>{
+  const f=await fixture(t),r=request();await f.repo.enqueue(r);
+  let checkTime=Date.now();
+  const transition=f.repo.transition;
+  f.repo.transition=async(...args)=>{
+    const row=await transition(...args);
+    if(args[2]==='SUBMITTING')checkTime=Date.parse(r.deadline)+1;
+    return row;
+  };
+  await f.turn({now:()=>checkTime});
+  const row=await f.row(r.execution_key);
+  assert.equal(row.state,'EXPIRED');assert.equal(row.terminal_reason,'DEADLINE_EXPIRED');
+  assert.equal(row.result.submission_attempted,false);assert.equal(f.submits(),0);
+});
 
 test('exchange timeout after acceptance reconciles same ID with zero duplicate submit',async t=>{
   const f=await fixture(t),r=request();await f.repo.enqueue(r);
