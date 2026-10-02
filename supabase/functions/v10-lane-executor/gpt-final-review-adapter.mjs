@@ -16,6 +16,9 @@ const getenv=n=>globalThis.Deno?.env?.get(n)??'';
  * Read fresh features and CAS the whole JSON to avoid overwriting a concurrent cycle.
  * No signal claim, terminalization, order, or historical-row repair is performed here. */
 export async function recordAsyncReviewOutcome(db,s,review,now=Date.now){
+  // The original post-lease annotation is non-authoritative, exact identity + NEW
+  // state + whole-feature CAS. It cannot claim/terminalize/trade or change authority.
+  db=db.providerJournal?.receipts??db;
   const r=await db.from('v11_long_regime_signals').select('id,symbol,status,features').eq('id',s.id).eq('status','NEW').maybeSingle();
   if(r.error)throw Error('GPT_ASYNC_LIFECYCLE_READ');
   const row=r.data;if(!row||row.features?.entryLifecycle?.reason!=='GPT_REVIEW_PENDING')return;

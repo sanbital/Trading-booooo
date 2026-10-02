@@ -47,7 +47,7 @@ test('NMR original 22:10 BUY -> actual coordinator -> safety -> real IOC dispatc
   intents.set(row.client_order_id,row);return {data:{id:'mock-intent',...row}};}})}),update:()=>({eq:async()=>({error:null})})};
  const source=readFileSync(new URL('../supabase/functions/v10-lane-executor/index.ts',import.meta.url),'utf8'),start=source.indexOf('async function dispatchEntryIocAttempt('),
   code=source.slice(start,source.indexOf('\n// ---',start));
- const ctx={requireEntryAuthority,IOC_RETRY_POLICY:{maxAttempts:2},LEV:3,REVISION:'offline',PATCH:'offline',cid:(p,id)=>p+id,
+ const ctx={shortAccountWriter:()=>false,requireEntryAuthority,IOC_RETRY_POLICY:{maxAttempts:2},LEV:3,REVISION:'offline',PATCH:'offline',cid:(p,id)=>p+id,
   Date:class extends Date{static now(){return f.now();}},verifyExecutionLease:async()=>{},fill:r=>r,entryReceipt:r=>r,
   classifyFailure:()=>({fatal:true})};vm.createContext(ctx);vm.runInContext(code+'\nthis.dispatch=dispatchEntryIocAttempt;',ctx);
  const options={attemptNo:1,quantity:40,limitPrice:f.quote().best_ask,step:.1,payload:{entry_clock_final:step.record.clock_final_authority},

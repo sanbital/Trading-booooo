@@ -9,3 +9,10 @@ export const leader20Control={active_strategy:'LEGACY',observation_enabled:false
 export * from '../supabase/functions/v10-lane-executor/execution-dispatch.mjs';
 export * from '../supabase/functions/v10-lane-executor/entry-error-scope.mjs';
 export * from '../supabase/functions/v10-lane-executor/cycle-runtime-outcome.mjs';
+
+// Legacy tests extract individual host functions rather than the request router.
+// Their original mode is disabled. Full-host VM definitions override these defaults.
+export * from '../supabase/functions/v10-lane-executor/account-execution-context.mjs';
+export {createHostAccountScopes} from '../supabase/functions/v10-lane-executor/account-host-scopes.mjs';
+export const shortAccountWriter=()=>false;
+export const withAccountMutation=async(_db,operation)=>operation();

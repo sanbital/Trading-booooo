@@ -52,3 +52,12 @@ export async function reconcileExecutionDispatches(db){
   if(r.error)throw Error(`EXECUTION_DISPATCH_RECONCILIATION:${r.error.message}`);
   return r.data;
 }
+
+/** Mandatory durable boundary. A refused/lost acknowledgement never permits send. */
+export async function beginExecutionSubmission(db,{signalId,owner,orderId}){
+ const r=await db.rpc('leader20_execution_begin_submit',{p_signal_id:signalId,p_owner:owner,p_order_id:orderId});
+ if(r.error||r.data?.updated!==true||r.data?.row?.state!==EXECUTION_DISPATCH_STATE.SUBMITTING||
+    String(r.data?.row?.order_id)!==String(orderId))throw Object.assign(Error('EXECUTION_SUBMIT_FENCE:'+String(r.error?.code??r.data?.reason??'ACKNOWLEDGEMENT_MISSING')),
+   {exchangeSubmissionAttempted:false,submissionPhase:'PRE_SEND'});
+ return r.data;
+}

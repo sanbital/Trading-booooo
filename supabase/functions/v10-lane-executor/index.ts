@@ -30,7 +30,7 @@ import {QV3_ACTIVATION_BASIS,QV3_LIVE_CUTOVER,QV3_VERSION,qv3Entry,qv3Exit,qv3Sc
 import {E1_POLICY,advanceE1,e1QuoteEvidence,fetchE1AggTrades,startE1} from "../_shared/leader-e1-runtime.mjs";
 import {V24_ADAPTER_VERSION,v24EntryGate} from "./v24-entry-adapter.mjs";
 import {IOC_RETRY_POLICY,planAggressiveIocRetry} from "./entry-ioc-retry.mjs";
-import {EXECUTION_DISPATCH_STATE,claimExecutionDispatch,transitionExecutionDispatch,restrictExecutionDispatchCandidates,executionDispatchAllowsNext,reconcileExecutionDispatches} from "./execution-dispatch.mjs";
+import {beginExecutionSubmission,EXECUTION_DISPATCH_STATE,claimExecutionDispatch,transitionExecutionDispatch,restrictExecutionDispatchCandidates,executionDispatchAllowsNext,reconcileExecutionDispatches} from "./execution-dispatch.mjs";
 import {RETRY_RECONCILIATION_VERSION,retryProofCandidate,parentTradeStart,proveUnplacedPartialRetry} from "./entry-retry-reconciliation.mjs";
 import {ENTRY_LIFECYCLE_VERSION,lifecycleNote,noteChanged,gptTerminalReason,expiredTriggerReason,agedOutReason,mergeLifecycleNote,technicalFailureNote,isSymbolLocalSelectionError} from "./entry-lifecycle.mjs";
 import {ENTRY_CAPACITY_VERSION,UNUSED_SLOT_REASON,accountStopReason,budgetCovers,entryCapacity,ledgerEntry,slotCostUsdt,slotReasonOf,unusedSlotAccounting} from "./entry-capacity.mjs";
@@ -44,6 +44,9 @@ import {SETUP_POLICY,SETUP_POLICY_VERSION,SETUP_REASON,SETUP_STATE,advancePullba
 import {B06133_VERSION,evaluateB06133,fetchB06133Inputs} from "../_shared/leader-b06133-entry.mjs";
 import {V30_FRONT_LIVE_VERSION,v30FrontDecision,entryBranchOf,baselineAllowedV30} from "../_shared/gpt-final-review/contract.mjs";
 import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
+import {createProviderJournal} from "./account-provider-journal.mjs";
+import {createHostAccountScopes} from "./account-host-scopes.mjs";
+import {currentExecutionContext,currentAccountOwner,contextualOwners,contextualState,executionContextHeaders,assertActiveExecutionRequest} from "./account-execution-context.mjs";
 const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-MULTISLOT-CAPACITY-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
 const X1_POLICY_VERSION="X1_FAST_OBSERVATION_OVERRIDE_1",OPERATOR_OVERRIDE=Object.freeze({
   id:"2026-09-13-USER-PRIORITY-OVERRIDE",basis:"OPERATOR_OVERRIDE_UNVALIDATED",
@@ -183,6 +186,7 @@ async function snap(db){
 }
 async function incident(db,{reason,kind="UNKNOWN_ORDER_OUTCOME",controlScope=CONTROL_SCOPE.ACCOUNT_RISK_BLOCK,
   symbol=null,state={},evidence={}}){
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>incident(db,{reason,kind,controlScope,symbol,state,evidence}));
   await verifyExecutionLease(db);
   const r=await db.rpc("v19_record_incident",{p_owner:leaseOwners.get(db),p_kind:kind,
     p_reason:String(reason).slice(0,500),p_control_scope:controlScope,p_symbol:symbol,
@@ -301,7 +305,21 @@ function retryE1Evidence(tape,q,quantity,at){
     expectedCostBps:ev.expectedCostBps,observations:tape?.available?[{startAt:tape.startAt,endAt:tape.endAt,
       return:tape.last10sReturn,buyShare:tape.takerBuyQuoteShare,tradeCount:tape.tradeCount}]:[]};
 }
-async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,step,payload,authorize}){
+async function dispatchEntryIocAttempt(db,s,gw,options){
+  const {attemptNo,quantity,limitPrice,step,payload,authorize,prepare}=options;
+  if(shortAccountWriter(db)&&!currentAccountOwner(db)){
+    if(prepare){const ready=await prepare();if(ready?.allowed!==true)return {blocked:true,reason:ready?.reason??"IOC_DISPATCH_AUTHORITY_MISSING"};}
+    const claim=executionDispatchClaims.get(db);
+    return await withAccountMutation(db,async()=>{
+      await requireLeaderEntryControls(db);await requireEntryAuthority(db,s);
+      const pair=await readOpsPair(db,gw,s.symbol),orders=await gw({action:"v18_open_orders"},5000),
+        existing=pair.positions.find(p=>String(p.signal_id)===String(s.id)),
+        decision=await decideEntry(db,pair,s.symbol,orders,{proposedMargin:quantity*limitPrice/LEV,
+          cashBuffer:ENTRY_CASH_BUFFER_USDT,existingPositionId:attemptNo>1?existing?.id:null});
+      if(!decision.allowed)return {blocked:true,reason:`EXECUTION_SAFETY_REJECT:${decision.scope}:${decision.reasons.join(",")}`};
+      return await dispatchEntryIocAttempt(db,s,gw,options);
+    },{deadline:claim?.validUntil??Infinity,correlationId:String(s.id)});
+  }
   await requireEntryAuthority(db,s);
   if(!Number.isInteger(attemptNo)||attemptNo<1||attemptNo>IOC_RETRY_POLICY.maxAttempts)throw Error("IOC_RETRY_EXHAUSTED");
   const clockTrace=payload?.entry_clock_execution;
@@ -331,8 +349,13 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
       return {blocked:true,reason,oi:oi.data};
     }
     const dispatchClaim=typeof executionDispatchClaims==="undefined"?null:executionDispatchClaims.get(db);
-    if(dispatchClaim?.signalId===String(s.id)&&typeof transitionExecutionDispatch==="function")await transitionExecutionDispatch(db,{signalId:s.id,
-      owner:dispatchClaim.owner,state:EXECUTION_DISPATCH_STATE.SUBMITTING,orderId:oi.data.id});
+    if(dispatchClaim?.signalId===String(s.id)){
+      if(shortAccountWriter(db))await beginExecutionSubmission(db,{signalId:s.id,owner:dispatchClaim.owner,orderId:oi.data.id});
+      else{const transition=await transitionExecutionDispatch(db,{signalId:s.id,
+        owner:dispatchClaim.owner,state:EXECUTION_DISPATCH_STATE.SUBMITTING,orderId:oi.data.id});
+        if(transition?.updated!==true)throw Object.assign(Error("EXECUTION_SUBMIT_FENCE:ACKNOWLEDGEMENT_MISSING"),
+          {exchangeSubmissionAttempted:false,submissionPhase:"PRE_SEND"});}
+    }
     const sentAt=Date.now();if(clockTrace)clockTrace.order_sent_at=sentAt;
     const initialRaw=await gw(rp),respondedAt=Date.now(),initial=fill(initialRaw);
     await verifyExecutionLease(db);
@@ -354,6 +377,11 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
   }catch(error){
     if(classifyFailure(error).fatal)throw error;
     const msg=String(error?.message??error);await verifyExecutionLease(db);
+    if(error?.submissionPhase==="PRE_SEND"&&error.exchangeSubmissionAttempted===false){
+      const saved=await db.from("v11_long_regime_orders").update({state:"REJECTED",reject_reason:msg,
+        response_payload:{notDispatched:true,submissionPhase:"PRE_SEND",exchangeSubmissionAttempted:false},updated_at:new Date().toISOString()}).eq("id",oi.data.id);
+      if(saved.error)throw Error("PRE_SEND_REFUSAL_WRITE");return {blocked:true,reason:msg,oi:oi.data};
+    }
     await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_FAILED",reject_reason:msg.slice(0,500),
       updated_at:new Date().toISOString()}).eq("id",oi.data.id);
     await db.from("v11_long_regime_signals").update({status:"ORDERED",updated_at:new Date().toISOString()}).eq("id",s.id);
@@ -940,6 +968,7 @@ async function runE1Gate(s,initialQuote,step,gw,filters={},watchFastWeak=true){
 // Confirm that exact remembered stop and book its fill before treating flatness as an
 // unexplained mismatch. This recovery only reads the exchange; it never resends a sell.
 async function reconcileNativeCloseBeforeDispatch(db,p,fraction,gw=opsGateway(db)){
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>reconcileNativeCloseBeforeDispatch(db,p,fraction,gw));
   const meta=rec(p.metadata);
   // A recovered native stop closes the WHOLE position. Reporting that back to a caller
   // that asked to sell a fraction would book a full close against a partial intent, so
@@ -970,6 +999,7 @@ async function reconcileNativeCloseBeforeDispatch(db,p,fraction,gw=opsGateway(db
 // No AI/capture/scan in this protection phase. Uses the same hard floor and already
 // GPT-approved resident levels as manageLeader; no new exit/entry policy.
 async function installEntryNativeProtection(db,p,gw,manualSymbols=[]){
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>installEntryNativeProtection(db,p,gw,manualSymbols));
   await verifyExecutionLease(db);
   const latest=await db.from("v11_long_regime_positions").select("*").eq("id",p.id).single();
   if(latest.error||!latest.data)throw Error("ENTRY_NATIVE_POSITION_READ");p=latest.data;
@@ -995,6 +1025,7 @@ async function installEntryNativeProtection(db,p,gw,manualSymbols=[]){
   return {...installed,position:after.data};
 }
 async function closePos(db,p,fraction,reason,ctx={}) {
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>closePos(db,p,fraction,reason,ctx));
   const gw=ctx.gateway??opsGateway(db);
   await verifyExecutionLease(db);
   const current=await db.from("v11_long_regime_positions").select("*").eq("id",p.id).single();
@@ -1549,11 +1580,17 @@ const firstEvidence=iocAttemptEvidence({attemptNo:1,quote:q,quantity:sized.amoun
 attempt.dispatched=true;
 const first=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:1,quantity:sized.amount,limitPrice,step,
   payload:{...baseIntentPayload,ioc_attempt_evidence:firstEvidence},
+  prepare:()=>attempt.gptFinalReview?.clockFinalAuthority?
+    authorizeClockExecution(db,s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),()=>gptFinalCheck(db,s,attempt.finalRecheck)):
+    gptFinalCheck(db,s,attempt.finalRecheck),
   authorize:()=>attempt.gptFinalReview?.clockFinalAuthority?
     authorizeClockExecution(db,s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),
-      ()=>gptFinalCheck(db,s,attempt.finalRecheck),{readTape:(startAt,endAt)=>fetchE1AggTrades(s.symbol,startAt,endAt)}):
+      ()=>gptFinalCheck(db,s,attempt.finalRecheck),{allowReview:!shortAccountWriter(db),readTape:(startAt,endAt)=>fetchE1AggTrades(s.symbol,startAt,endAt)}):
     gptFinalCheck(db,s,attempt.finalRecheck)});
-if(first.blocked)return await finishPartialOrAbort(first.reason,{executionAttempts:0});
+if(first.blocked){
+ if(first.reason==="PRE_EXECUTION_REVIEW_REQUIRED")return {entered:false,reason:first.reason,releaseClaim:true,releaseScope:RELEASE_SCOPE.SYMBOL};
+ return await finishPartialOrAbort(first.reason,{executionAttempts:0});
+}
 const retryArmed=gptConfirmFirstFinality(db,retryAuthority,first);
 lastEvidence=first.evidence;lastReceipt=first.receipt;
 if(first.receipt.quantity>0){
@@ -1718,12 +1755,15 @@ const retryDispatchCheck=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority)
 if(!retryDispatchCheck.allowed)
   return await finishPartialOrAbort(retryDispatchCheck.reason??"IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID",{executionAttempts:1});
 const second=await dispatchEntryIocAttempt(db,s,gateway,{attemptNo:2,quantity:retryPlan.remainingQuantity,
-  limitPrice:retryPlan.limitPrice,step,payload:retryPayload,authorize:()=>{
+  limitPrice:retryPlan.limitPrice,step,payload:retryPayload,
+  prepare:()=>attempt.gptFinalReview?.clockFinalAuthority?
+    authorizeClockExecution(db,s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),()=>gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority)):
+    gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority),authorize:()=>{
     if(attempt.gptFinalReview?.clockFinalAuthority)
       return authorizeClockExecution(db,s,attempt.gptFinalReview,attempt.finalRecheck,ms=>gateway({action:"quote",market:s.symbol},ms),()=>{
         const check=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority);
         return check.allowed&&gptConsumeRetry(db,retryAuthority)?check:{allowed:false,reason:check.reason??"IOC_RETRY_AUTHORITY_EXPIRED_OR_INVALID"};
-      },{readTape:(startAt,endAt)=>fetchE1AggTrades(s.symbol,startAt,endAt)});
+      },{allowReview:!shortAccountWriter(db),readTape:(startAt,endAt)=>fetchE1AggTrades(s.symbol,startAt,endAt)});
     const check=gptFinalCheck(db,s,attempt.finalRecheck,retryAuthority),age=Date.now()-Number(retryQuote?.timing?.received_at_ms);
     if(!check.allowed)return check;
     if(!Number.isFinite(age)||age<0||age>E1_POLICY.maxQuoteAgeMs)return {allowed:false,reason:"EXECUTION_SAFETY_REJECT:STALE_QUOTE"};
@@ -1763,6 +1803,7 @@ async function pushShadowPositions(db,open){
   if(positions.length)await gateway({action:"v17_shadow_positions",positions},5000);
 }
 async function settleKnownEntry(db,intent,raw,gw=opsGateway(db),opts={}) {
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>settleKnownEntry(db,intent,raw,gw,opts));
   const receipt=entryReceipt(raw,intent),sig=await db.from("v11_long_regime_signals").select("*").eq("id",intent.signal_id).single();
   if(sig.error||!sig.data||sig.data.features?.strategy!==STRATEGY||intent.request_payload?.order?.side!=="BUY"||intent.request_payload?.order?.position_effect!=="OPEN")throw Error("ENTRY_INTENT_OWNERSHIP_UNPROVEN");
   // Exchange position is the final truth for every order outcome, including zero-fill
@@ -1936,6 +1977,7 @@ function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
     try{
       const cycleLeft=!allowCycleBudgetExceeded&&cycle&&cycle!==budget?cycle.take(cost):Infinity;
       left=Math.min(budget.take(cost),cycleLeft);
+      if(shortAccountWriter(db)&&write&&!currentAccountOwner(db))throw Error("ACCOUNT_WRITER_CONTEXT_REQUIRED");
       await verifyExecutionLease(db,allowCycleBudgetExceeded);
       if(allowCycleBudgetExceeded&&write)throw Error("CAPACITY_REFRESH_WRITE_FORBIDDEN");
     }catch(error){
@@ -1944,7 +1986,10 @@ function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
         {exchangeSubmissionAttempted:false,submissionPhase:"PRE_SEND"});
       throw error;
     }
-    const result=await exchangeGateway(cmd,Math.max(1,Math.min(timeout,left,write?12000:2500)));
+    let outgoing=cmd;
+    if(shortAccountWriter(db)&&write){const c=currentExecutionContext(db);outgoing={...cmd,
+      writer:{account_key:"binance_futures:futures",owner:c.owner,fence:c.fence,execution_key:await hashJson(cmd)}};}
+    const result=await exchangeGateway(outgoing,Math.max(1,Math.min(timeout,left,write?12000:2500)));
     await verifyExecutionLease(db,allowCycleBudgetExceeded);return result;
   };
 }
@@ -1958,6 +2003,7 @@ async function readClosedProtectionBacklog(db,limit=100) {
   return {rows:r.data.rows,complete:r.data.complete};
 }
 async function reconcileDbOnlyPosition(db,p,gw,scopeIncident=null) {
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>reconcileDbOnlyPosition(db,p,gw,scopeIncident));
   const start=new Date(Date.parse(p.entry_at)-5000).toISOString(),startMs=Date.parse(start),endMs=Date.now();
   const [fills,lifecycles,laneOrders,accountTrades,orderHistory,portfolio,openOrders]=await Promise.all([
     db.from("exchange_trade_fills").select("exchange,account_scope,market,exchange_trade_id,exchange_order_id,client_order_id,side,price,quantity,quote_amount,fee_quote_amount,realized_pnl_quote,accounting_status,executed_at,v17_order_id,v17_position_id,source")
@@ -2044,6 +2090,7 @@ const NEVER_PLACED_PROOF_MAX_AGE_MS=6*3600000;
 // exact case using fresh venue order/trade history and unchanged owned exposure.
 // The account's ordinary recovery gate still owns reopening; no orders are sent here.
 async function settleNeverPlacedPartialRetry(db,order,proof,gw){
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>settleNeverPlacedPartialRetry(db,order,proof,gw));
   if(!retryProofCandidate(order))return null;
   const pr=await db.from("v11_long_regime_orders").select("*").eq("id",order.request_payload.retry_of_order_id).maybeSingle();
   if(pr.error||!pr.data)return {orderId:order.id,outcome:"UNRESOLVED",reason:"RETRY_PARENT_UNAVAILABLE"};
@@ -2094,6 +2141,7 @@ async function settleNeverPlacedPartialRetry(db,order,proof,gw){
  * caller then reports the original error and the account keeps holding.
  */
 async function settleNeverPlacedEntry(db,order,error,gw){
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>settleNeverPlacedEntry(db,order,error,gw));
   const message=String(error?.message??error??"");
   if(order.intent!=="OPEN_LONG"||order.exchange_order_id!=null)return null;
   if(!/-2013|order does not exist/i.test(message))return null;
@@ -2147,6 +2195,7 @@ async function settleNeverPlacedEntry(db,order,error,gw){
     executedQuantity:0,reason:"ORDER_NEVER_PLACED"};
 }
 async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>reconcileOps(db,{...pair,recoveryOnly:true},budget));
   const gw=scopedGateway(db,budget),results=[];
   // Exposure-uncertain order identity gets the first reconciliation budget.
   // Closed native-stop cleanup remains bounded and runs immediately afterward.
@@ -2159,7 +2208,7 @@ async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
       const raw=await gw({action:"get_order",market:o.symbol,identifier:o.client_order_id,exchange_order_id:o.exchange_order_id});
       if(o.intent==="OPEN_LONG") {
         const pos=await settleKnownEntry(db,o,raw,gw);
-        if(pos?.state==="OPEN")await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos,manualSymbols:pair.manual.map(x=>x.symbol),readPortfolio:()=>gw({action:"p10_portfolio"}),installNative:(p,c)=>installEntryNativeProtection(db,p,gw,c.manualSymbols),manage:ctx=>manageLeader(db,ctx.positionSnapshot??pos,{...ctx,gateway:gw})});
+        if(pos?.state==="OPEN")await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position:pos,manualSymbols:pair.manual.map(x=>x.symbol),readPortfolio:()=>gw({action:"p10_portfolio"}),installNative:(p,c)=>installEntryNativeProtection(db,p,gw,c.manualSymbols),manage:ctx=>manageLeader(db,ctx.positionSnapshot??pos,{...ctx,gateway:gw,recoveryOnly:pair.recoveryOnly===true})});
         const complete=!pos||pos.metadata?.v18EntryAccountingPending!==true;
         results.push({orderId:o.id,outcome:complete?"RESOLVED":"UNRESOLVED",inspectionPerformed:true,evidenceSecured:true,
           quantityResolved:true,attributionComplete:true,accountingComplete:complete,settled:complete,
@@ -2293,6 +2342,7 @@ async function persistDecisionRisk(db,pair,decision) {
     evidence:{decision,accountObservation:pair.pf.observation}});
 }
 async function attemptSymbolRecoveries(db,pair) {
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>attemptSymbolRecoveries(db,pair));
   if(!pair.quarantines.length)return[];
   const live=await opsGateway(db)({action:"v18_open_orders"},5000),results=[];
   for(const active of pair.quarantines.slice(0,5)){
@@ -2307,6 +2357,7 @@ async function attemptSymbolRecoveries(db,pair) {
   return results;
 }
 async function attemptOpsRecovery(db,pair,protectedIds) {
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>attemptOpsRecovery(db,pair,protectedIds));
   const c=await opsControls(db);
   let incidentResolution=null;
   if(c.runtime.incident_id){
@@ -2818,6 +2869,7 @@ await clockReviewDiagnostics(db,gptReviewed,async()=>{for(const review of gptRev
   await noteEntryLifecycle(db,row,lifecycleNote({at:Date.now(),stage:"GPT_REVIEW",reason:review.reason,gptDecision:review.storedDecision??null}));
 }
 });
+if(shortAccountWriter(db)&&!executionDispatchClaims.get(db))return {entered:false,reason:"DURABLE_DISPATCH_WRITER_REQUIRED",reviewed:gptReviewed.candidates.length};
 const queued=gptReviewed.candidates;
 const pendingReviewIds=new Set((gptReviewed.reviews??[]).filter(r=>r.reason==="GPT_REVIEW_PENDING").map(r=>String(r.signalId)));
 const pendingReviewRows=executable.filter(s=>isLeader20(s)&&pendingReviewIds.has(String(s.id))),lateReviewIds=new Set();
@@ -2914,6 +2966,11 @@ for await(const [index,s] of entryQueueWithLateReviews(queued,{
     // nothing is held, so the slot stays free for the next candidate.
     refusals.push(slotReasonOf(entry?.reason));
   }catch(e){
+    if(e?.writerDeferred===true){
+      const released=await db.from("v11_long_regime_signals").update({status:"NEW",updated_at:new Date().toISOString()}).eq("id",s.id).eq("status","CLAIMED");
+      if(released.error)throw Error("DEFERRED_SIGNAL_RELEASE_FAILED");
+      entry={entered:false,reason:String(e.message),deferred:true};break;
+    }
     const authorityError=classifyEntryAuthorityError(e,{orderDispatched:attempt.dispatched===true}),
       msg=authorityError.message,authorityCandidateVeto=authorityError.candidateVeto,
       symbolScoped=authorityCandidateVeto||ENTRY_SKIP_SYMBOL_SCOPED.test(msg);
@@ -3024,7 +3081,7 @@ async function manageLeader(db,p,ctx){
   if(hardBefore.hardHit){
     const result=await closePos(db,{...p,metadata:{...meta,exitTelemetry:{detectedAtMs:earlyQuote.detectedAtMs},exitAuthority:hardBefore}},1,hardBefore.hardReason,ctx);
     let nativeStop=null;
-    if(result?.closed&&NATIVE_STOP_ENABLED)try{nativeStop=await createGatewayProtection(db,ctx?.cleanupGateway??gateway,()=>verifyExecutionLease(db)).ensure(p.id,{manualSymbols:ctx?.manualSymbols??[]});}catch(e){if(classifyFailure(e).fatal)throw e;}
+    if(result?.closed&&NATIVE_STOP_ENABLED)try{nativeStop=await withAccountMutation(db,()=>createGatewayProtection(db,ctx?.cleanupGateway??gateway,()=>verifyExecutionLease(db)).ensure(p.id,{manualSymbols:ctx?.manualSymbols??[]}));}catch(e){if(classifyFailure(e).fatal)throw e;}
     await audit(db,p,"BULL","BULL","FULL_CLOSE",hardBefore.hardReason,{exitClass:EXIT_CLASS.HARD_SAFETY,bid:earlyQuote.bid,hardFloor:hardBefore.hardFloor}).catch(()=>{});
     return {action:"CLOSE",reason:hardBefore.hardReason,result,nativeStop};
   }
@@ -3035,7 +3092,7 @@ async function manageLeader(db,p,ctx){
   // R5 stop; it can neither lower protection nor stop the ordinary manager.
   const costUsable=p.entry_fee_usdt!=null&&Number.isFinite(Number(p.entry_fee_usdt))&&Number(p.entry_fee_usdt)>=0&&
     Number(p.original_quantity)>0;
-  if(p142Active&&ctx?.fastObservation!==true&&costUsable){
+  if(p142Active&&ctx?.fastObservation!==true&&costUsable&&ctx?.recoveryOnly!==true){
     const entryAt=Date.parse(p.entry_at),start=p142State?.lastBarOpen==null?
       Math.floor(entryAt/60000)*60000:Number(p142State.lastBarOpen),
       completedThrough=Math.floor(Date.now()/60000)*60000-1;
@@ -3141,6 +3198,7 @@ async function manageLeader(db,p,ctx){
   // acknowledge-before-cancel and monotonic, so provider outages cannot erase already-earned
   // protection. Software closes a resident soft crossing if a gap arrives before replacement.
   async function syncNativeStop(reason,confirmedQuantity=null){
+    if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>syncNativeStop(reason,confirmedQuantity));
     if(!NATIVE_STOP_ENABLED)return null;
     const exchangeQuantity=confirmedQuantity===null?ctx?.exchangeQuantity?.get(String(p.symbol).toUpperCase()):confirmedQuantity;
     if(!(exchangeQuantity>0)&&reason!=="CLOSE")return {status:"NO_EXCHANGE_QUANTITY"};
@@ -3185,7 +3243,7 @@ async function manageLeader(db,p,ctx){
   // GPT FINAL is primary. DeepSeek may assume EXIT/HOLD/PROTECT authority only when GPT is
   // unavailable or its budget is exhausted; it never receives entry authority. Resident
   // protection remains independent of both providers.
-  if(state.action!=="CLOSE"){
+  if(state.action!=="CLOSE"&&ctx?.recoveryOnly!==true){
     nextMeta.fd1HoldPolicyVersion=FD1_HOLD_POLICY_VERSION;
     const timeCandidate=FD1_TIME_REASONS.includes(rawExit.reason)?rawExit.reason:null;
     const fd1=await fd1HoldTick(db,p,{meta:nextMeta,state,bid,now:detectedAtMs,timeCandidate,
@@ -3246,6 +3304,8 @@ async function manageLeader(db,p,ctx){
       closed:result?.closed===true,snapshotAtMs:aiExitContext.snapshot_at_ms});
     return {action:"CLOSE",reason:closeReason,result,nativeStop};
   }
+  const residentImproved=residentProtection.level>activeResidentStop+softEps;
+  const {write,nativeStop}=await withAccountMutation(db,async()=>{
   const now=new Date(Math.max(Date.now(),Date.parse(p.updated_at)+1)).toISOString();
   await verifyExecutionLease(db);
   const write=await db.from("v11_long_regime_positions").update({peak_price:state.peakPrice,
@@ -3254,16 +3314,18 @@ async function manageLeader(db,p,ctx){
   if(write.error||!write.data)throw new Error("V17_EXIT_STATE_WRITE");
   // Only after the ratcheted stop is durable: the exchange order must never protect a
   // level the database does not already hold.
-  const residentImproved=residentProtection.level>activeResidentStop+softEps;
+
   const nativeStop=ctx?.fastObservation&&!residentImproved&&!stopImproved&&meta.exitAuthority?.version===EXIT_AUTHORITY_VERSION&&
     !legacySoftOrderIds.some(id=>(meta.exitProtection?.orders??[]).some(o=>o.clientId===id&&!o.terminal))?
     {status:"UNCHANGED",softwareMonitorRequired:false}:await syncNativeStop("HOLD");
+  return {write,nativeStop};
+  });
   await auditProtection(db,protectionDecision,{outcome:residentImproved?"PROTECTION_RAISED":"PROTECTION_KEPT",
     resident:residentProtection,residentBefore:activeResidentStop||null,execution:nativeStop,
     snapshotAtMs:aiExitContext.snapshot_at_ms});
   // Existing HARD decisions and resident protection run first. QV3 failures
   // leave that protection intact; only an exact post-cutover stamp enters QV3 scope.
-  const qv3=ctx?.evaluateQv3===false?null:await qv3AfterProtection(db,write.data,{...rec(ctx),bid});
+  const qv3=ctx?.evaluateQv3===false||ctx?.recoveryOnly===true?null:await qv3AfterProtection(db,write.data,{...rec(ctx),bid});
   if(qv3?.result){
     await audit(db,p,"BULL","BULL","FULL_CLOSE","QV3_TWO_BEARISH_CLOSED",{...details,qv3:qv3.assessment})
       .catch(e=>console.error("QV3_AUDIT_FAILED",String(e)));
@@ -3365,10 +3427,26 @@ async function qv3AfterProtection(db,p,ctx){
   }
 }
 const exchangeGateway=gateway;
-const leaseOwners=new WeakMap(),cycleBudgets=new WeakMap(),executionDispatchClaims=new WeakMap();
+const leaseOwners=contextualOwners(),cycleBudgets=contextualState("budget"),executionDispatchClaims=contextualState("claim");
+const shortWriterModes=new WeakMap(),accountHostScopes=new WeakMap();
+async function loadAccountExecutionMode(db){
+ const r=await db.from("v17_execution_infrastructure_control").select("short_writer_enabled").eq("singleton",true).single();
+ if(r.error||!r.data)throw Error("EXECUTION_INFRASTRUCTURE_CONTROL_UNAVAILABLE");
+ shortWriterModes.set(db,r.data.short_writer_enabled===true);
+ if(r.data.short_writer_enabled===true)accountHostScopes.set(db,createHostAccountScopes(db,{
+  budget:()=>createBudget({ms:90000,calls:240}),onEvent:event=>console.log(JSON.stringify(event))}));
+}
+function shortAccountWriter(db){return shortWriterModes.get(db)===true;}
+async function withAccountMutation(db,operation,options={}){
+ if(!shortAccountWriter(db)||currentAccountOwner(db))return operation();
+ const result=await accountHostScopes.get(db).critical(db,operation,options);
+ if(result?.deferred===true)throw Object.assign(Error(result.reason),{writerDeferred:true,exchangeSubmissionAttempted:false,submissionPhase:"PRE_SEND"});
+ return result;
+}
 const EXECUTION_LEASE_TTL_SECONDS=150;
 async function verifyExecutionLease(db,allowBudgetExceeded=false){
   if(!allowBudgetExceeded&&cycleBudgets.get(db)?.remaining()===0)throw Error("V18_API_BUDGET_EXHAUSTED");
+  if(shortAccountWriter(db))return accountHostScopes.get(db).verify();
   const owner=leaseOwners.get(db);if(!owner)throw new Error("V17_EXECUTION_LEASE_MISSING");
   const r=await db.rpc("v17_verify_execution_lease",{p_owner:owner});
   if(r.error||r.data!==true)throw new Error("V17_EXECUTION_LEASE_EXPIRED");
@@ -3600,12 +3678,55 @@ async function drainExecutionDispatchesUnderAccountLease(db,signalId=null){
     executionDispatchDrain:{completed:completed.length,terminalizedWithoutClaim,
       states:completed.map(x=>x.executionDispatchFinalization?.row?.state??null)}};
 }
+async function ensureShortWriterRecovery(db){
+  const readiness=await db.rpc("v17_account_recovery_state");
+  if(readiness.error)throw Error("ACCOUNT_RECOVERY_READINESS_UNAVAILABLE");
+  if(readiness.data?.ready===true)return true;
+  const gw=opsGateway(db);
+  // Observe the venue before touching ambiguous identities; the existing reconciler
+  // queries original IDs only and never creates another BUY.
+  await gw({action:"v18_open_orders"},5000);
+  let pair=await readOpsPair(db,gw);
+  await reconcileOps(db,{...pair,recoveryOnly:true});
+  pair=await readOpsPair(db,gw);
+  for(const p of pair.match.safe){
+    const protectedNow=await installEntryNativeProtection(db,p,gw,pair.manual.map(x=>x.symbol));
+    if(protectedNow.status==="RESIDENT_EXIT_REQUIRED")await manageLeader(db,protectedNow.position,
+      {gateway:gw,recoveryOnly:true,evaluateQv3:false,exchangeQuantity:new Map([[p.symbol,Number(p.remaining_quantity)]]),manualSymbols:pair.manual.map(x=>x.symbol)});
+  }
+  pair=await readOpsPair(db,gw);const live=await gw({action:"v18_open_orders"},5000);
+  if(!pair.match.ok||riskOrders(pair.orders).length||!confirmedLiveProtection(live,pair.positions))return false;
+  const recovered=await db.rpc("v17_record_account_recovery",{p_owner:leaseOwners.get(db),
+    p_postmaster:readiness.data.postmaster_at,p_positions:pair.positions.map(p=>({id:p.id,updated_at:p.updated_at,quantity:p.remaining_quantity})),
+    p_observed_at:new Date(live.observed_at_ms).toISOString()});
+  if(recovered.error)throw Error("ACCOUNT_RECOVERY_COMMIT_UNAVAILABLE");return recovered.data===true;
+}
+async function runShortExecutionDispatch(db,signalId=null){
+  const scopes=accountHostScopes.get(db),owner=crypto.randomUUID();
+  const claimed=await scopes.critical(db,async()=>{
+    if(!await ensureShortWriterRecovery(db))return {claimed:false,reason:"RECONCILIATION_FIRST_ENTRY_FROZEN"};
+    await reconcileExecutionDispatches(db);
+    return claimExecutionDispatch(db,{signalId,owner,minRemainingMs:ENTRY_ATTEMPT_RESERVE.ms});
+  },{correlationId:signalId});
+  if(claimed?.deferred||claimed?.claimed!==true||!claimed?.row)return {ok:true,skipped:claimed?.reason??"NO_READY_EXECUTION"};
+  const row=claimed.row,claim={signalId:String(row.signal_id),owner,
+    claimedAt:Date.parse(row.executor_claimed_at),validUntil:Date.parse(row.valid_until)};
+  return scopes.dispatch(claim,row,async()=>{
+    let result=null,error=null;
+    try{result=await runDispatchedEntry(db);return {...result,executionDispatchFinalization:await finishExecutionDispatch(db,claim,result)};}
+    catch(e){error=String(e?.message??e);await finishExecutionDispatch(db,claim,result,error);throw e;}
+  });
+}
 async function runExecutionDispatchOnly(db,signalId=null){
+  if(shortAccountWriter(db))return runShortExecutionDispatch(db,signalId);
   // Account ownership precedes dispatch ownership. Losers leave the durable row
   // READY, so pg_net or the five-second sweeper can retry without a claim lease.
   return await runWithLease(db,()=>drainExecutionDispatchesUnderAccountLease(db,signalId));
 }
 async function runLeaseCycleWithDispatchPriority(db,operation=run){
+  if(shortAccountWriter(db))return accountHostScopes.get(db).periodic(async()=>{
+    await withAccountMutation(db,()=>ensureShortWriterRecovery(db));return operation(db);
+  });
   // Every ordinary-cycle lease acquisition rechecks the durable outbox while it owns
   // the account. This closes the GPT-completion race where runWithGptReview used to
   // reacquire the lease and spend the remaining BUY window in a long management run.
@@ -3624,12 +3745,20 @@ Deno.serve(async req=>{
   const U=env("SUPABASE_URL"),K=env("SUPABASE_SERVICE_ROLE_KEY"),db=createClient(U,K,{
     auth:{persistSession:false,autoRefreshToken:false},
     global:{fetch:async(url,init={})=>{
+      const context=assertActiveExecutionRequest(db);
+      if(context?.kind==="CLEANUP"&&!/\/rpc\/v17_release_(execution|analysis)_lease$/.test(new URL(String(url)).pathname))throw Error("LEASE_CLEANUP_RPC_ONLY");
+      if(context?.kind==="REVIEW"&&!["GET","HEAD"].includes(String(init.method??"GET").toUpperCase())&&
+        !/\/rpc\/(leader20_entry_authority|leader20_clock_execution_note|doa_context_for_role_v1|doa_gpt_capture_context_v3)$/.test(new URL(String(url)).pathname))throw Error("REVIEW_TRADING_WRITE_FORBIDDEN");
       const headers=new Headers(init.headers),owner=leaseOwners.get(db);
+      for(const [name,value]of Object.entries(executionContextHeaders(db)))headers.set(name,value);
       if(owner)headers.set("x-v18-execution-owner",owner);
       const timeout=AbortSignal.timeout(2500);
-      return fetch(url,{...init,headers,signal:init.signal?AbortSignal.any([init.signal,timeout]):timeout});
+      return fetch(url,{...init,headers,signal:AbortSignal.any([timeout,...(init.signal?[init.signal]:[]),...(context?.signal?[context.signal]:[])])});
     }}
   });
+  const receipts=createClient(U,K,{auth:{persistSession:false,autoRefreshToken:false},
+    global:{fetch:(url,init={})=>fetch(url,{...init,signal:init.signal?AbortSignal.any([init.signal,AbortSignal.timeout(2500)]):AbortSignal.timeout(2500)})}});
+  db.providerJournal=createProviderJournal(db,receipts);
   if(!(await auth(db,req)))return res(401,{ok:false,error:"UNAUTHORIZED"});
   // The durable review row's DB trigger owns the immediate pg_net wake, with the
   // five-second outbox sweep as fallback. Starting execution inside this long-running
@@ -3710,7 +3839,8 @@ Deno.serve(async req=>{
         probe:await finalRecheckProbe(db,{symbol,fixture,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()),
           simulateFinalTimeout:mode==="fd1-recheck-timeout-probe"})});
     }
-    if(mode==="cec-bootstrap")return res(200,await runWithLease(db,bootstrapCec0040));
+    if(["cec-bootstrap","execute-ready","execute-ready-any","run","live"].includes(mode))await loadAccountExecutionMode(db);
+    if(mode==="cec-bootstrap")return res(200,shortAccountWriter(db)?await accountHostScopes.get(db).periodic(bootstrapCec0040):await runWithLease(db,bootstrapCec0040));
     if(mode==="execute-ready"){
       const signalId=String(body.signalId??"");
       if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(signalId))
