@@ -22,7 +22,13 @@ export function createWriterGateway({url,secret,networkBoundMs,fetchImpl=fetch})
       // Retain only the narrow definitive-not-found signal needed for existing
       // reconciliation. Arbitrary gateway bodies never enter an error/log message.
       const missing=/-2013|order does not exist/i.test(String(data?.error??''));
-      throw Object.assign(Error(missing?'EXCHANGE_ORDER_NOT_FOUND_-2013':`GATEWAY_HTTP_${r.status}`),{status:r.status});
+      const canonical={WRITER_FENCED:'LEASE_FENCED',WRITER_DB_TIMEOUT:'DB_TIMEOUT',
+        WRITER_DB_DNS_FAILURE:'DNS_TEMPORARY_FAILURE',WRITER_DB_CONNECTION_RESET:'DB_CONNECTION_RESET',
+        WRITER_DB_CONNECTION_REFUSED:'DB_CONNECTION_REFUSED',WRITER_DB_UNAVAILABLE:'DB_UNAVAILABLE',
+        WRITER_CONTEXT_REQUIRED:'WRITER_CONTEXT_REQUIRED',WRITER_DB_CREDENTIALS_MISSING:'WRITER_DB_CREDENTIALS_MISSING'};
+      const code=Object.hasOwn(canonical,data?.code)?canonical[data.code]:null;
+      throw Object.assign(Error(missing?'EXCHANGE_ORDER_NOT_FOUND_-2013':code??`GATEWAY_HTTP_${r.status}`),
+        {status:r.status,...(code?{code}:{})});
     }
     return data.result;
   };
