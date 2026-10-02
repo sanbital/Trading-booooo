@@ -2326,7 +2326,7 @@ async function decideEntry(db,pair,candidateSymbol,openOrders,opts={}) {
   // evidence under the unchanged 3s/5s rules before deciding, never extend its age.
   if(shortAccountWriter(db)&&!freshPortfolio(pair.pf)){
     Object.assign(pair,await readOpsPair(db,opsGateway(db),candidateSymbol));
-    Object.assign(openOrders,await opsGateway(db)({action:"v18_open_orders"},5000));
+    openOrders=await opsGateway(db)({action:"v18_open_orders"},5000);
   }
   return decideEntryWith(controls,pair,candidateSymbol,openOrders,opts);
 }
@@ -2626,9 +2626,8 @@ async function run(db) {
       // success clock only after real entry evaluation and clean management/reconciliation.
       // This is telemetry only: it must never clear a circuit or change operator controls.
       const cycleOutcome=runtimeCycleOutcome({fatal,entryEvaluationCompleted,health,managed,reconciliation});
-      if(cycleOutcome.successful){
-        patch.last_success_at=now;patch.last_error=null;
-      }else patch.last_error=cycleOutcome.lastError;
+      // Incident diagnostics belong to the incident epoch. Periodic telemetry
+      // writes them only with an atomic circuit_open=false predicate below.
       if(managed.length&&managed.every(x=>x.action&&!x.error&&!x.skipped)&&["PROTECTED","FLAT"].includes(health))patch.last_management_success_at=now;
       if(managed.length&&managed.every(x=>x.action&&!x.error&&!x.skipped)&&health==="PROTECTED")
         patch.last_position_protection_success_at=now;
@@ -2645,9 +2644,20 @@ async function run(db) {
       if(entry.entered)patch.last_entry_at=now;
       if(managed.some(x=>x.action?.result?.executedQuantity>0||x.action?.result?.nativeReconciled)||
         reconciliation.some(x=>x.executedQuantity>0)||x1Fast.applied?.some(x=>x.action==="CLOSE"))patch.last_exit_at=now;
-      const wr=await db.from("v11_long_regime_runtime").update(patch).eq("singleton",true);if(wr.error)throw Error("HEARTBEAT_WRITE");
+      await writeRuntimeTelemetry(db,patch,cycleOutcome,now);
     }
   }
+}
+async function writeRuntimeTelemetry(db,patch,cycleOutcome,now){
+  // Never include incident-owned fields in the unconditional heartbeat. The
+  // second UPDATE locks/rechecks the current row predicate inside Postgres, so
+  // a circuit raised between requests cannot be mistaken for an external reset.
+  const heartbeat={...patch};delete heartbeat.last_error;delete heartbeat.last_success_at;
+  const wr=await db.from("v11_long_regime_runtime").update(heartbeat).eq("singleton",true);
+  if(wr.error)throw Error("HEARTBEAT_WRITE");
+  const diagnostic=cycleOutcome.successful?{last_error:null,last_success_at:now}:{last_error:cycleOutcome.lastError};
+  const dr=await db.from("v11_long_regime_runtime").update(diagnostic).eq("singleton",true).eq("circuit_open",false);
+  if(dr.error)throw Error("HEARTBEAT_DIAGNOSTIC_WRITE");
 }
 // Account state the entry capacity is computed from (entry-capacity.mjs); `pair` is readOpsPair's.
 function capacityInputs(pair,snapshot){

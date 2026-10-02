@@ -21,5 +21,7 @@ select now() utc,now() at time zone 'Asia/Seoul' kst,pg_postmaster_start_time() 
  (select count(*) from net.http_request_queue) net_queue_depth,
  (select count(*) from pg_stat_activity) db_connections,
  (select current_setting('max_connections')::integer) db_connection_limit,
+ (select row_to_json(r) from (select circuit_open,circuit_reason,incident_kind,incident_generation,entry_block_reason,last_cycle_completed_at,last_account_evidence_at from public.v11_long_regime_runtime where singleton)r) runtime,
+ (select row_to_json(l) from public.v17_execution_lease l where singleton) writer,
  (select row_to_json(s) from public.trading_scheduler_control s where scheduler_key='trading-production') scheduler,
  (select row_to_json(s) from public.v17_execution_infrastructure_control s where singleton) infrastructure
