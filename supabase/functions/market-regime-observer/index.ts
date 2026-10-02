@@ -1,5 +1,5 @@
 // @ts-nocheck -- This edge function is intentionally maintained as bundled JavaScript-compatible TypeScript.
-import {admitSchedulerRequest} from '../_shared/scheduler-admission.mjs';
+import { admitSchedulerRequest } from "../_shared/scheduler-admission.mjs";
 // Trading-booooo market regime observer v2 + C43 dynamic horizon forecast.
 // Observation and P10 exit-risk input. It never changes entries, sizing, leverage, or orders directly.
 
@@ -891,8 +891,17 @@ Deno.serve(async (req) => {
     if (!["tick", "observe", "evaluate"].includes(action)) {
       return json({ error: "unsupported action" }, 400);
     }
-    const schedulerAdmission=await admitSchedulerRequest({endpoint:"market-regime-observer",body,rpc:(name,args)=>db(`rpc/${name}`,{method:"POST",body:JSON.stringify(args),signal:AbortSignal.timeout(2500)})});
-    if(!schedulerAdmission.allowed)return json({ok:true,skipped:schedulerAdmission.reason});
+    const schedulerAdmission = await admitSchedulerRequest({
+      endpoint: "market-regime-observer",
+      body,
+      rpc: (name, args) =>
+        db(`rpc/${name}`, {
+          method: "POST",
+          body: JSON.stringify(args),
+          signal: AbortSignal.timeout(2500),
+        }),
+    });
+    if (!schedulerAdmission.allowed) return json({ ok: true, skipped: schedulerAdmission.reason });
     const s = await collectSnapshot();
     let evaluated = 0, observation = null;
     if (action === "tick" || action === "evaluate") evaluated = await evaluateDue(s);
