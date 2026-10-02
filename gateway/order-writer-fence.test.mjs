@@ -68,3 +68,10 @@ test('legacy reduce-only management shares writer and releases it, while P10 BUY
  await assert.rejects(gate.run({exchange:'binance_futures',action:'create_order',order:{side:'BUY',position_effect:'OPEN'}},()=>executed++),/FINAL_BUY_WRITER_REQUIRED/);assert.equal(acquired,0);
  await gate.run({exchange:'binance_futures',action:'create_order',order:{side:'SELL',position_effect:'CLOSE'}},async()=>{await beforeExchangeMutation({required:true,venue:'binance_futures',method:'POST',path:'/fapi/v1/order'});executed++;});assert.equal(acquired,1);assert.equal(released,1);assert.equal(executed,1);
 });
+
+test('mandatory writer preserves existing reduce-only SHORT close BUY and denies entry BUY',async()=>{
+ let released=0,executed=0;const gate=createOrderWriterFence({required:true,authorize:async()=>true,acquireLegacy:async()=>({envelope:{account_key:'binance_futures:futures',execution_key:'short-close-existing',owner:'owner',fence:1},release:async()=>{released++;}})});
+ await gate.run({exchange:'binance_futures',action:'create_order',order:{side:'BUY',position_effect:'CLOSE',position_side:'SHORT'}},async()=>{executed++;});
+ assert.equal(executed,1);assert.equal(released,1);
+ await assert.rejects(gate.run({exchange:'binance_futures',action:'create_order',order:{side:'BUY',position_effect:'OPEN'}},async()=>{executed++;}),/FINAL_BUY_WRITER_REQUIRED/);assert.equal(executed,1);
+});

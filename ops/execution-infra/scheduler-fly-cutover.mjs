@@ -1,3 +1,4 @@
+import {recoverAccountAtCutover} from './cutover-account-recovery.mjs';
 import {spawnSync} from 'node:child_process';
 import {mkdirSync,writeFileSync} from 'node:fs';
 const operation=process.env.CUTOVER_OPERATION;
@@ -5,10 +6,14 @@ if(!['enable_external','disable_external','enable_writer','disable_writer','veri
 const project='etaajwpernzrcdrifdnw',tokyo='trading-booooo-sanbital-gateway';
 async function query(sql){const r=await fetch(`https://api.supabase.com/v1/projects/${project}/database/query`,{method:'POST',headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN,'content-type':'application/json'},body:JSON.stringify({query:sql}),signal:AbortSignal.timeout(8000)});if(!r.ok)throw Error('CUTOVER_DB_UNAVAILABLE');return r.json();}
 if(operation==='enable_external'){
- const rows=await query(`select c.enabled, c.scheduler_key, i.short_writer_enabled,
+ let rows=await query(`select c.enabled, c.scheduler_key, i.short_writer_enabled,
   i.recovered_postmaster_at=pg_postmaster_start_time() ready,
   not exists(select 1 from cron.job where active and jobid in (select legacy_cron_jobid from public.trading_scheduler_jobs where scheduler_key=c.scheduler_key and enabled)) old_cron_disabled
   from public.trading_scheduler_control c cross join public.v17_execution_infrastructure_control i where c.scheduler_key='trading-production' and i.singleton`);
+ if(rows.length===1&&rows[0].enabled===true&&rows[0].old_cron_disabled===true&&rows[0].short_writer_enabled===true&&rows[0].ready!==true){
+  await recoverAccountAtCutover({project,accessToken:process.env.SUPABASE_ACCESS_TOKEN});
+  rows[0].ready=(await query("select recovered_postmaster_at=pg_postmaster_start_time() ready from public.v17_execution_infrastructure_control where singleton"))[0]?.ready;
+ }
  if(rows.length!==1||rows[0].enabled!==true||rows[0].ready!==true||rows[0].short_writer_enabled!==true||rows[0].old_cron_disabled!==true)throw Error('CUTOVER_READINESS_OR_DUAL_SCHEDULER_GUARD');
 }
 if(operation==='enable_writer'){

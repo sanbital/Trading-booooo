@@ -46,6 +46,7 @@ import {V30_FRONT_LIVE_VERSION,v30FrontDecision,entryBranchOf,baselineAllowedV30
 import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
 import {admitSchedulerRequest} from '../_shared/scheduler-admission.mjs';
 import {createProviderJournal} from "./account-provider-journal.mjs";
+import {runDispatchAnalysisBatch} from "./dispatch-analysis-batch.mjs";
 import {createHostAccountScopes} from "./account-host-scopes.mjs";
 import {currentExecutionContext,currentAccountOwner,contextualOwners,contextualState,executionContextHeaders,assertActiveExecutionRequest} from "./account-execution-context.mjs";
 const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-MULTISLOT-CAPACITY-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
@@ -3611,6 +3612,7 @@ function dispatchTerminalState(orders,result,signal,position){
   if(states.includes("UNKNOWN"))return "UNKNOWN";
   if(signal?.status==="REJECTED")return "REJECTED";
   const reason=String(result?.entry?.reason??result?.skipped??"");
+  if(reason.startsWith("PRE_EXECUTION_INVALID:")||reason==="PRE_EXECUTION_UNCERTAIN_DATA_UNSAFE")return "REJECTED";
   if(reason.includes("CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION"))return "CLOCK_FINAL_EXPIRED_BEFORE_EXECUTION";
   if(reason.includes("EXECUTION_WINDOW_INSUFFICIENT"))return "EXECUTION_WINDOW_INSUFFICIENT";
   return null;
@@ -3703,20 +3705,19 @@ async function ensureShortWriterRecovery(db){
   if(recovered.error)throw Error("ACCOUNT_RECOVERY_COMMIT_UNAVAILABLE");return recovered.data===true;
 }
 async function runShortExecutionDispatch(db,signalId=null){
-  const scopes=accountHostScopes.get(db),owner=crypto.randomUUID();
-  const claimed=await scopes.critical(db,async()=>{
-    if(!await ensureShortWriterRecovery(db))return {claimed:false,reason:"RECONCILIATION_FIRST_ENTRY_FROZEN"};
-    await reconcileExecutionDispatches(db);
-    return claimExecutionDispatch(db,{signalId,owner,minRemainingMs:ENTRY_ATTEMPT_RESERVE.ms});
-  },{correlationId:signalId});
-  if(claimed?.deferred||claimed?.claimed!==true||!claimed?.row)return {ok:true,skipped:claimed?.reason??"NO_READY_EXECUTION"};
-  const row=claimed.row,claim={signalId:String(row.signal_id),owner,
-    claimedAt:Date.parse(row.executor_claimed_at),validUntil:Date.parse(row.valid_until)};
-  return scopes.dispatch(claim,row,async()=>{
-    let result=null,error=null;
-    try{result=await runDispatchedEntry(db);return {...result,executionDispatchFinalization:await finishExecutionDispatch(db,claim,result)};}
-    catch(e){error=String(e?.message??e);await finishExecutionDispatch(db,claim,result,error);throw e;}
-  });
+  const scopes=accountHostScopes.get(db);
+  return runDispatchAnalysisBatch({signalId,limit:MAX_SLOTS,
+    critical:operation=>scopes.critical(db,operation,{correlationId:signalId}),
+    recover:async()=>{if(!await ensureShortWriterRecovery(db))return false;await reconcileExecutionDispatches(db);return true;},
+    claim:id=>claimExecutionDispatch(db,{signalId:id,owner:crypto.randomUUID(),minRemainingMs:ENTRY_ATTEMPT_RESERVE.ms}),
+    execute:claimed=>{const row=claimed.row,claim={signalId:String(row.signal_id),owner:row.claim_owner,
+      claimedAt:Date.parse(row.executor_claimed_at),validUntil:Date.parse(row.valid_until)};
+      return scopes.dispatch(claim,row,async()=>{
+        let result=null;
+        try{result=await runDispatchedEntry(db);return {...result,executionDispatchFinalization:await finishExecutionDispatch(db,claim,result)};}
+        catch(e){await finishExecutionDispatch(db,claim,result,String(e?.message??e));throw e;}
+      });
+    }});
 }
 async function runExecutionDispatchOnly(db,signalId=null){
   if(shortAccountWriter(db))return runShortExecutionDispatch(db,signalId);

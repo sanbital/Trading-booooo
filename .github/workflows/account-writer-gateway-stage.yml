@@ -82,7 +82,7 @@ jobs:
           WRITER_STAGE_CONFIG: ${{ matrix.config }}
         run: |
           set -euo pipefail
-          flyctl deploy . --remote-only --ha=false --strategy rolling -a "$WRITER_STAGE_APP" --config "$WRITER_STAGE_CONFIG"
+          flyctl deploy . --remote-only --ha=false --strategy rolling -a "$WRITER_STAGE_APP" --config "$WRITER_STAGE_CONFIG" --build-arg RELEASE_COMMIT="$GITHUB_SHA"
       - name: Check exact live build and preserved scheduler flags
         env:
           WRITER_STAGE_APP: ${{ matrix.app }}
