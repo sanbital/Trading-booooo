@@ -67,7 +67,7 @@ export async function writerTurn({account,owner,repository,exchange,validate,set
   try { lease=await repository.acquire(account,owner); }
   catch (error) {
     const code=executionErrorCode(error);
-    try {onEvent({state:'WRITER_UNAVAILABLE',reason:code,at:new Date(now()).toISOString()});}catch{}
+    try {Promise.resolve(onEvent({state:'WRITER_UNAVAILABLE',reason:code,at:new Date(now()).toISOString()})).catch(()=>{});}catch{}
     // An acknowledgement may be lost after acquisition committed. The owner is
     // unique to this turn; without a returned fence it cannot safely do work.
     return {status:code,error:code,terminal:false};
@@ -77,8 +77,8 @@ export async function writerTurn({account,owner,repository,exchange,validate,set
   let lost = false, timer, row, exchangeAttempted = false, heartbeatRunning = false;
   const event = (state,reason=null) => {
     // Observability failures must not replace the durable order outcome.
-    try { onEvent({correlation_id:row?.correlation_id,
-      execution_key:row?.execution_key,state,reason,fence:lease.fence,at:new Date(now()).toISOString()}); } catch {}
+    try { Promise.resolve(onEvent({correlation_id:row?.correlation_id,
+      execution_key:row?.execution_key,state,reason,fence:lease.fence,at:new Date(now()).toISOString()})).catch(()=>{}); } catch {}
   };
   const verify = async () => {
     if (lost || !(await repository.verify(lease))) {
