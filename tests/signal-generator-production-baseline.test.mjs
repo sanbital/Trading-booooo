@@ -13,10 +13,13 @@ test('signal generator retains all 15 production v51 dependencies byte for byte'
     assert.equal(hash(readFileSync(new URL(path,root))),entry.sha256,path);
   }
 });
-test('generator entrypoint differs from production only by dependency relocation',()=>{
+test('archived v51 entrypoint hash proves the old graph without constraining its replacement',()=>{
   const entry=readFileSync(new URL(manifest.entrypoint.path,root),'utf8');
-  const original=entry.replaceAll(manifest.relocation.to,manifest.relocation.from);
-  assert.equal(hash(original),manifest.entrypoint.original_sha256);
+  assert.notEqual(hash(entry),manifest.entrypoint.original_sha256);
+  assert.ok(entry.includes("../_shared/deterministic/universe.mjs"));
+  assert.ok(entry.includes("../_shared/deterministic/runtime.mjs"));
+  assert.ok(!entry.includes('_production-v51'));
+  assert.ok(!/(openai|deepseek|gpt-final)/i.test(entry));
 });
 test('relative imports in the frozen graph cannot escape into the executor shared graph',()=>{
   const files=new Set(Object.keys(manifest.files).map(path=>new URL(path,root).href));

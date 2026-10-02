@@ -24,6 +24,8 @@ jobs:
           node-version: 22
       - name: Install isolated PostgreSQL test runtime
         run: npm install --prefix /tmp/infra-test --no-save @electric-sql/pglite@0.3.14
+      - name: Install deterministic verification dependencies
+        run: npm ci --prefix test-support/deterministic
       - name: Run complete strategy and infrastructure regression
         env:
           PGLITE_MODULE: /tmp/infra-test/node_modules/@electric-sql/pglite/dist/index.js

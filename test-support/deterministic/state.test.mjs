@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {classifyMarket,revalidateEntry,decidePosition,captureSafety} from '../../supabase/functions/_shared/deterministic/market-state.mjs';
 import {normalizeCapture} from '../../supabase/functions/_shared/deterministic/features.mjs';
 import {overlayExecutableBook,detachAudit,requireEntryAuthority} from '../../supabase/functions/_shared/deterministic/runtime.mjs';
+import {EXIT_CLASS,exitClass} from '../../supabase/functions/_shared/deterministic/exit-authority.mjs';
 import {scenario,bearish,position,executableQuote,AT} from './fixtures.mjs';
 
 test('A: trend, active buyers, expanding participation and held breakout permit BUY',()=>{
@@ -80,4 +81,10 @@ test('fresh book VWAP changes cost and insufficient depth fails closed without m
 });
 test('a retired signal can never become automatic BUY when its API authority disappears',async()=>{
  await assert.rejects(()=>requireEntryAuthority({rpc(){throw Error('must not read database');}},{features:{}}),/RETIRED_ENTRY_AUTHORITY/);
+});
+test('pre-cutover hard-safety reasons remain executable during open-position ownership handoff',()=>{
+ for(const reason of ['V17_NATIVE_STOP','NATIVE_HARD_STOP','R5_RISK_CUT','V17_RISK_CUT','RISK_CUT','LIQUIDATION_SAFETY','V17_HARD_STOP','DETERMINISTIC_RESIDENT_STOP'])
+  assert.equal(exitClass(reason),EXIT_CLASS.HARD_SAFETY,reason);
+ for(const reason of ['FD1_GPT_EXIT','FD1_DEEPSEEK_EXIT','EMERGENCY_EXIT_THESIS_FAILURE'])
+  assert.throws(()=>exitClass(reason),/UNCLASSIFIED_EXIT_REASON/);
 });

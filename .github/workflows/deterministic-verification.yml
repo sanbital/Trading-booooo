@@ -24,7 +24,11 @@ jobs:
           node-version: 24
       - run: npm ci --prefix test-support/deterministic
       - name: State, hot path, SQL, isolation and dependency verification
-        run: npm test --prefix test-support/deterministic
+        run: |
+          npm test --prefix test-support/deterministic
+          node --test ops/dynamic-flow/retired-production-suites.test.mjs \
+            tests/leader20-generator.test.mjs tests/signal-generator-production-baseline.test.mjs \
+            tests/leader20-multislot-continuity-hotfix.test.mjs
       - name: Native stops, receipts, attribution and accounting regressions
         run: >-
           node --test test-support/v17-exit/native-protection.test.mjs
