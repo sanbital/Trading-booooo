@@ -22,7 +22,7 @@ async function managed(query){
 }
 function direct(query){
  if(!process.env.SUPABASE_DB_URL)return{ok:false,error:'NO_DB_URL'};
- const r=spawnSync('psql',['--no-psqlrc','-At','-v','ON_ERROR_STOP=1','-c',`begin read only; set local statement_timeout='10s'; select coalesce(json_agg(q),'[]'::json) from (${query}) q; commit;`],{env:{...process.env,PGDATABASE:process.env.SUPABASE_DB_URL,PGCONNECT_TIMEOUT:'8'},encoding:'utf8',timeout:15000,maxBuffer:64*1024*1024});
+ const r=spawnSync('psql',['--no-psqlrc','--dbname',process.env.SUPABASE_DB_URL,'-At','-v','ON_ERROR_STOP=1','-c',`begin read only; set local statement_timeout='10s'; select coalesce(json_agg(q),'[]'::json) from (${query}) q; commit;`],{env:{...process.env,PGCONNECT_TIMEOUT:'8'},encoding:'utf8',timeout:15000,maxBuffer:64*1024*1024});
  if(r.status!==0){const e=String(r.stderr??'');return{ok:false,error:r.error?.code==='ENOENT'?'NO_PSQL':r.signal?'TIMEOUT':/password|authentication/i.test(e)?'DB_AUTH_REJECTED':/translate host|Name or service|resolve/i.test(e)?'DNS_FAILURE':/Network is unreachable|No route/i.test(e)?'NETWORK_UNREACHABLE':/Connection refused/i.test(e)?'CONNECTION_REFUSED':/timeout|timed out/i.test(e)?'CONNECTION_TIMEOUT':/not accepting connections|starting up/i.test(e)?'DB_STARTING':'DB_QUERY_FAILED',encrypted_detail:e.slice(0,2000)};}
  try{return{ok:true,rows:JSON.parse(r.stdout.split('\n').find(l=>l.startsWith('['))??'[]')};}catch{return{ok:false,error:'DB_RESULT_INVALID'};}
 }
@@ -30,7 +30,7 @@ let selectedDbUrl=process.env.SUPABASE_DB_URL;
 // Platform metadata and metrics have independent transport paths. A DB SQL outage
 // does not justify stopping resource/config/health evidence collection.
 for(const [name,path] of Object.entries({
- platform_health:'health?services=db&services=db_postgres_user&services=rest&services=pooler&timeout_ms=2000',
+ platform_health:'health?services=db&services=db_postgres_user&services=rest&services=pooler',
  postgres_config:'config/database/postgres',
  pooler_config:'config/database/pooler',
  platform_metrics:'analytics/endpoints/metrics',
