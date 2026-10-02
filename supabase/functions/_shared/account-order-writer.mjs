@@ -74,7 +74,7 @@ export async function writerTurn({account,owner,repository,exchange,validate,set
   }
   if (!lease) return {status:'WRITER_BUSY',terminal:false};
   const abort = new AbortController();
-  let lost = false, timer, row, submitting = false, heartbeatRunning = false;
+  let lost = false, timer, row, exchangeAttempted = false, heartbeatRunning = false;
   const event = (state,reason=null) => {
     // Observability failures must not replace the durable order outcome.
     try { onEvent({correlation_id:row?.correlation_id,
@@ -127,7 +127,7 @@ export async function writerTurn({account,owner,repository,exchange,validate,set
     await verify();
     // Durable SUBMITTING precedes the exchange call. A lost acknowledgement remains
     // reconcilable even if the process dies before writing UNKNOWN.
-    await move('SUBMITTING'); submitting=true;
+    await move('SUBMITTING');
     await verify();
     assertCurrentEntry(row,now(),verdict);
     // Re-read the existing production guards after durable DB I/O. Reusing a
@@ -136,6 +136,7 @@ export async function writerTurn({account,owner,repository,exchange,validate,set
     assertCurrentEntry(row,now(),boundaryVerdict);
     if (row.kind !== 'ENTRY' && boundaryVerdict?.allowed !== true) throw new WriterError(boundaryVerdict?.reason??'VALIDATION_FAILED');
     await verify();
+    exchangeAttempted=true;
     const receipt=await exchange.submitFenced(row,{lease,signal:abort.signal,verify});
     await move('ACKNOWLEDGED',null,{exchange_order_id:receipt.orderId});
     const result=await settle(row,receipt,{lease,signal:abort.signal,verify});
@@ -146,11 +147,17 @@ export async function writerTurn({account,owner,repository,exchange,validate,set
     const code=executionErrorCode(error); event('ERROR',code);
     if (row && !lost) {
       try {
-        const ambiguous=submitting || Boolean(row.submitting_at);
-        await move(ambiguous?'UNKNOWN':REFUSALS.has(code)?code==='DEADLINE_EXPIRED'?'EXPIRED':'REJECTED':'PENDING',code);
+        // A restart must reconcile a durable SUBMITTING row conservatively. In this
+        // live turn, however, an explicit boundary refusal before the exchange
+        // adapter was called proves that this process sent nothing. Preserve the
+        // exact strategic refusal instead of inventing an UNKNOWN exchange order.
+        const beforeSubmitRefusal=!exchangeAttempted && row.state==='SUBMITTING' && REFUSALS.has(code);
+        const ambiguous=exchangeAttempted || (Boolean(row.submitting_at) && !beforeSubmitRefusal);
+        const state=ambiguous?'UNKNOWN':REFUSALS.has(code)?code==='DEADLINE_EXPIRED'?'EXPIRED':'REJECTED':'PENDING';
+        await move(state,code,beforeSubmitRefusal?{submission_attempted:false,pre_submit_refused:true}:{});
       } catch { /* Durable prior state remains the recovery source of truth. */ }
     }
-    return {status:row?.submitting_at?'UNKNOWN':lost?'LEASE_FENCED':code,error:code};
+    return {status:row?.state==='UNKNOWN'?'UNKNOWN':lost?'LEASE_FENCED':code,error:code};
   } finally {
     if (timer !== undefined) timers.clearInterval(timer);
     abort.abort();

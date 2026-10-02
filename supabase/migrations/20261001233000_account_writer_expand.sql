@@ -222,6 +222,8 @@ begin
     when 'CLAIMED' then p_state in ('VALIDATING','REJECTED','EXPIRED','PENDING')
     when 'VALIDATING' then p_state in ('SUBMITTING','REJECTED','EXPIRED','PENDING')
     when 'SUBMITTING' then p_state in ('ACKNOWLEDGED','UNKNOWN','REJECTED')
+      or (p_state='EXPIRED' and p_reason='DEADLINE_EXPIRED'
+        and p_evidence @> '{"submission_attempted":false,"pre_submit_refused":true}')
     when 'ACKNOWLEDGED' then p_state in ('PARTIALLY_FILLED','FILLED','CANCELED','EXPIRED','UNKNOWN','RECONCILED')
     when 'PARTIALLY_FILLED' then p_state in ('PARTIALLY_FILLED','FILLED','CANCELED','UNKNOWN','RECONCILED')
     when 'UNKNOWN' then p_state in ('ACKNOWLEDGED','PARTIALLY_FILLED','FILLED','CANCELED','REJECTED','EXPIRED','RECONCILED','UNKNOWN')
