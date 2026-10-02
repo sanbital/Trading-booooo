@@ -52,7 +52,10 @@ Deno.test("retired P10 entry scan retains both fixed SHORT exits", async () => {
   const source = await Deno.readTextFile(
     new URL("supabase/functions/market-autotrader/index.ts", ROOT),
   );
-  const scan=source.slice(source.indexOf("async function p10ScanCycle("),source.indexOf("async function p10FetchJson("));
+  const scan = source.slice(
+    source.indexOf("async function p10ScanCycle("),
+    source.indexOf("async function p10FetchJson("),
+  );
   assert(scan.includes("P10_ENTRY_PATH_RETIRED"));
   assert(!scan.includes("enterP10Signal("));
   assert(!scan.includes("loadP10Signals("));
