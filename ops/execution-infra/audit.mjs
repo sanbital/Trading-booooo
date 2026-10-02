@@ -3,7 +3,10 @@ import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {randomBytes,createCipheriv,publicEncrypt,createHash,createHmac} from 'node:crypto';
 const project='etaajwpernzrcdrifdnw';
+const event=process.env.GITHUB_EVENT_PATH?JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8')):{};
+const fullAudit=process.env.GITHUB_EVENT_NAME!=='schedule'||event.schedule==='23 0 * * *';
 const ev={version:'EXECUTION_INFRA_AUDIT_1',commit:process.env.GITHUB_SHA,utc:new Date().toISOString(),results:{}};
+ev.scope=fullAudit?'FULL_BASELINE':'READINESS_AND_SAFETY';
 const kst=utc=>new Date(Date.parse(utc)+9*3600000).toISOString().replace('Z','+09:00');ev.kst=kst(ev.utc);
 function seal(){
  mkdirSync('infra-evidence',{recursive:true});
@@ -76,7 +79,8 @@ if(ev.results.readiness.ok){
  net_responses:"select status_code,timed_out,error_msg,count(*) from net._http_response where created>=now()-interval '24 hours' group by 1,2,3 order by count(*) desc limit 50",
  stats:"select datname,numbackends,xact_commit,xact_rollback,blks_read,blks_hit,temp_bytes,deadlocks,blk_read_time,blk_write_time,stats_reset from pg_stat_database where datname=current_database()",
  };
- for(const [name,query]of Object.entries(queries))await record(name,()=>sql(query));
+ const routine=new Set(['settings','activity','leases','positions','unresolved_orders','net_queue','stats']);
+ for(const [name,query]of Object.entries(queries))if(fullAudit||routine.has(name))await record(name,()=>sql(query));
 }
 await record('exchange_read_only',async()=>{
  const app=process.env.FLY_BINANCE_APP_NAME,token=process.env.LEARNING_ACCESS_TOKEN;
