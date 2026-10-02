@@ -111,3 +111,12 @@ test('retry repeats only an unaccepted current tick; accepted timeout cannot sta
  await f.db.exec("update trading_scheduler_jobs set retry_at=clock_timestamp()-interval '1 second'");
  assert.equal(await f.claim(),null);
 });
+
+test('bounded tick retention preserves current and accepted work and all trading authority state',async t=>{
+ const f=await fixture(t),c=await f.claim();await f.db.exec("update trading_scheduler_ticks set started_at=clock_timestamp()-interval '10 days'");
+ assert.equal((await f.query('select trading_scheduler_trim_ticks(5) r')).r.deleted,0);
+ await f.db.exec("update trading_scheduler_ticks set state='SUCCEEDED',finished_at=clock_timestamp()-interval '10 days'");
+ assert.equal((await f.query('select trading_scheduler_trim_ticks(5) r')).r.deleted,1);
+ assert.equal((await f.query('select count(*)::int n from trading_scheduler_jobs')).n,1);
+ await assert.rejects(f.query('select trading_scheduler_trim_ticks(10000)'),/TICK_RETENTION_LIMIT/);
+});

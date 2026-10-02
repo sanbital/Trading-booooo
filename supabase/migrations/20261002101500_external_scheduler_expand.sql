@@ -64,6 +64,13 @@ create table public.trading_scheduler_cutovers (
   verified_gateway_commit text not null,
   verified_gateway_health_at timestamptz not null
 );
+create index trading_scheduler_inflight on public.trading_scheduler_ticks(scheduler_key,job_key,started_at) where state in ('STARTED','ACCEPTED');
+create index trading_scheduler_completed_age on public.trading_scheduler_ticks(finished_at) where state in ('SUCCEEDED','FAILED','UNKNOWN');
+create function public.trading_scheduler_trim_ticks(p_limit integer default 5000) returns jsonb language plpgsql security definer set search_path='' as $$
+declare n integer;begin
+ if p_limit<1 or p_limit>5000 then raise exception 'TICK_RETENTION_LIMIT';end if;
+ delete from public.trading_scheduler_ticks where ctid in (select ctid from public.trading_scheduler_ticks where state in ('SUCCEEDED','FAILED','UNKNOWN') and finished_at<clock_timestamp()-interval '7 days' order by finished_at limit p_limit for update skip locked);
+ get diagnostics n=row_count;return jsonb_build_object('deleted',n);end $$;
 create function public.trading_scheduler_lead(p_scheduler text,p_owner uuid) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare s public.trading_scheduler_control%rowtype; t timestamptz:=clock_timestamp();
@@ -254,7 +261,7 @@ do $$ declare t text; f record; begin
   for f in select p.oid::regprocedure signature from pg_proc p join pg_namespace n on n.oid=p.pronamespace
     where n.nspname='public' and p.proname in ('trading_scheduler_lead','trading_scheduler_heartbeat',
       'trading_scheduler_claim','trading_scheduler_accept','trading_scheduler_finish','trading_scheduler_recovered',
-      'trading_scheduler_admit','trading_scheduler_pause_cron','trading_scheduler_activate','trading_scheduler_rollback') loop
+      'trading_scheduler_trim_ticks','trading_scheduler_admit','trading_scheduler_pause_cron','trading_scheduler_activate','trading_scheduler_rollback') loop
     execute format('revoke all on function %s from public,anon,authenticated',f.signature);
     execute format('grant execute on function %s to service_role',f.signature);
   end loop;

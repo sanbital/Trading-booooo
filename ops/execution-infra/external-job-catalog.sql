@@ -18,6 +18,8 @@ insert into public.trading_scheduler_jobs(scheduler_key,job_key,enabled,period_m
 values
  ('trading-production','existing-position-monitor',true,2000,45000,'CURRENT_ONLY','MONITOR',false,'{"endpoint":"market-autotrader","body":{"action":"monitor"}}'),
  ('trading-production','legacy-account-maintenance',true,12000,360000,'CURRENT_ONLY','MAINTENANCE',false,'{"endpoint":"market-autotrader","body":{"action":"scan"}}');
+insert into public.trading_scheduler_jobs(scheduler_key,job_key,enabled,period_ms,timeout_ms,recovery_mode,job_kind,requires_recovery,target)
+values('trading-production','bounded-tick-retention',true,3600000,2500,'DURABLE_CURSOR','MAINTENANCE',false,'{"rpc":"trading_scheduler_trim_ticks","limit":5000}');
 -- Bounded provider receipt promotion uses original durable DONE/RUNNING ledger rows as cursor.
 -- It never starts a paid request and its original BUY deadline filter remains authoritative.
 commit;
