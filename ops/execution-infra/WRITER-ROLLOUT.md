@@ -31,6 +31,14 @@ DB completion holds that lease. Postmaster/generation and a durable event cursor
 stale recovery evidence. Existing v183 validation/position/protection callbacks are
 still not wired to these new workers, so this remains a disabled expand stage.
 
+Live gateway inspection found no `SUPABASE_SERVICE_ROLE_KEY` in either app. The
+prepared deployment workflows now obtain the existing project's service-role key
+through the authenticated Management API and stage it through Fly stdin, without
+printing key/response/subprocess output or restarting the old image early. Both writer
+and external scheduler flags remain disabled. This credential staging has not run in
+production. The Tokyo workflow now stages all secret updates, matching the Paris
+workflow, so a failed preparation does not restart an intermediate configuration.
+
 The new isolated tests use real PostgreSQL functions via PGlite, not a duplicate JS
 state machine. They verify unique identities, claim takeover, stale fencing/heartbeat,
 crash after submission, same-ID timeout recovery, negative lookup uncertainty,

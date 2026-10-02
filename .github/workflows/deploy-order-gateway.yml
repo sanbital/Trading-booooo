@@ -125,11 +125,19 @@ jobs:
           if [ -n "${UPBIT_ACCESS_KEY:-}" ] && [ -n "${UPBIT_SECRET_KEY:-}" ]; then
             args+=("UPBIT_ACCESS_KEY=${UPBIT_ACCESS_KEY}" "UPBIT_SECRET_KEY=${UPBIT_SECRET_KEY}")
           fi
-          flyctl secrets set -a "${FLY_APP_NAME}" "${args[@]}"
+          flyctl secrets set --stage -a "${FLY_APP_NAME}" "${args[@]}"
           # This Tokyo app must never call Binance. Remove stale Binance credentials
           # left by the old multi-exchange workflow.
-          flyctl secrets unset -a "${FLY_APP_NAME}" \
+          flyctl secrets unset --stage -a "${FLY_APP_NAME}" \
             BINANCE_API_KEY BINANCE_SECRET_KEY BINANCE_MAX_ORDER_USDT BINANCE_MAX_DAILY_BUY_USDT || true
+
+      - name: Stage database credential for disabled writer and external scheduler
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_DATABASE_KEY_APP: ${{ secrets.FLY_APP_NAME }}
+        run: node ops/execution-infra/stage-gateway-db-key.mjs
 
       - name: Deploy one always-on Upbit gateway Machine
         shell: bash
