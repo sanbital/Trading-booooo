@@ -44,6 +44,7 @@ import {SETUP_POLICY,SETUP_POLICY_VERSION,SETUP_REASON,SETUP_STATE,advancePullba
 import {B06133_VERSION,evaluateB06133,fetchB06133Inputs} from "../_shared/leader-b06133-entry.mjs";
 import {V30_FRONT_LIVE_VERSION,v30FrontDecision,entryBranchOf,baselineAllowedV30} from "../_shared/gpt-final-review/contract.mjs";
 import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
+import {admitSchedulerRequest} from '../_shared/scheduler-admission.mjs';
 import {createProviderJournal} from "./account-provider-journal.mjs";
 import {createHostAccountScopes} from "./account-host-scopes.mjs";
 import {currentExecutionContext,currentAccountOwner,contextualOwners,contextualState,executionContextHeaders,assertActiveExecutionRequest} from "./account-execution-context.mjs";
@@ -3765,6 +3766,10 @@ Deno.serve(async req=>{
   // review request duplicates the same wake and inherits its short DB signal lifetime.
   const body=await req.json().catch(()=>({})),mode=String(body.mode||"run").toLowerCase();
   try{
+    if(["run","live","execute-ready-any"].includes(mode)){
+      const admission=await admitSchedulerRequest({endpoint:"v10-lane-executor",body,rpc:(name,args)=>db.rpc(name,args)});
+      if(!admission.allowed)return res(200,{ok:true,skipped:admission.reason});
+    }
     if(mode==="preflight"||mode==="diagnostic"){
       const [m,sn,pf,q,i,rt,op,cec]=await Promise.all([
         market(db),snap(db),gateway({action:"p10_portfolio"}),
@@ -3839,7 +3844,12 @@ Deno.serve(async req=>{
         probe:await finalRecheckProbe(db,{symbol,fixture,apiKey:env("OPENAI_API_KEY")||"",runId:String(body.runId??crypto.randomUUID()),
           simulateFinalTimeout:mode==="fd1-recheck-timeout-probe"})});
     }
-    if(["cec-bootstrap","execute-ready","execute-ready-any","run","live"].includes(mode))await loadAccountExecutionMode(db);
+    if(["cec-bootstrap","execute-ready","execute-ready-any","account-recovery","run","live"].includes(mode))await loadAccountExecutionMode(db);
+    if(mode==="account-recovery"){
+      if(!shortAccountWriter(db))return res(503,{ok:false,error:"SHORT_WRITER_REQUIRED"});
+      const ready=await accountHostScopes.get(db).critical(db,()=>ensureShortWriterRecovery(db));
+      return res(200,{ok:true,ready:ready===true});
+    }
     if(mode==="cec-bootstrap")return res(200,shortAccountWriter(db)?await accountHostScopes.get(db).periodic(bootstrapCec0040):await runWithLease(db,bootstrapCec0040));
     if(mode==="execute-ready"){
       const signalId=String(body.signalId??"");

@@ -1,0 +1,55 @@
+name: Deliberate external scheduler and account writer flags
+on:
+  workflow_dispatch:
+    inputs:
+      release_marker:
+        type: string
+        required: true
+        description: EXTERNAL_CLOCK_CUTOVER_1
+      expected_commit:
+        type: string
+        required: true
+      operation:
+        type: choice
+        required: true
+        options: [verify, enable_external, disable_external, enable_writer, disable_writer]
+permissions:
+  contents: read
+concurrency:
+  group: external-scheduler-cutover
+  cancel-in-progress: false
+jobs:
+  cutover:
+    if: github.repository == 'sanbital/Trading-booooo' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Require exact deliberate release
+        env:
+          RELEASE_MARKER: ${{ inputs.release_marker }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_MARKER" = EXTERNAL_CLOCK_CUTOVER_1
+          test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Apply only reviewed existing-machine flags and verify live health
+        env:
+          CUTOVER_OPERATION: ${{ inputs.operation }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: node ops/execution-infra/scheduler-fly-cutover.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scheduler-cutover-${{ inputs.operation }}-${{ github.run_id }}
+          path: infra-evidence/scheduler-cutover-*.json
+          retention-days: 30
+          if-no-files-found: error
