@@ -23,7 +23,7 @@ try{
  const machines=await platform(base+'/machines',{headers}),machine=machines.find(m=>m.state==='started');if(!machine)throw Error('NO_RUNNING_MACHINE');
  const script=`const crypto=require('node:crypto');(async()=>{
  const rows=JSON.parse(Buffer.from('${Buffer.from(JSON.stringify(evidence.ledger)).toString('base64')}','base64').toString());
- const base=(process.env.BINANCE_FUTURES_BASE_URL||'https://fapi.binance.com').replace(/\/$/,'');
+ const base=(process.env.BINANCE_FUTURES_BASE_URL||'https://fapi.binance.com').replaceAll(/[/]$/g,'');
  if(base!=='https://fapi.binance.com')throw Error('EXCHANGE_HOST_INVALID');
  const time=await fetch(base+'/fapi/v1/time',{signal:AbortSignal.timeout(4000)}).then(r=>r.json()),offset=time.serverTime-Date.now();
  const allow=new Set(['/fapi/v1/algoOrder','/fapi/v1/allAlgoOrders','/fapi/v1/allOrders','/fapi/v1/userTrades','/fapi/v1/openAlgoOrders','/fapi/v2/positionRisk']);
@@ -33,7 +33,7 @@ try{
  catch(e){return {ok:false,error:e.name==='TimeoutError'?'TIMEOUT':'READ_FAILED'};}}
  const result={utc:new Date().toISOString(),rows:[],openAlgos:await read('/fapi/v1/openAlgoOrders',{}),positions:await read('/fapi/v2/positionRisk',{})};
  for(const row of rows){
- if(!/^tb-v17s-[a-f0-9]{27}$/.test(row.client_id)||!/^([\p{L}\p{N}]+)USDT$/u.test(row.symbol)||!Number.isSafeInteger(Number(row.submitted_ms)))throw Error('LEDGER_ID_INVALID');
+ if(!/^tb-v17s-[a-f0-9]{27}$/.test(row.client_id)||!/^([\\p{L}\\p{N}]+)USDT$/u.test(row.symbol)||!Number.isSafeInteger(Number(row.submitted_ms)))throw Error('LEDGER_ID_INVALID');
  const start=Number(row.submitted_ms)-5000,end=Date.now()+offset;if(end-start>=7*86400000)throw Error('RETENTION_WINDOW_TOO_LARGE');
  const params={symbol:row.symbol,startTime:start,endTime:end,limit:1000};
  result.rows.push({id:row.id,client_id:row.client_id,symbol:row.symbol,start,end,
@@ -44,6 +44,7 @@ try{
  // Shell quoting is explicit; script/data never contain credentials.
  const shellQuote=s=>"'"+s.replaceAll("'", "'\"'\"'")+"'";
  const result=await platform(base+'/machines/'+machine.id+'/exec',{method:'POST',headers,body:JSON.stringify({cmd:'node -e '+shellQuote(script),timeout:55})});
- evidence.exchange=result.exit_code===0?JSON.parse(result.stdout):{ok:false,error:'EXEC_PROOF_FAILED'};evidence.machine={app,id:machine.id,region:machine.region};seal();
+ evidence.exchange=result.exit_code===0?JSON.parse(result.stdout):{ok:false,error:'EXEC_PROOF_FAILED',encrypted_detail:String(result.stderr??'').slice(0,3000)};evidence.machine={app,id:machine.id,region:machine.region};seal();
+ if(evidence.exchange?.ok===false)throw Error('EXCHANGE_PROOF_INCOMPLETE');
  console.log('Encrypted read-only native stop proof collected:',evidence.ledger.length,'ledger rows');
 }catch(e){evidence.error=/^[A-Z0-9_]+$/.test(e.message)?e.message:'PROOF_UNAVAILABLE';seal();console.log(evidence.error);process.exitCode=1;}
