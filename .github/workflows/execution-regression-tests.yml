@@ -1,0 +1,30 @@
+name: Execution infrastructure complete regression
+on:
+  pull_request:
+    branches: [main, infra/p10-retired-entry, infra/regression-harness-repair]
+    paths:
+      - 'supabase/functions/**'
+      - 'tests/**'
+      - 'test-support/**'
+      - 'development/gpt-final-review/**'
+      - '.github/workflows/execution-regression-tests.yml'
+permissions:
+  contents: read
+jobs:
+  complete-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install isolated PostgreSQL test runtime
+        run: npm install --prefix /tmp/infra-test --no-save @electric-sql/pglite@0.3.14
+      - name: Run complete strategy and infrastructure regression
+        env:
+          PGLITE_MODULE: /tmp/infra-test/node_modules/@electric-sql/pglite/dist/index.js
+        run: node ops/dynamic-flow/run-tests.mjs
