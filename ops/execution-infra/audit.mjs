@@ -3,7 +3,10 @@ import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {randomBytes,createCipheriv,publicEncrypt,createHash,createHmac} from 'node:crypto';
 const project='etaajwpernzrcdrifdnw';
+const event=process.env.GITHUB_EVENT_PATH?JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8')):{};
+const fullAudit=process.env.GITHUB_EVENT_NAME!=='schedule'||event.schedule==='23 0 * * *';
 const ev={version:'EXECUTION_INFRA_AUDIT_1',commit:process.env.GITHUB_SHA,utc:new Date().toISOString(),results:{}};
+ev.scope=fullAudit?'FULL_BASELINE':'READINESS_AND_SAFETY';
 const kst=utc=>new Date(Date.parse(utc)+9*3600000).toISOString().replace('Z','+09:00');ev.kst=kst(ev.utc);
 function seal(){
  mkdirSync('infra-evidence',{recursive:true});
@@ -24,6 +27,20 @@ function direct(query){
  try{return{ok:true,rows:JSON.parse(r.stdout.split('\n').find(l=>l.startsWith('['))??'[]')};}catch{return{ok:false,error:'DB_RESULT_INVALID'};}
 }
 let selectedDbUrl=process.env.SUPABASE_DB_URL;
+// Platform metadata and metrics have independent transport paths. A DB SQL outage
+// does not justify stopping resource/config/health evidence collection.
+for(const [name,path] of Object.entries({
+ platform_health:'health?services=db,db_postgres_user,rest,pooler&timeout_ms=2000',
+ postgres_config:'config/database/postgres',
+ pooler_config:'config/database/pooler',
+ platform_metrics:'analytics/endpoints/metrics',
+}))await record(name,async()=>{
+ const r=await fetch(`https://api.supabase.com/v1/projects/${project}/${path}`,{
+  headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN},signal:AbortSignal.timeout(15000)});
+ if(!r.ok)return{ok:false,http:r.status};
+ const value=name==='platform_metrics'?await r.text():await r.json();
+ return{ok:true,utc:new Date().toISOString(),value};
+});
 async function sql(query){const d=direct(query);if(d.ok)return d;return managed(query);}
 if(selectedDbUrl){
  const probe=direct('select 1');ev.results.pooler_probe=probe;
@@ -53,12 +70,17 @@ if(ev.results.readiness.ok){
  positions:"select to_jsonb(r) row from public.v11_long_regime_positions r where state='OPEN'",
  unresolved_orders:"select to_jsonb(r) row from public.v11_long_regime_orders r where state in ('PLANNED','DISPATCHED','SUBMITTING','PARTIALLY_FILLED','UNKNOWN','RECONCILIATION_PENDING','RECONCILIATION_FAILED')",
  dispatches:"select to_jsonb(d) row from public.leader20_execution_dispatches d where gpt_completed_at>=now()-interval '7 days' order by gpt_completed_at",
- decisions:"select to_jsonb(r) row from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and decision='BUY'",
+ decisions:"select job_key,purpose,state,decision,valid,created_at,record->'identity' identity,record#>'{packet,leader20,entry_window}' entry_window,record#>'{result,review_route}' review_route,record#>'{result,completed_at_ms}' completed_at_ms,record#>'{result,error}' error,record#>'{result,origin}' origin from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and decision='BUY'",
+ cohort_clock:"select to_jsonb(c) row from public.leader20_clock_executions c where gpt_completed_at>=now()-interval '7 days'",
+ cohort_orders:"select (to_jsonb(o)-'request_payload'-'response_payload') || jsonb_build_object('clock_authority',o.request_payload#>'{entry_gpt_decision,clockFinalAuthority}','clock_execution',o.request_payload->'entry_clock_execution','same_order_finality',o.response_payload->'v22EntryFinality','not_dispatched',o.response_payload->'notDispatched') row from public.v11_long_regime_orders o where signal_id in (select (r.record#>>'{identity,signal_id}')::uuid from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and state='DONE' and valid is true and decision='BUY' and r.record#>>'{result,review_route}'='TOP20_CLOCK_GPT_FINAL_3')",
+ cohort_positions:"select to_jsonb(p) row from public.v11_long_regime_positions p where signal_id in (select (r.record#>>'{identity,signal_id}')::uuid from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and state='DONE' and valid is true and decision='BUY' and r.record#>>'{result,review_route}'='TOP20_CLOCK_GPT_FINAL_3')",
+ cohort_fills:"select to_jsonb(f) row from public.exchange_trade_fills f where f.v17_order_id in (select o.id from public.v11_long_regime_orders o where signal_id in (select (r.record#>>'{identity,signal_id}')::uuid from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and state='DONE' and valid is true and decision='BUY' and r.record#>>'{result,review_route}'='TOP20_CLOCK_GPT_FINAL_3'))",
  net_queue:"select count(*) queue_depth,min(id) oldest_request_id from net.http_request_queue",
  net_responses:"select status_code,timed_out,error_msg,count(*) from net._http_response where created>=now()-interval '24 hours' group by 1,2,3 order by count(*) desc limit 50",
  stats:"select datname,numbackends,xact_commit,xact_rollback,blks_read,blks_hit,temp_bytes,deadlocks,blk_read_time,blk_write_time,stats_reset from pg_stat_database where datname=current_database()",
  };
- for(const [name,query]of Object.entries(queries))await record(name,()=>sql(query));
+ const routine=new Set(['settings','activity','leases','positions','unresolved_orders','net_queue','stats']);
+ for(const [name,query]of Object.entries(queries))if(fullAudit||routine.has(name))await record(name,()=>sql(query));
 }
 await record('exchange_read_only',async()=>{
  const app=process.env.FLY_BINANCE_APP_NAME,token=process.env.LEARNING_ACCESS_TOKEN;
@@ -78,7 +100,7 @@ const apps=[...new Set([process.env.FLY_APP_NAME,process.env.FLY_BINANCE_APP_NAM
 for(const app of apps)await record('fly:'+app,async()=>{
  const r=await fetch(`https://api.machines.dev/v1/apps/${app}/machines`,{headers:{authorization:'Bearer '+process.env.FLY_API_TOKEN},signal:AbortSignal.timeout(15000)});
  if(!r.ok)return{ok:false,http:r.status};
- const rows=await r.json();return{ok:true,machines:rows.map(m=>({id:m.id,name:m.name,state:m.state,region:m.region,created_at:m.created_at,updated_at:m.updated_at,image_ref:m.image_ref,guest:m.config?.guest,services:m.config?.services,env:Object.fromEntries(Object.entries(m.config?.env??{}).filter(([k])=>/^(SCHEDULER_ENABLED|AUTO_SCAN_INTERVAL_SECONDS|AUTO_MONITOR_INTERVAL_SECONDS|PORT|PRIMARY_REGION|VERSION)$/.test(k))),events:m.events}))};
+ const rows=await r.json();return{ok:true,machines:rows.map(m=>({id:m.id,name:m.name,state:m.state,region:m.region,created_at:m.created_at,updated_at:m.updated_at,image_ref:m.image_ref,config:m.config,guest:m.config?.guest,services:m.config?.services,env:Object.fromEntries(Object.entries(m.config?.env??{}).filter(([k])=>/^(SCHEDULER_ENABLED|EXTERNAL_SCHEDULER_ENABLED|ORDER_WRITER_REQUIRED|AUTO_SCAN_INTERVAL_SECONDS|AUTO_MONITOR_INTERVAL_SECONDS|PORT|PRIMARY_REGION|VERSION)$/.test(k))),events:m.events}))};
 });
 await record('functions',async()=>{
  const r=await fetch(`https://api.supabase.com/v1/projects/${project}/functions`,{headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN},signal:AbortSignal.timeout(15000)});return r.ok?{ok:true,rows:await r.json()}:{ok:false,http:r.status};
