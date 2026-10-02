@@ -10,11 +10,10 @@ on:
         required: true
         type: boolean
         default: true
-  push:
-    branches: [main]
-    paths:
-      - "gateway/**"
-      - ".github/workflows/deploy-binance-gateway.yml"
+      release_marker:
+        description: "Required production release marker: INFRA_GATEWAY_MANUAL_V1"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -27,7 +26,18 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    environment: production
     steps:
+      - name: Require an explicit main production release
+        env:
+          RELEASE_MARKER: ${{ inputs.release_marker }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REPOSITORY" = sanbital/Trading-booooo
+          test "$GITHUB_REF" = refs/heads/main
+          test "$RELEASE_MARKER" = INFRA_GATEWAY_MANUAL_V1
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
