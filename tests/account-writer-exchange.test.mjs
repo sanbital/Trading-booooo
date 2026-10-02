@@ -3,6 +3,15 @@ import assert from 'node:assert/strict';
 import {createHmac} from 'node:crypto';
 import {createWriterExchange} from '../supabase/functions/_shared/account-writer-exchange.mjs';
 import {createWriterGateway} from '../supabase/functions/_shared/account-writer-gateway.mjs';
+
+test('gateway transport preserves narrow fencing and DB error codes without arbitrary response text',async()=>{
+ for(const [raw,expected]of [['WRITER_FENCED','LEASE_FENCED'],['WRITER_DB_TIMEOUT','DB_TIMEOUT'],
+  ['WRITER_DB_DNS_FAILURE','DNS_TEMPORARY_FAILURE'],['WRITER_DB_CONNECTION_RESET','DB_CONNECTION_RESET']]){
+  const gateway=createWriterGateway({url:'https://fixture.invalid',secret:'fixture-secret',networkBoundMs:1000,
+   fetchImpl:async()=>({ok:false,status:503,json:async()=>({ok:false,code:raw,error:'DO_NOT_LOG_ME'})})});
+  await assert.rejects(gateway({action:'create_order'}),e=>e.code===expected&&e.message===expected);
+ }
+});
 import {assertSettlementResult} from '../supabase/functions/_shared/account-order-writer.mjs';
 const row={execution_key:'decision-attempt-1',account_key:'binance_futures:futures',kind:'ENTRY',
  symbol:'TESTUSDT',side:'BUY',client_order_id:'stable-client-id',created_at:new Date().toISOString(),
