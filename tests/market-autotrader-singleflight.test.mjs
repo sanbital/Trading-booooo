@@ -7,7 +7,7 @@ const handler=src.slice(src.indexOf('Deno.serve(async (request: Request) => {'))
 
 test('recurring autotrader cycles acquire their lease before settings and never wait',()=>{
   const actionAt=handler.indexOf('action = String(body.action || "status").toLowerCase()');
-  const acquireAt=handler.indexOf('rpc("acquire_trading_lease"',actionAt);
+  const acquireAt=handler.indexOf('await acquireCycleLease(rpc,',actionAt);
   const settingsAt=handler.indexOf('let settings = await loadSettings()',actionAt);
   assert.ok(actionAt>=0 && acquireAt>actionAt && settingsAt>acquireAt,
     'scan/monitor must acquire before the first settings read');
@@ -18,12 +18,12 @@ test('recurring autotrader cycles acquire their lease before settings and never 
 });
 
 test('lightweight DB admission and settings reads are bounded separately from executor/AI timeouts',()=>{
-  assert.match(src,/const DB_LIGHT_TIMEOUT_MS = 750;/);
+  assert.match(src,/const DB_LIGHT_TIMEOUT_MS = 1800;/);
   assert.match(src,/AUTOTRADER_CYCLE_LEASE_TTL_SECONDS = 150/);
   assert.match(src,/AUTOTRADER_CYCLE_LEASE_RENEW_MS = 30_000/);
   assert.match(src,/trading_settings\?id=eq\.1&select=\*", \{\}, DB_LIGHT_TIMEOUT_MS/);
   assert.match(src,/p_seconds: AUTOTRADER_CYCLE_LEASE_TTL_SECONDS/);
-  assert.match(src,/DB_LIGHT_TIMEOUT_MS\) === true/);
+  assert.match(src,/timeoutMs: DB_LIGHT_TIMEOUT_MS/);
 });
 
 test('a DB outage cannot recursively amplify itself through settings telemetry writes',()=>{
