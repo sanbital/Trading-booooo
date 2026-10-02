@@ -104,3 +104,43 @@ for(const [name,onEvent]of [['throw',()=>{throw Error('telemetry sink unavailabl
     await f.scheduler.stop();
   });
 }
+
+test('incomplete recovery backs off independently of successful leader heartbeats',async()=>{
+  let attempts=0,runs=0,ready=false;
+  const f=fixture({recover:async()=>{attempts++;return ready;},runJob:async()=>{runs++;return{};}});
+  await f.tick();assert.equal(attempts,1);assert.equal(runs,0);
+  for(let i=0;i<9;i++){f.advance(3000);await f.tick();}
+  assert.equal(attempts,1);assert.equal(f.scheduler.state.leader,true);
+  assert.equal(f.scheduler.state.recovery.result,'RECOVERY_INCOMPLETE');
+  assert.equal(f.scheduler.state.recovery.failures,1);
+  ready=true;f.advance(3000);await f.tick();await f.tick();
+  assert.equal(attempts,2);assert.equal(runs,1);
+  assert.equal(f.scheduler.state.recovery.result,'SUCCEEDED');
+  await f.scheduler.stop();
+});
+test('permanent recovery 4xx freezes entries without repeating the failed request',async()=>{
+  let attempts=0,runs=0;
+  const f=fixture({recover:async()=>{attempts++;throw Object.assign(Error('unauthorized'),{status:401});},
+    runJob:async()=>{runs++;return{};}});
+  await f.tick();f.advance(180000);await f.tick();await f.tick();
+  assert.equal(attempts,1);assert.equal(runs,0);
+  assert.equal(f.scheduler.state.recovery.permanent,true);
+  assert.equal(f.scheduler.state.recovery.result,'HTTP_401');
+  assert.equal(f.scheduler.state.leader,true);
+  await f.scheduler.stop();
+});
+test('recovery timeout retains its bulkhead while maintenance and heartbeats continue',async()=>{
+  let finish,attempts=0,maintenance=0,entry=0,aborted;
+  const jobs=[{job_key:'maintenance',enabled:true,period_ms:5000,timeout_ms:1000,requires_recovery:false},
+    {job_key:'entry',enabled:true,period_ms:5000,timeout_ms:1000,requires_recovery:true}];
+  const f=fixture({jobs,recover:(_,{signal})=>{attempts++;aborted=signal;return new Promise(resolve=>{finish=resolve;});},
+    runJob:async j=>{if(j.job_key==='entry')entry++;else maintenance++;return{};}});
+  await f.tick();assert.equal(attempts,1);assert.equal(maintenance,1);assert.equal(entry,0);
+  for(const timeout of [...f.timeouts.values()])timeout();await flush();await flush();
+  assert.equal(aborted.aborted,true);assert.equal(f.scheduler.state.recovery.result,'DEPENDENCY_UNAVAILABLE');
+  f.advance(60000);await f.tick();assert.equal(attempts,1);assert.equal(maintenance,2);assert.equal(entry,0);
+  assert.equal(f.scheduler.state.leader,true);
+  finish(true);await flush();await flush();f.advance(3000);await f.tick();
+  assert.equal(attempts,2);assert.equal(entry,0);
+  await f.scheduler.stop();finish(false);await flush();
+});
