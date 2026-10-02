@@ -2321,7 +2321,14 @@ function decideEntryWith(controls,pair,candidateSymbol,openOrders,{proposedMargi
     maxSlots:MAX_SLOTS,proposedMargin,cashBuffer,requireNativeProtection:NATIVE_STOP_ENABLED,existingPositionId});
 }
 async function decideEntry(db,pair,candidateSymbol,openOrders,opts={}) {
-  return decideEntryWith(await opsControls(db),pair,candidateSymbol,openOrders,opts);
+  const controls=await opsControls(db);
+  // Control reads must not manufacture a stale-account incident. Refresh expired
+  // evidence under the unchanged 3s/5s rules before deciding, never extend its age.
+  if(shortAccountWriter(db)&&!freshPortfolio(pair.pf)){
+    Object.assign(pair,await readOpsPair(db,opsGateway(db),candidateSymbol));
+    Object.assign(openOrders,await opsGateway(db)({action:"v18_open_orders"},5000));
+  }
+  return decideEntryWith(controls,pair,candidateSymbol,openOrders,opts);
 }
 async function persistDecisionRisk(db,pair,decision) {
   for(const q of decision.discoveredQuarantines??[]){
