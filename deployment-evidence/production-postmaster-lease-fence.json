@@ -1,0 +1,19 @@
+{
+  "project": "etaajwpernzrcdrifdnw",
+  "migration": "20261002074120_execution_lease_postmaster_fence.sql",
+  "applied_utc": "2026-10-02T07:41:20Z",
+  "applied_kst": "2026-10-02T16:41:20+09:00",
+  "verified_utc": "2026-10-02T07:41:42.244366Z",
+  "verified_kst": "2026-10-02T16:41:42.244366+09:00",
+  "postmaster_utc": "2026-10-02T06:35:57.669629Z",
+  "generation_matches": true,
+  "observed_fence": 2,
+  "runtime_live_enabled": true,
+  "runtime_circuit_open": false,
+  "runtime_last_error": null,
+  "edge_version_unchanged": 185,
+  "ttl_seconds_unchanged": 150,
+  "unit_sql_cases_passed": 5,
+  "restart_test_environment": "PGlite simulated postmaster generation; no production restart",
+  "completion_claim": false
+}

@@ -1,0 +1,11 @@
+# DB restart invalidates previous account authority
+
+Production has unclean Postgres starts at 2026-10-02 05:36:11.410, 05:51:21.642, 06:06:03.518 and 06:35:57.678 UTC (14:36:11.410, 14:51:21.642, 15:06:03.518 and 15:35:57.678 KST). These are log times; precise SQL postmaster_start_time for the last is 06:35:57.669629 UTC /15:35:57.669629 KST. Resource/platform cause is not yet proven.
+
+The logged v17_execution_lease previously retained owner and expiry across a restart. Verification checked only that owner and its remaining TTL. An old process could regain database access with apparently valid old authority. The applied migration binds acquire, verify and v18_require_lease (all header-fenced writes) to pg_postmaster_start_time(). A previous generation cannot verify, write, or renew heartbeat. A new owner can take over the prior-generation lease immediately and advances its monotonic fence. Heartbeat requires the exact owner, fence, live TTL and postmaster; it cannot resurrect expired authority.
+
+The 150 second TTL, 30 second verification reserve, 1 second write reserve and all strategy controls remain unchanged. This patch does not claim to remove the long analysis lease or to enforce fencing at the gateway's final signed exchange send; those require the writer cutover. The new heartbeat RPC is available but the v185 host has not been modified to call it. The current host still acquires and verifies using the compatible existing RPC signatures.
+
+Applied migration history: 20261002074120. At 07:41:42.244366 UTC /16:41:42.244366 KST generation_matches=true, fence=2, live_enabled=true, circuit_open=false, last_error=null. Five SQL tests passed with a simulated postmaster generation in PGlite. Production was not restarted for testing.
+
+Before applying, definitions and table columns were backed up privately. Expand-only columns are safe for the previous Edge source and can remain through a code rollback. Retain the restart fence and dispatch no-resubmit migration during rollback. Restoring old verification functions would reintroduce stale authority after restart and is not a safe rollback. No columns are dropped, financial rows changed or exchange commands issued by this migration.
