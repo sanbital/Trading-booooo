@@ -61,7 +61,7 @@ test('single-flight is acquired before loadSettings and never waits for the old 
 });
 
 test('E/F/G: DB degradation is bounded, fail-fast and does not amplify settings writes',()=>{
-  assert.ok(autotrader.includes('const DB_LIGHT_TIMEOUT_MS = 750'));
+  assert.ok(autotrader.includes('const DB_LIGHT_TIMEOUT_MS = 1800'));
   assert.ok(autotrader.includes('status: "DB_DEGRADED"'));
   const catchAt=autotrader.lastIndexOf('const databaseFailure =');
   const dbBranch=autotrader.slice(catchAt,autotrader.indexOf('} else if (availabilityFailure)',catchAt));
@@ -80,9 +80,11 @@ test('J: collector keeps market streams alive when control/ingest is unavailable
 test('collector buffer and ingest DB calls are bounded',()=>{
   assert.ok(collector.includes('const PERSIST_QUEUE_CAP=1200'));
   assert.ok(collector.includes('buffer_dropped_rows:bufferDrops'));
-  assert.ok(ingest.includes('DB_LIGHT_TIMEOUT_MS=3000'));
+  assert.ok(ingest.includes('DB_LIGHT_TIMEOUT_MS=4500'));
   assert.ok(ingest.includes('DB_RPC_TIMEOUT_MS=5000'));
-  assert.ok(ingest.includes('TOKEN_CACHE_MS=30000'));
+  assert.ok(ingest.includes('createTokenReader('));
+  const tokenReader=readFileSync(new URL('../supabase/functions/doa-capture-ingest/token-read.mjs',import.meta.url),'utf8');
+  assert.ok(tokenReader.includes('ttlMs = 30_000'));
 });
 
 test('production_continuous telemetry follows the actual persistence contract',()=>{

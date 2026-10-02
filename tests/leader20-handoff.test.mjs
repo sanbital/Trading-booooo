@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {rawCapture} from '../test-support/dynamic-fixtures.mjs';
-import {runEntryBatch,clockBatchAdmissionDeadline} from '../supabase/functions/_shared/leader20/batch-runtime.mjs';
+import {clockBatchAdmissionDeadline} from '../supabase/functions/_shared/leader20/batch-runtime.mjs';
+import {runHistorical20EntryBatch as runEntryBatch} from '../test-support/historical-clock-batch.mjs';
 import {clockDecisionWindow,CLOCK_VERSION} from '../supabase/functions/_shared/leader20/clock.mjs';
 import {batchFinalDecision,CLOCK_FINAL_MIN_BUDGET_MS} from '../supabase/functions/_shared/leader20/final.mjs';
 import {generateLeader20} from '../supabase/functions/_shared/leader20/runtime.mjs';

@@ -19,7 +19,8 @@ test('usage is settled once even when provider model JSON is malformed',async()=
  const f=paidTransport(db,{parentKey:'p',purpose:'ENTRY',fetchFn:async()=>{calls++;return Response.json({id:'r',
   usage:{prompt_tokens:20000,prompt_cache_hit_tokens:12000,completion_tokens:500},choices:[{message:{content:'{bad'}}]});}});
  await f(endpoint,init);assert.equal(calls,1);
- assert.deepEqual(db.events.map(e=>e.name==='ai_call_reserve_owned'?'RESERVED':e.p.p_state),['RESERVED','DISPATCHED','SETTLED']);
+ assert.deepEqual(db.events.map(e=>e.name==='ai_call_reserve_owned'?'RESERVED':e.name==='ai_call_settle_receipt'?'SETTLED':e.p.p_state),['RESERVED','DISPATCHED','SETTLED']);
+ assert.equal(db.events[2].name,'ai_call_settle_receipt');
  assert.equal(db.events[2].p.p_usage.cached_input_tokens,12000);
 });
 test('budget refusal sends no HTTP and preserves blocked-candidate additional cost',async()=>{

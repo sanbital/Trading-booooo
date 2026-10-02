@@ -14,6 +14,8 @@ test('actual FINAL RECHECK persists its bounded deadline and passes the producti
  await db.exec(await read('test-support/leader20-ledger-schema.sql'));
  await db.exec(await read('supabase/migrations/20260928012054_leader20_batch_provider_ledger.sql'));
  await db.exec(await read('supabase/migrations/20260928035300_leader20_owned_provider_reservation.sql'));
+ await db.exec('create schema if not exists trading_internal');
+ await db.exec(await read('supabase/migrations/20260930142500_durable_ai_provider_receipts.sql'));
  await db.exec('update ai_provider_limits set enabled=true,monthly_usd=100,daily_usd=50');
  const rpcErrors=[];
  const rpc={async rpc(name,args){try{return {data:(await db.query(`select public.${name}(${Object.keys(args).map((k,i)=>`${k} => $${i+1}`).join(',')}) r`,Object.values(args))).rows[0].r};}catch(e){rpcErrors.push({name,code:e.code,message:e.message});return {error:{code:e.code,message:e.message}};}}};
