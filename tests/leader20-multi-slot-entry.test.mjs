@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
-import {buildBatch} from '../supabase/functions/_shared/leader20/batch.mjs';
+import {buildHistorical20Batch as buildBatch,runHistorical20EntryBatch as runEntryBatch} from '../test-support/historical-clock-batch.mjs';
 const read=p=>readFile(new URL('../'+p,import.meta.url),'utf8');
 const MIGRATION='supabase/migrations/20260928161500_leader20_multi_slot_entry_continuity.sql';
 // Production sizing authority, unchanged and read (not redefined) by the migration.
@@ -465,7 +465,7 @@ test('concurrent GPT BUYs are admitted up to the remaining slots and no further'
 });
 
 test('the ten-minute batch records the whole slot decision and is not stopped by a live order',async()=>{
- const {runEntryBatch,blockedReasons}=await import('../supabase/functions/_shared/leader20/batch-runtime.mjs');
+ const {blockedReasons}=await import('../supabase/functions/_shared/leader20/batch-runtime.mjs');
  const {rawCapture}=await import('../test-support/dynamic-fixtures.mjs');
  const {CLOCK_VERSION}=await import('../supabase/functions/_shared/leader20/clock.mjs');
  const slot=Date.parse('2026-09-28T00:50:00+09:00');

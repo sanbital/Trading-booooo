@@ -56,6 +56,8 @@ export class MemoryReviewStore {
     return {created:true,row:structuredClone(row)};
   }
   async get(key){return structuredClone(this.rows.get(key)??null);}
+  async snapshot(key,owner,record){const old=this.rows.get(key);ensure(old?.owner===owner&&old.state==='RUNNING','REVIEW_SNAPSHOT_CAS');
+    this.rows.set(key,{...old,record:structuredClone(record)});return true;}
   async complete(key,owner,record){const old=this.rows.get(key);ensure(old?.owner===owner&&old.state==='RUNNING','REVIEW_RESULT_CAS');
     this.rows.set(key,{...old,state:'DONE',record:structuredClone(record)});return true;}
 }
