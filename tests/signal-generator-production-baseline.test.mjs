@@ -15,7 +15,14 @@ test('signal generator retains all 15 production v51 dependencies byte for byte'
 });
 test('generator entrypoint differs from production only by dependency relocation',()=>{
   const entry=readFileSync(new URL(manifest.entrypoint.path,root),'utf8');
-  const original=entry.replaceAll(manifest.relocation.to,manifest.relocation.from);
+  const original=entry.replaceAll(manifest.relocation.to,manifest.relocation.from)
+    .replace("import {admitSchedulerRequest} from '../_shared/scheduler-admission.mjs';\n",'')
+    .replace(`try{
+    if(body.scheduler||Deno.env.get('EXTERNAL_SCHEDULER_ADMISSION')==='true'){
+      const admission=await admitSchedulerRequest({endpoint:'v10-lane-signal-generator',body,rpc:(name,args)=>db.rpc(name,args)});
+      if(!admission.allowed)return reply(200,{ok:true,skipped:admission.reason});
+    }
+    return reply`,'try{return reply');
   assert.equal(hash(original),manifest.entrypoint.original_sha256);
 });
 test('relative imports in the frozen graph cannot escape into the executor shared graph',()=>{

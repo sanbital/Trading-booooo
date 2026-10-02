@@ -5,6 +5,8 @@ import {
   createGatewayAuthorizer,
   createOrderWriterFence,
 } from "./order-writer-fence.mjs";
+import { createSchedulerOrchestrator, retryDelayMs } from "./scheduler-orchestrator.mjs";
+import { createScheduledJobRunner, createSchedulerRepository } from "./scheduler-repository.mjs";
 import http from "node:http";
 import crypto from "node:crypto";
 import dns from "node:dns";
@@ -63,6 +65,7 @@ const MONITOR_INTERVAL_MS = integerEnv("AUTO_MONITOR_INTERVAL_SECONDS", 2, 1, 30
 // Expand deployment is inert. Activate only after all side-effect callers have
 // durable writer envelopes and the legacy account writer is stopped.
 const ORDER_WRITER_REQUIRED = boolEnv("ORDER_WRITER_REQUIRED", false);
+const EXTERNAL_SCHEDULER_ENABLED = boolEnv("EXTERNAL_SCHEDULER_ENABLED", false);
 const orderWriterFence = createOrderWriterFence({
   required: ORDER_WRITER_REQUIRED,
   authorize: createGatewayAuthorizer({ url: SUPABASE_URL, key: env("SUPABASE_SERVICE_ROLE_KEY") }),
@@ -104,6 +107,7 @@ const schedulerState = {
 let autotraderDbFailures = 0;
 let autotraderDbRetryAt = 0;
 let autotraderDbProbeRunning = false;
+let externalScheduler = null;
 let binanceTimeOffsetMs = 0;
 let lastBinanceTimeSyncAt = 0;
 // Per-symbol leverage the gateway has already confirmed with the exchange this process
@@ -2556,9 +2560,11 @@ function autotraderDbCircuitSuppresses(now, retryAt, failures, probeRunning = fa
   if (!(Number.isFinite(now) && Number.isFinite(retryAt))) return false;
   return retryAt > now || (failures > 0 && probeRunning);
 }
-function openAutotraderDbCircuit(now = Date.now()) {
+function openAutotraderDbCircuit(now = Date.now(), jitter = false) {
   autotraderDbFailures += 1;
-  const backoffMs = autotraderDbBackoffMs(autotraderDbFailures);
+  const backoffMs = jitter
+    ? retryDelayMs(autotraderDbFailures)
+    : autotraderDbBackoffMs(autotraderDbFailures);
   autotraderDbRetryAt = now + backoffMs;
   schedulerState.dbCircuitFailures = autotraderDbFailures;
   schedulerState.dbCircuitRetryAt = new Date(autotraderDbRetryAt).toISOString();
@@ -2666,6 +2672,10 @@ function createServer() {
             required: ORDER_WRITER_REQUIRED,
             active_accounts: orderWriterFence.activeAccounts(),
           },
+          external_scheduler: {
+            enabled: EXTERNAL_SCHEDULER_ENABLED,
+            state: externalScheduler?.state ?? null,
+          },
           scheduler: schedulerState,
           intervals: {
             scan_seconds: SCAN_INTERVAL_MS / 1000,
@@ -2726,7 +2736,31 @@ export async function startServer() {
   if (BINANCE_API_KEY && BINANCE_SECRET_KEY) {
     syncBinanceTime(true).catch((error) => console.warn("Binance time sync failed", error.message));
   }
-  if (SCHEDULER_ENABLED) {
+  if (EXTERNAL_SCHEDULER_ENABLED) {
+    const repository = createSchedulerRepository({
+      url: SUPABASE_URL,
+      key: env("SUPABASE_SERVICE_ROLE_KEY"),
+    });
+    externalScheduler = createSchedulerOrchestrator({
+      repository,
+      runJob: createScheduledJobRunner({ url: SUPABASE_URL, repository }),
+      recover: (lease) =>
+        repository.rpc("trading_scheduler_recovered", {
+          p_scheduler: lease.scheduler_key,
+          p_owner: lease.owner,
+          p_fence: lease.fence,
+          p_account: "binance_futures:futures",
+        }),
+      // Reuse the existing shared dependency breaker; do not run a second circuit.
+      breaker: {
+        suppressed: (now) =>
+          autotraderDbCircuitSuppresses(now, autotraderDbRetryAt, autotraderDbFailures),
+        open: (now) => openAutotraderDbCircuit(now, true),
+        clear: clearAutotraderDbCircuit,
+      },
+    });
+    externalScheduler.start();
+  } else if (SCHEDULER_ENABLED) {
     scheduleMonitorLoop();
     // v6.2: the first scan used to wait 20 seconds after boot, so every deploy and every
     // machine restart bought roughly two scan cycles of nothing. The heat sample is
