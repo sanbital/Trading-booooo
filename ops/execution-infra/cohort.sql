@@ -4,8 +4,11 @@
 with bounds as (
   select '24h' period,statement_timestamp()-interval '24 hours' since,statement_timestamp() cutoff
   union all select '7d',statement_timestamp()-interval '7 days',statement_timestamp()
-), finals as (
+), finals as materialized (
   select r.job_key decision_id,r.record#>>'{identity,signal_id}' signal_id,
+    case when r.record#>>'{identity,signal_id}' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+      then (r.record#>>'{identity,signal_id}')::uuid end signal_uuid,
+    r.record#>>'{result,completed_at_ms}' completed_ms,
     to_timestamp((r.record#>>'{result,completed_at_ms}')::numeric/1000) completed_at
   from public.gpt_final_entry_reviews r
   where r.purpose='PRODUCTION' and r.state='DONE' and r.valid is true and r.decision='BUY'
@@ -28,8 +31,8 @@ with bounds as (
     coalesce(o.full_fill,false) fully_filled,coalesce(p.attributed,false) position_attributed,
     coalesce(p.protected,false) protection_installed,coalesce(p.closed,false) position_closed
   from cohort c
-  left join public.leader20_execution_dispatches d on d.signal_id::text=c.signal_id and d.gpt_completed_at=c.completed_at
-  left join public.leader20_clock_executions x on x.signal_id::text=c.signal_id and x.gpt_buy_completed_at=c.completed_at
+  left join public.leader20_execution_dispatches d on d.signal_id=c.signal_uuid and d.gpt_completed_at=c.completed_at
+  left join public.leader20_clock_executions x on x.signal_id=c.signal_uuid and x.gpt_buy_completed_at=c.completed_at
   left join lateral (
     select bool_or(case when jsonb_typeof(o.response_payload#>'{v22EntryFinality,clockExecutionSafety,checked_at_ms}')='number'
         then to_timestamp((o.response_payload#>>'{v22EntryFinality,clockExecutionSafety,checked_at_ms}')::numeric/1000)>=c.completed_at
@@ -47,8 +50,10 @@ with bounds as (
         case when jsonb_typeof(o.response_payload#>'{v22EntryFinality,executedQty}')='number'
           then (o.response_payload#>>'{v22EntryFinality,executedQty}')::numeric>=o.requested_quantity else false end) full_fill
     from public.v11_long_regime_orders o
-    where o.signal_id::text=c.signal_id and o.intent='OPEN_LONG' and o.created_at<=c.cutoff
-      and o.request_payload#>>'{entry_gpt_decision,jobKey}'=c.decision_id
+    where o.signal_id=c.signal_uuid and o.intent='OPEN_LONG' and o.created_at<=c.cutoff
+      and (o.request_payload#>>'{entry_gpt_decision,jobKey}'=c.decision_id or (o.request_payload#>>'{entry_gpt_decision,clockFinalAuthority,signal_id}'=c.signal_id
+        and o.request_payload#>>'{entry_gpt_decision,clockFinalAuthority,completed_at_ms}'=c.completed_ms
+        and o.request_payload#>>'{entry_gpt_decision,clockFinalAuthority,authority_version}'='TOP20_CLOCK_GPT_FINAL_3'))
   ) o on true
   left join lateral (
     select count(*)>0 attributed,bool_and(p.state='CLOSED') closed,
@@ -60,9 +65,11 @@ with bounds as (
           and case when jsonb_typeof(protect->'ackAt')='number'
           then to_timestamp((protect->>'ackAt')::numeric/1000)<=c.cutoff else false end)) protected
     from public.v11_long_regime_positions p
-    where p.signal_id::text=c.signal_id and p.entry_at<=c.cutoff and exists(
+    where p.signal_id=c.signal_uuid and p.entry_at<=c.cutoff and exists(
       select 1 from public.v11_long_regime_orders own where own.position_id=p.id and own.intent='OPEN_LONG'
-        and own.created_at<=c.cutoff and own.request_payload#>>'{entry_gpt_decision,jobKey}'=c.decision_id)
+        and own.created_at<=c.cutoff and (own.request_payload#>>'{entry_gpt_decision,jobKey}'=c.decision_id or (own.request_payload#>>'{entry_gpt_decision,clockFinalAuthority,signal_id}'=c.signal_id
+        and own.request_payload#>>'{entry_gpt_decision,clockFinalAuthority,completed_at_ms}'=c.completed_ms
+        and own.request_payload#>>'{entry_gpt_decision,clockFinalAuthority,authority_version}'='TOP20_CLOCK_GPT_FINAL_3')))
   ) p on true
 ), classified as (
   select *,case
@@ -77,8 +84,14 @@ with bounds as (
     when coalesce(last_error,raw_terminal_reason,'') ~* 'LEASE|FENCED' then 'LEASE_FAILURE'
     when not executor_claimed and valid_until<=cutoff then 'UNCLAIMED_DEADLINE_EXPIRED'
     when coalesce(last_error,raw_terminal_reason,'') ~* 'AUTHORITY.*EXPIRED|GPT_REVIEW_EXPIRED|FINAL_EXPIRED' then 'AUTHORITY_EXPIRED'
-    when coalesce(last_error,raw_terminal_reason,'') ~* 'CAPACITY|SLOT_FULL|MARGIN_INSUFFICIENT' then 'CAPACITY_REJECTED'
-    when coalesce(last_error,raw_terminal_reason,'') ~* 'STALE|FRESHNESS|SNAPSHOT|CAPTURE|VALIDITY_CHECK' then 'LATEST_DATA_VALIDATION_FAILED'
+    when coalesce(last_error,raw_terminal_reason,'') ~* 'CAPACITY|SLOT_FULL|MARGIN_INSUFFICIENT|INSUFFICIENT_MARGIN' then 'CAPACITY_REJECTED'
+    when coalesce(last_error,raw_terminal_reason,'') ~* 'STALE_PROTECTION|NATIVE_RECONCILIATION_PENDING' then 'PROTECTION_RECONCILIATION_PENDING'
+    when coalesce(last_error,raw_terminal_reason,'') ~* 'PRE_EXECUTION_GPT_CANCEL_OR_ERROR:CANCEL_BUY' then 'GPT_RECHECK_CANCELED'
+    when coalesce(last_error,raw_terminal_reason,'') ~* 'STALE|FRESHNESS|SNAPSHOT|CAPTURE|VALIDITY_CHECK|PRE_EXECUTION_INVALID|PRE_EXECUTION_UNCERTAIN_DATA_UNSAFE' then 'LATEST_DATA_VALIDATION_FAILED'
+    when coalesce(last_error,raw_terminal_reason,'') ~* 'CONTROLS_UNAVAILABLE' then 'CONTROL_STATE_UNAVAILABLE'
+    when coalesce(last_error,raw_terminal_reason,'') ~* 'signal has been aborted|HTTP_50[234]|INTERNAL_5XX' then 'DEPENDENCY_TIMEOUT_OR_5XX'
+    when coalesce(last_error,raw_terminal_reason,'') ~* 'PRE_EXECUTION_GPT_CANCEL_OR_ERROR:EXECUTION_WINDOW_INSUFFICIENT' then 'WINDOW_EXPIRED_CAUSE_UNRESOLVED'
+    when coalesce(last_error,raw_terminal_reason,'') ~* 'IOC_RETRY_FILLED' and not position_attributed then 'RETRY_FILL_ATTRIBUTION_EVIDENCE_MISSING'
     when coalesce(last_error,raw_terminal_reason,'') ~* 'EXCHANGE_REJECT' then 'EXCHANGE_REJECTED'
     when partial_or_filled and not position_attributed then 'FILL_ATTRIBUTION_MISSING'
     when position_attributed and not protection_installed then 'PROTECTION_EVIDENCE_MISSING'
@@ -97,8 +110,8 @@ select period,since utc_start,cutoff utc_cutoff,since at time zone 'Asia/Seoul' 
   position_attributed,protection_installed,reason,raw_terminal_reason,last_error,
   case when reason in ('PROTECTED','POSITION_CLOSED_PROTECTION_NOT_REQUIRED') then 'SUCCESS'
     when reason='IN_FLIGHT' then 'PENDING'
-    when reason in ('AUTHORITY_EXPIRED','CAPACITY_REJECTED','LATEST_DATA_VALIDATION_FAILED','EXCHANGE_REJECTED') then 'STRATEGIC_OR_VENUE_REFUSAL'
-    when reason in ('UNCLASSIFIED_TERMINAL_REASON','TERMINAL_ERROR_CONTEXT_MISSING') then 'UNCLASSIFIED'
+    when reason in ('AUTHORITY_EXPIRED','CAPACITY_REJECTED','LATEST_DATA_VALIDATION_FAILED','EXCHANGE_REJECTED','GPT_RECHECK_CANCELED') then 'STRATEGIC_OR_VENUE_REFUSAL'
+    when reason in ('UNCLASSIFIED_TERMINAL_REASON','TERMINAL_ERROR_CONTEXT_MISSING','WINDOW_EXPIRED_CAUSE_UNRESOLVED') then 'UNCLASSIFIED'
     else 'SYSTEM_FAILURE_OR_UNRESOLVED' end outcome_class,
   extract(epoch from executor_claimed_at-dispatch_requested_at)*1000 dispatch_to_claim_ms
 from classified order by period,completed_at,decision_id

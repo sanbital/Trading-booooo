@@ -1,0 +1,15 @@
+{
+  "release_marker": "NATIVE_SUBMISSION_PHASE_20261002_1",
+  "utc": "2026-10-02T05:40:06.913Z",
+  "kst": "2026-10-02T14:40:06.913+09:00",
+  "production_version": 184,
+  "production_bundle_sha256": "1fea692ef2ca60f476063ed702c2237f8c869ad528ed98cf58a2bd928c13b98d",
+  "main_commit": "5acf78be6e9d52ab05af65f6af6250c172b1b819",
+  "pr": 299,
+  "files_verified": 93,
+  "source_difference_count": 0,
+  "rollback_baseline_version": 183,
+  "scope": "EXPLICIT_PRE_TRANSPORT_NATIVE_STOP_EVIDENCE_ONLY",
+  "backlog_resolved": false,
+  "writer_scheduler_cutover_complete": false
+}
