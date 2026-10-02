@@ -3,7 +3,10 @@ import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {randomBytes,createCipheriv,publicEncrypt,createHash,createHmac} from 'node:crypto';
 const project='etaajwpernzrcdrifdnw';
+const event=process.env.GITHUB_EVENT_PATH?JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH,'utf8')):{};
+const fullAudit=process.env.GITHUB_EVENT_NAME!=='schedule'||event.schedule==='23 0 * * *';
 const ev={version:'EXECUTION_INFRA_AUDIT_1',commit:process.env.GITHUB_SHA,utc:new Date().toISOString(),results:{}};
+ev.scope=fullAudit?'FULL_BASELINE':'READINESS_AND_SAFETY';
 const kst=utc=>new Date(Date.parse(utc)+9*3600000).toISOString().replace('Z','+09:00');ev.kst=kst(ev.utc);
 function seal(){
  mkdirSync('infra-evidence',{recursive:true});
@@ -19,11 +22,25 @@ async function managed(query){
 }
 function direct(query){
  if(!process.env.SUPABASE_DB_URL)return{ok:false,error:'NO_DB_URL'};
- const r=spawnSync('psql',['--no-psqlrc','-At','-v','ON_ERROR_STOP=1','-c',`begin read only; set local statement_timeout='10s'; select coalesce(json_agg(q),'[]'::json) from (${query}) q; commit;`],{env:{...process.env,PGDATABASE:process.env.SUPABASE_DB_URL,PGCONNECT_TIMEOUT:'8'},encoding:'utf8',timeout:15000,maxBuffer:64*1024*1024});
- if(r.status!==0){const e=String(r.stderr??'');return{ok:false,error:r.error?.code==='ENOENT'?'NO_PSQL':r.signal?'TIMEOUT':/password|authentication/i.test(e)?'DB_AUTH_REJECTED':/translate host|Name or service|resolve/i.test(e)?'DNS_FAILURE':/Network is unreachable|No route/i.test(e)?'NETWORK_UNREACHABLE':/Connection refused/i.test(e)?'CONNECTION_REFUSED':/timeout|timed out/i.test(e)?'CONNECTION_TIMEOUT':/not accepting connections|starting up/i.test(e)?'DB_STARTING':'DB_QUERY_FAILED'};}
+ const r=spawnSync('psql',['--no-psqlrc','--dbname',process.env.SUPABASE_DB_URL,'-At','-v','ON_ERROR_STOP=1','-c',`begin read only; set local statement_timeout='10s'; select coalesce(json_agg(q),'[]'::json) from (${query}) q; commit;`],{env:{...process.env,PGCONNECT_TIMEOUT:'8'},encoding:'utf8',timeout:15000,maxBuffer:64*1024*1024});
+ if(r.status!==0){const e=String(r.stderr??'');return{ok:false,error:r.error?.code==='ENOENT'?'NO_PSQL':r.signal?'TIMEOUT':/password|authentication/i.test(e)?'DB_AUTH_REJECTED':/translate host|Name or service|resolve/i.test(e)?'DNS_FAILURE':/Network is unreachable|No route/i.test(e)?'NETWORK_UNREACHABLE':/Connection refused/i.test(e)?'CONNECTION_REFUSED':/timeout|timed out/i.test(e)?'CONNECTION_TIMEOUT':/not accepting connections|starting up/i.test(e)?'DB_STARTING':'DB_QUERY_FAILED',encrypted_detail:e.slice(0,2000)};}
  try{return{ok:true,rows:JSON.parse(r.stdout.split('\n').find(l=>l.startsWith('['))??'[]')};}catch{return{ok:false,error:'DB_RESULT_INVALID'};}
 }
 let selectedDbUrl=process.env.SUPABASE_DB_URL;
+// Platform metadata and metrics have independent transport paths. A DB SQL outage
+// does not justify stopping resource/config/health evidence collection.
+for(const [name,path] of Object.entries({
+ platform_health:'health?services=db&services=db_postgres_user&services=rest&services=pooler',
+ postgres_config:'config/database/postgres',
+ pooler_config:'config/database/pooler',
+ platform_metrics:'analytics/endpoints/metrics',
+}))await record(name,async()=>{
+ const r=await fetch(`https://api.supabase.com/v1/projects/${project}/${path}`,{
+  headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN},signal:AbortSignal.timeout(15000)});
+ if(!r.ok)return{ok:false,http:r.status,encrypted_detail:(await r.text()).slice(0,2000)};
+ const value=name==='platform_metrics'?await r.text():await r.json();
+ return{ok:true,utc:new Date().toISOString(),value};
+});
 async function sql(query){const d=direct(query);if(d.ok)return d;return managed(query);}
 if(selectedDbUrl){
  const probe=direct('select 1');ev.results.pooler_probe=probe;
@@ -34,6 +51,27 @@ if(selectedDbUrl){
   }catch{process.env.SUPABASE_DB_URL=selectedDbUrl;}
  }
 }
+if(selectedDbUrl)await record('transaction_pooler_probe',async()=>{
+ const current=process.env.SUPABASE_DB_URL;
+ try{
+  const u=new URL(selectedDbUrl);
+  if(!u.hostname.endsWith('.pooler.supabase.com'))return{ok:false,error:'TRANSACTION_POOLER_NOT_CONFIGURED'};
+  u.port='6543';process.env.SUPABASE_DB_URL=u.href;
+  const result=direct('select 1');if(!result.ok)process.env.SUPABASE_DB_URL=current;return result;
+ }catch{process.env.SUPABASE_DB_URL=current;return{ok:false,error:'TRANSACTION_POOLER_CONFIG_INVALID'};}
+});
+await record('service_rest_probe',async()=>{
+ // This external read can use an existing PostgREST connection even when a new SQL
+ // connection fails. Keys and Authorization never enter evidence or log state.
+ const keysResponse=await fetch(`https://api.supabase.com/v1/projects/${project}/api-keys?reveal=true`,{
+  headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN},signal:AbortSignal.timeout(5000)});
+ if(!keysResponse.ok)return{ok:false,error:'REST_KEY_LOOKUP_UNAVAILABLE',http:keysResponse.status};
+ const keys=await keysResponse.json(),key=Array.isArray(keys)?keys.find(k=>k.name==='service_role')?.api_key:null;
+ if(!key)return{ok:false,error:'REST_SERVICE_KEY_UNAVAILABLE'};
+ const response=await fetch(`https://${project}.supabase.co/rest/v1/v11_long_regime_runtime?select=singleton,live_enabled,circuit_open&limit=1`,{
+  headers:{apikey:key,authorization:'Bearer '+key},signal:AbortSignal.timeout(5000)});
+ return response.ok?{ok:true,utc:new Date().toISOString(),rows:await response.json()}:{ok:false,http:response.status};
+});
 await record('readiness',()=>sql("select now() utc,now() at time zone 'Asia/Seoul' kst,pg_postmaster_start_time() started_at"));
 if(ev.results.readiness.ok){
  const queries={
@@ -53,12 +91,18 @@ if(ev.results.readiness.ok){
  positions:"select to_jsonb(r) row from public.v11_long_regime_positions r where state='OPEN'",
  unresolved_orders:"select to_jsonb(r) row from public.v11_long_regime_orders r where state in ('PLANNED','DISPATCHED','SUBMITTING','PARTIALLY_FILLED','UNKNOWN','RECONCILIATION_PENDING','RECONCILIATION_FAILED')",
  dispatches:"select to_jsonb(d) row from public.leader20_execution_dispatches d where gpt_completed_at>=now()-interval '7 days' order by gpt_completed_at",
- decisions:"select to_jsonb(r) row from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and decision='BUY'",
+ decisions:"select job_key,purpose,state,decision,valid,created_at,record->'identity' identity,record#>'{packet,leader20,entry_window}' entry_window,record#>'{result,review_route}' review_route,record#>'{result,completed_at_ms}' completed_at_ms,record#>'{result,error}' error,record#>'{result,origin}' origin from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and decision='BUY'",
+ cohort_clock:"select to_jsonb(c) row from public.leader20_clock_executions c where gpt_buy_completed_at>=now()-interval '7 days'",
+ same_decision_cohort:readFileSync('ops/execution-infra/cohort.sql','utf8'),
+ cohort_orders:"select (to_jsonb(o)-'request_payload'-'response_payload') || jsonb_build_object('clock_authority',o.request_payload#>'{entry_gpt_decision,clockFinalAuthority}','clock_execution',o.request_payload->'entry_clock_execution','same_order_finality',o.response_payload->'v22EntryFinality','not_dispatched',o.response_payload->'notDispatched') row from public.v11_long_regime_orders o where signal_id in (select (r.record#>>'{identity,signal_id}')::uuid from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and state='DONE' and valid is true and decision='BUY' and r.record#>>'{result,review_route}'='TOP20_CLOCK_GPT_FINAL_3')",
+ cohort_positions:"select to_jsonb(p) row from public.v11_long_regime_positions p where signal_id in (select (r.record#>>'{identity,signal_id}')::uuid from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and state='DONE' and valid is true and decision='BUY' and r.record#>>'{result,review_route}'='TOP20_CLOCK_GPT_FINAL_3')",
+ cohort_fills:"select to_jsonb(f) row from public.exchange_trade_fills f where f.v17_order_id in (select o.id from public.v11_long_regime_orders o where signal_id in (select (r.record#>>'{identity,signal_id}')::uuid from public.gpt_final_entry_reviews r where created_at>=now()-interval '7 days' and purpose='PRODUCTION' and state='DONE' and valid is true and decision='BUY' and r.record#>>'{result,review_route}'='TOP20_CLOCK_GPT_FINAL_3'))",
  net_queue:"select count(*) queue_depth,min(id) oldest_request_id from net.http_request_queue",
  net_responses:"select status_code,timed_out,error_msg,count(*) from net._http_response where created>=now()-interval '24 hours' group by 1,2,3 order by count(*) desc limit 50",
  stats:"select datname,numbackends,xact_commit,xact_rollback,blks_read,blks_hit,temp_bytes,deadlocks,blk_read_time,blk_write_time,stats_reset from pg_stat_database where datname=current_database()",
  };
- for(const [name,query]of Object.entries(queries))await record(name,()=>sql(query));
+ const routine=new Set(['settings','activity','leases','positions','unresolved_orders','net_queue','stats']);
+ for(const [name,query]of Object.entries(queries))if(fullAudit||routine.has(name))await record(name,()=>sql(query));
 }
 await record('exchange_read_only',async()=>{
  const app=process.env.FLY_BINANCE_APP_NAME,token=process.env.LEARNING_ACCESS_TOKEN;
@@ -75,10 +119,30 @@ await record('exchange_read_only',async()=>{
  return{ok:portfolio.ok&&openOrders.ok,portfolio,openOrders,utc:new Date().toISOString()};
 });
 const apps=[...new Set([process.env.FLY_APP_NAME,process.env.FLY_BINANCE_APP_NAME,'sanbital-doa-capture-20260925'].filter(Boolean))];
+for(const app of [process.env.FLY_APP_NAME,process.env.FLY_BINANCE_APP_NAME].filter(Boolean))
+ await record('fly_health:'+app,async()=>{
+  const r=await fetch(`https://${app}.fly.dev/health`,{signal:AbortSignal.timeout(5000)});
+  return r.ok?{ok:true,utc:new Date().toISOString(),value:await r.json()}:{ok:false,http:r.status};
+ });
 for(const app of apps)await record('fly:'+app,async()=>{
  const r=await fetch(`https://api.machines.dev/v1/apps/${app}/machines`,{headers:{authorization:'Bearer '+process.env.FLY_API_TOKEN},signal:AbortSignal.timeout(15000)});
  if(!r.ok)return{ok:false,http:r.status};
- const rows=await r.json();return{ok:true,machines:rows.map(m=>({id:m.id,name:m.name,state:m.state,region:m.region,created_at:m.created_at,updated_at:m.updated_at,image_ref:m.image_ref,guest:m.config?.guest,services:m.config?.services,env:Object.fromEntries(Object.entries(m.config?.env??{}).filter(([k])=>/^(SCHEDULER_ENABLED|AUTO_SCAN_INTERVAL_SECONDS|AUTO_MONITOR_INTERVAL_SECONDS|PORT|PRIMARY_REGION|VERSION)$/.test(k))),events:m.events}))};
+ const rows=await r.json();
+ if(fullAudit&&[process.env.FLY_APP_NAME,process.env.FLY_BINANCE_APP_NAME].includes(app)){
+  // Read a fixed source allowlist from the running image. No environment reads,
+  // process signalling, config mutation, order calls, or arbitrary command inputs.
+  const source='const fs=require("node:fs"),crypto=require("node:crypto");const files=["server.mjs","futures-mode-evidence.mjs","v17-stop-commands.mjs","v17-shadow-worker.mjs","v17-shadow-host.mjs","leader-exit-r3.mjs","leader-exit-r4.mjs"];console.log(JSON.stringify(files.map(name=>{const path="/app/"+name;if(!fs.existsSync(path))return{name,missing:true};const bytes=fs.readFileSync(path);return{name,sha256:crypto.createHash("sha256").update(bytes).digest("hex"),content:bytes.toString("base64")}})))';
+  for(const machine of rows.filter(m=>m.state==='started'))await record('fly_source:'+app+':'+machine.id,async()=>{
+   const response=await fetch(`https://api.machines.dev/v1/apps/${app}/machines/${machine.id}/exec`,{
+    method:'POST',headers:{authorization:'Bearer '+process.env.FLY_API_TOKEN,'content-type':'application/json'},
+    body:JSON.stringify({cmd:"node -e '"+source+"'",timeout:10}),signal:AbortSignal.timeout(15000)});
+   if(!response.ok)return{ok:false,http:response.status};
+   const result=await response.json();
+   return result.exit_code===0?{ok:true,utc:new Date().toISOString(),files:JSON.parse(result.stdout)}:
+    {ok:false,error:'SOURCE_READ_FAILED'};
+  });
+ }
+ return{ok:true,machines:rows.map(m=>({id:m.id,name:m.name,state:m.state,region:m.region,created_at:m.created_at,updated_at:m.updated_at,image_ref:m.image_ref,config:m.config,guest:m.config?.guest,services:m.config?.services,env:Object.fromEntries(Object.entries(m.config?.env??{}).filter(([k])=>/^(SCHEDULER_ENABLED|EXTERNAL_SCHEDULER_ENABLED|ORDER_WRITER_REQUIRED|AUTO_SCAN_INTERVAL_SECONDS|AUTO_MONITOR_INTERVAL_SECONDS|PORT|PRIMARY_REGION|VERSION)$/.test(k))),events:m.events}))};
 });
 await record('functions',async()=>{
  const r=await fetch(`https://api.supabase.com/v1/projects/${project}/functions`,{headers:{authorization:'Bearer '+process.env.SUPABASE_ACCESS_TOKEN},signal:AbortSignal.timeout(15000)});return r.ok?{ok:true,rows:await r.json()}:{ok:false,http:r.status};

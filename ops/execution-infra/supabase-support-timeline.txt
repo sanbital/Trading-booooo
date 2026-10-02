@@ -44,6 +44,22 @@ starting PostgreSQL 17.6 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 6
 database system was interrupted; last known up at 2026-10-01 20:11:00 UTC | 2026-10-01T20:11:52.767000+00:00 | 2026-10-02T05:11:52.767000+09:00
 
 Independent failures: MCP SQL connection timeout; GitHub runner Management API HTTP 544 at 2026-10-01T22:36:07.947Z and 22:41:31.277Z.
+Corrected independent diagnostic, run 36947468515:
+2026-10-02T00:44:22.759Z UTC / 2026-10-02T09:44:22.759+09:00 KST:
+Management health db/db_postgres_user/rest UNHEALTHY; pooler ACTIVE_HEALTHY.
+psql --dbname through aws-0-ap-northeast-1.pooler.supabase.com:5432:
+FATAL: Failed to connect to database: {:error, :timeout}.
+Direct db.<project>.supabase.co is IPv6-only; runner reports Network is unreachable.
+The direct-host runner failure is a runner network limitation, not proof of DB TCP failure.
+Metrics HTTP 500, errorEventId 12ac5fc1359c41d48da9e52ad31c9b32; management SQL HTTP 544.
+Rolling log window 2026-10-01T01:15:49.134Z UTC / 10:15:49.134 KST
+through 2026-10-02T01:15:49.134Z UTC / 10:15:49.134 KST:
+postgres_logs: cron startup timeout messages 107, statement timeout messages 228.
+postgrest_logs: statement timeout messages 207; maximum size of 30 connections messages 93.
+pgbouncer_logs: DNS failure messages 22. Startup/interrupted messages 15 each.
+Do not sum these sources into distinct incident counts. The PostgREST pool maximum
+is not a measurement of Postgres max_connections or connection peak.
+Initial PGDATABASE-only psql probes tried a local socket and are excluded as independent remote evidence.
 Fly scheduler process alive with DB circuit open; signed exchange read succeeded at 22:41:48.201Z.
 SQL cron/config/position/unknown-order backup unavailable. No resource-cause attribution established.
 Please provide: postmaster/container exit codes, OOM-killer and memory-pressure events, per-restart CPU/memory/disk I/O and connection peaks, recovery/WAL and replication state, autovacuum/lock/long-query telemetry, maintenance/software upgrades/restart actor history, and platform incident correlation.
