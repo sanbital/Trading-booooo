@@ -60,12 +60,21 @@ export function createOrderWriterFence({required=false,authorize}) {
 export function createGatewayAuthorizer({url,key,fetchImpl=fetch,timeoutMs=2500}) {
   return async (envelope,command) => {
     if (!url || !key) throw refusal('WRITER_DB_CREDENTIALS_MISSING');
-    const response=await fetchImpl(`${url}/rest/v1/rpc/trading_gateway_authorize`,{
-      method:'POST',signal:AbortSignal.timeout(timeoutMs),
-      headers:{'content-type':'application/json',apikey:key,Authorization:`Bearer ${key}`},
-      body:JSON.stringify({p_key:envelope.execution_key,p_account:envelope.account_key,
-        p_owner:envelope.owner,p_fence:envelope.fence,p_command:command}),
-    });
+    let response;
+    try{
+      response=await fetchImpl(`${url}/rest/v1/rpc/trading_gateway_authorize`,{
+        method:'POST',signal:AbortSignal.timeout(timeoutMs),
+        headers:{'content-type':'application/json',apikey:key,Authorization:`Bearer ${key}`},
+        body:JSON.stringify({p_key:envelope.execution_key,p_account:envelope.account_key,
+          p_owner:envelope.owner,p_fence:envelope.fence,p_command:command}),
+      });
+    }catch(error){
+      const code=error?.cause?.code??error?.code;
+      throw refusal(['TimeoutError','AbortError'].includes(error?.name)?'WRITER_DB_TIMEOUT':
+        ['ENOTFOUND','EAI_AGAIN'].includes(code)?'WRITER_DB_DNS_FAILURE':
+        code==='ECONNRESET'?'WRITER_DB_CONNECTION_RESET':code==='ECONNREFUSED'?'WRITER_DB_CONNECTION_REFUSED':
+        'WRITER_DB_UNAVAILABLE');
+    }
     if (!response.ok) throw refusal('WRITER_DB_UNAVAILABLE');
     return (await response.json())===true;
   };
