@@ -1,0 +1,69 @@
+{
+  "utc_cutoff": "2026-10-02 05:23:34.321393+00",
+  "kst_cutoff": "2026-10-02 14:23:34.321393",
+  "periods": {
+    "24h": {
+      "final_buy": 254,
+      "dispatch": 254,
+      "claim": 206,
+      "validation": 12,
+      "submit": 12,
+      "accepted": 12,
+      "partial_or_filled": 9,
+      "fully_filled": 7,
+      "position": 9,
+      "protection": 9,
+      "reasons": {
+        "CIRCUIT_OPEN": 6,
+        "EXECUTOR_BUSY": 25,
+        "UNCLAIMED_DEADLINE_EXPIRED": 47,
+        "LEASE_FAILURE": 1,
+        "GPT_RECHECK_CANCELED": 106,
+        "UNIVERSE_STALE": 28,
+        "CAPACITY_REJECTED": 4,
+        "UNCLASSIFIED_TERMINAL_REASON": 20,
+        "PROTECTED": 9,
+        "LATEST_DATA_VALIDATION_FAILED": 8
+      },
+      "outcomes": {
+        "SYSTEM_FAILURE_OR_UNRESOLVED": 107,
+        "STRATEGIC_OR_VENUE_REFUSAL": 118,
+        "UNCLASSIFIED": 20,
+        "SUCCESS": 9
+      }
+    },
+    "7d": {
+      "final_buy": 532,
+      "dispatch": 435,
+      "claim": 330,
+      "validation": 17,
+      "submit": 55,
+      "accepted": 55,
+      "partial_or_filled": 39,
+      "fully_filled": 33,
+      "position": 39,
+      "protection": 39,
+      "reasons": {
+        "DISPATCH_MISSING": 71,
+        "PROTECTED": 39,
+        "LATEST_DATA_VALIDATION_FAILED": 16,
+        "UNCLAIMED_DEADLINE_EXPIRED": 103,
+        "AUTHORITY_EXPIRED": 3,
+        "EXECUTOR_BUSY": 81,
+        "UNCLASSIFIED_TERMINAL_REASON": 24,
+        "LEASE_FAILURE": 6,
+        "TERMINAL_ERROR_CONTEXT_MISSING": 1,
+        "UNIVERSE_STALE": 47,
+        "CAPACITY_REJECTED": 8,
+        "GPT_RECHECK_CANCELED": 111,
+        "CIRCUIT_OPEN": 22
+      },
+      "outcomes": {
+        "SYSTEM_FAILURE_OR_UNRESOLVED": 330,
+        "SUCCESS": 39,
+        "STRATEGIC_OR_VENUE_REFUSAL": 138,
+        "UNCLASSIFIED": 25
+      }
+    }
+  }
+}

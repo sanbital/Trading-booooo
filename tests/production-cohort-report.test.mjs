@@ -97,3 +97,45 @@ test('ack timestamp alone, rejected stop and malformed metadata never prove prot
   assert.equal(row.protection_installed,expected,key);
  }
 });
+
+test('GPT recheck cancellation and stale protection backlog have different outcome classes',async t=>{
+ const f=await fixture(t);
+ for(const [key,error,reason,category]of [
+  ['cancel','PRE_EXECUTION_GPT_CANCEL_OR_ERROR:CANCEL_BUY','GPT_RECHECK_CANCELED','STRATEGIC_OR_VENUE_REFUSAL'],
+  ['protection','STALE_PROTECTION_SYMBOL_LOCKED','PROTECTION_RECONCILIATION_PENDING','SYSTEM_FAILURE_OR_UNRESOLVED']]) {
+  const d=await f.decision(key);await f.dispatch(d,{reason:'REJECTED',error});
+  const row=(await f.report()).find(r=>r.period==='24h'&&r.decision_id===key);
+  assert.equal(row.reason,reason);assert.equal(row.outcome_class,category);
+ }
+});
+test('malformed signal identity stays a missing dispatch rather than crashing the complete cohort',async t=>{
+ const f=await fixture(t);await f.decision('malformed',{signal:'invalid-uuid'});
+ const rows=await f.report();assert.ok(rows.every(r=>r.reason==='DISPATCH_MISSING'));
+});
+
+test('production clock authority binds order and position to exact signal and GPT completion, not an absent jobKey',async t=>{
+ const f=await fixture(t),signal=crypto.randomUUID(),a=await f.decision('authority-A',{signal}),b=await f.decision('authority-B',{signal,age:3500000});
+ await f.dispatch(a);await f.dispatch(b);const pos=crypto.randomUUID();
+ const payload={entry_gpt_decision:{clockFinalAuthority:{signal_id:signal,completed_at_ms:a.ms,authority_version:'TOP20_CLOCK_GPT_FINAL_3'}}};
+ await f.db.query(`insert into v11_long_regime_orders values($1,$2,$3,'OPEN_LONG',statement_timestamp()-interval '1 minute','123',1,$4,$5,'FILLED')`,
+  [crypto.randomUUID(),signal,pos,payload,{v22EntryFinality:{executedQty:1,finalStatus:'FILLED'}}]);
+ await f.db.query(`insert into v11_long_regime_positions values($1,$2,statement_timestamp()-interval '1 minute','CLOSED','{}')`,[pos,signal]);
+ const rows=(await f.report()).filter(r=>r.period==='24h'),ra=rows.find(r=>r.decision_id==='authority-A'),rb=rows.find(r=>r.decision_id==='authority-B');
+ assert.equal(ra.exchange_acknowledged,true);assert.equal(ra.fully_filled,true);assert.equal(ra.position_attributed,true);
+ assert.equal(rb.exchange_acknowledged,false);assert.equal(rb.position_attributed,false);
+});
+
+test('dynamic reversal, insufficient margin and infrastructure errors retain exclusive honest reasons',async t=>{
+ const f=await fixture(t);
+ for(const [error,reason,category]of [
+  ['PRE_EXECUTION_INVALID:DYNAMIC_MULTI_AXIS_CHANGE','LATEST_DATA_VALIDATION_FAILED','STRATEGIC_OR_VENUE_REFUSAL'],
+  ['INSUFFICIENT_MARGIN:100<150','CAPACITY_REJECTED','STRATEGIC_OR_VENUE_REFUSAL'],
+  ['V17_CONTROLS_UNAVAILABLE','CONTROL_STATE_UNAVAILABLE','SYSTEM_FAILURE_OR_UNRESOLVED'],
+  ['The signal has been aborted','DEPENDENCY_TIMEOUT_OR_5XX','SYSTEM_FAILURE_OR_UNRESOLVED'],
+  ['PRE_EXECUTION_GPT_CANCEL_OR_ERROR:EXECUTION_WINDOW_INSUFFICIENT','WINDOW_EXPIRED_CAUSE_UNRESOLVED','UNCLASSIFIED'],
+  ['IOC_RETRY_FILLED','RETRY_FILL_ATTRIBUTION_EVIDENCE_MISSING','SYSTEM_FAILURE_OR_UNRESOLVED']]){
+  const d=await f.decision(error);await f.dispatch(d,{reason:'REJECTED',error});
+  const row=(await f.report()).find(r=>r.period==='24h'&&r.decision_id===error);
+  assert.equal(row.reason,reason);assert.equal(row.outcome_class,category);
+ }
+});
