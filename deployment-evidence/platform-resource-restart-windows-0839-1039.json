@@ -1,0 +1,729 @@
+{
+  "window": {
+    "start_utc": "2026-10-02T08:39:52.779Z",
+    "end_utc": "2026-10-02T10:39:37.700Z",
+    "samples": 480,
+    "valid_metrics": 442,
+    "metrics_transport_timeouts": 38,
+    "health_transport_timeouts": 39,
+    "health_unhealthy_responses": 5,
+    "cpu_non_idle_non_iowait_percent": {
+      "p50": 26.596387564627687,
+      "p95": 50.12969283276451,
+      "p99": 60.53956110328165,
+      "max": 61.2835598836816
+    },
+    "iowait_percent_max": 47.294560185185205,
+    "memory_total_bytes": 2025492480.0,
+    "memory_available_bytes_min": 353513472.0,
+    "oom_kill_counter_min": 0.0,
+    "oom_kill_counter_max": 0.0,
+    "connection_peak_observed": 23.0,
+    "connection_limit": 90.0,
+    "swap_free_bytes_min": 178659328.0,
+    "disk_io_utilization_not_reported": "asynchronous/cache scrape timestamps do not support a reliable percent",
+    "process_start_values": {
+      "postgresql": [
+        1790930185.43,
+        1790931780.92,
+        1790934453.57,
+        1790934454.57,
+        1790935926.76,
+        1790935927.76,
+        1790937102.33,
+        1790937104.33
+      ],
+      "gotrue": [
+        1790930192.15,
+        1790931787.85,
+        1790934460.25,
+        1790934461.25,
+        1790935933.9,
+        1790935934.9,
+        1790937109.19,
+        1790937111.19
+      ]
+    },
+    "postgresql_restarts_counter_values": [
+      0.0
+    ],
+    "covers_last_restart_preceding_resources": false,
+    "valid_memory_samples": 441,
+    "missing_memory_samples": 1
+  },
+  "restart_windows": [
+    {
+      "postmaster_start_utc": "2026-10-02T09:03:04.641372+00:00",
+      "postmaster_start_kst": "2026-10-02T18:03:04.641372+09:00",
+      "samples_3min_before_1min_after": [
+        {
+          "utc": "2026-10-02T09:00:09.123Z",
+          "kst": "2026-10-02T18:00:09.123000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 366108672.0,
+          "oom_kill_counter": 0.0,
+          "connections": 23.0
+        },
+        {
+          "utc": "2026-10-02T09:00:27.661Z",
+          "kst": "2026-10-02T18:00:27.661000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:00:42.657Z",
+          "kst": "2026-10-02T18:00:42.657000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:00:57.658Z",
+          "kst": "2026-10-02T18:00:57.658000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:01:12.653Z",
+          "kst": "2026-10-02T18:01:12.653000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:01:27.657Z",
+          "kst": "2026-10-02T18:01:27.657000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:01:42.658Z",
+          "kst": "2026-10-02T18:01:42.658000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": 0
+        },
+        {
+          "utc": "2026-10-02T09:01:57.657Z",
+          "kst": "2026-10-02T18:01:57.657000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:02:12.653Z",
+          "kst": "2026-10-02T18:02:12.653000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:02:27.657Z",
+          "kst": "2026-10-02T18:02:27.657000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:02:42.657Z",
+          "kst": "2026-10-02T18:02:42.657000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:02:57.657Z",
+          "kst": "2026-10-02T18:02:57.657000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:03:08.497Z",
+          "kst": "2026-10-02T18:03:08.497000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1538772992.0,
+          "oom_kill_counter": 0.0,
+          "connections": 4.0
+        },
+        {
+          "utc": "2026-10-02T09:03:22.960Z",
+          "kst": "2026-10-02T18:03:22.960000+09:00",
+          "phase": "AFTER",
+          "metrics_available": false,
+          "health_available": true,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:03:37.810Z",
+          "kst": "2026-10-02T18:03:37.810000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1538772992.0,
+          "oom_kill_counter": 0.0,
+          "connections": 4.0
+        },
+        {
+          "utc": "2026-10-02T09:03:52.721Z",
+          "kst": "2026-10-02T18:03:52.721000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1538772992.0,
+          "oom_kill_counter": 0.0,
+          "connections": 4.0
+        }
+      ],
+      "restart_actor": "UNCONFIRMED",
+      "causal_cpu_oom_connection_saturation": "NOT_ESTABLISHED"
+    },
+    {
+      "postmaster_start_utc": "2026-10-02T09:47:36.990946+00:00",
+      "postmaster_start_kst": "2026-10-02T18:47:36.990946+09:00",
+      "samples_3min_before_1min_after": [
+        {
+          "utc": "2026-10-02T09:44:37.668Z",
+          "kst": "2026-10-02T18:44:37.668000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 550748160.0,
+          "oom_kill_counter": 0.0,
+          "connections": 11.0
+        },
+        {
+          "utc": "2026-10-02T09:44:52.631Z",
+          "kst": "2026-10-02T18:44:52.631000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 550748160.0,
+          "oom_kill_counter": 0.0,
+          "connections": 11.0
+        },
+        {
+          "utc": "2026-10-02T09:45:07.786Z",
+          "kst": "2026-10-02T18:45:07.786000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 550748160.0,
+          "oom_kill_counter": 0.0,
+          "connections": 11.0
+        },
+        {
+          "utc": "2026-10-02T09:45:27.657Z",
+          "kst": "2026-10-02T18:45:27.657000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:45:42.654Z",
+          "kst": "2026-10-02T18:45:42.654000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:45:57.654Z",
+          "kst": "2026-10-02T18:45:57.654000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:46:12.653Z",
+          "kst": "2026-10-02T18:46:12.653000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:46:27.654Z",
+          "kst": "2026-10-02T18:46:27.654000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:46:42.653Z",
+          "kst": "2026-10-02T18:46:42.653000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:46:57.653Z",
+          "kst": "2026-10-02T18:46:57.653000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:47:12.654Z",
+          "kst": "2026-10-02T18:47:12.654000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:47:27.654Z",
+          "kst": "2026-10-02T18:47:27.654000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:47:42.651Z",
+          "kst": "2026-10-02T18:47:42.651000+09:00",
+          "phase": "AFTER",
+          "metrics_available": false,
+          "health_available": true,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T09:47:53.155Z",
+          "kst": "2026-10-02T18:47:53.155000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1434140672.0,
+          "oom_kill_counter": 0.0,
+          "connections": 5.0
+        },
+        {
+          "utc": "2026-10-02T09:48:07.618Z",
+          "kst": "2026-10-02T18:48:07.618000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1434140672.0,
+          "oom_kill_counter": 0.0,
+          "connections": 5.0
+        },
+        {
+          "utc": "2026-10-02T09:48:22.636Z",
+          "kst": "2026-10-02T18:48:22.636000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1434140672.0,
+          "oom_kill_counter": 0.0,
+          "connections": 5.0
+        }
+      ],
+      "restart_actor": "UNCONFIRMED",
+      "causal_cpu_oom_connection_saturation": "NOT_ESTABLISHED"
+    },
+    {
+      "postmaster_start_utc": "2026-10-02T10:12:10.59709+00:00",
+      "postmaster_start_kst": "2026-10-02T19:12:10.597090+09:00",
+      "samples_3min_before_1min_after": [
+        {
+          "utc": "2026-10-02T10:09:22.649Z",
+          "kst": "2026-10-02T19:09:22.649000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 487026688.0,
+          "oom_kill_counter": 0.0,
+          "connections": 10.0
+        },
+        {
+          "utc": "2026-10-02T10:09:37.647Z",
+          "kst": "2026-10-02T19:09:37.647000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 487026688.0,
+          "oom_kill_counter": 0.0,
+          "connections": 10.0
+        },
+        {
+          "utc": "2026-10-02T10:09:52.663Z",
+          "kst": "2026-10-02T19:09:52.663000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 487026688.0,
+          "oom_kill_counter": 0.0,
+          "connections": 10.0
+        },
+        {
+          "utc": "2026-10-02T10:10:07.763Z",
+          "kst": "2026-10-02T19:10:07.763000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 487026688.0,
+          "oom_kill_counter": 0.0,
+          "connections": 10.0
+        },
+        {
+          "utc": "2026-10-02T10:10:22.777Z",
+          "kst": "2026-10-02T19:10:22.777000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 487026688.0,
+          "oom_kill_counter": 0.0,
+          "connections": 10.0
+        },
+        {
+          "utc": "2026-10-02T10:10:42.657Z",
+          "kst": "2026-10-02T19:10:42.657000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T10:10:57.653Z",
+          "kst": "2026-10-02T19:10:57.653000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T10:11:12.653Z",
+          "kst": "2026-10-02T19:11:12.653000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T10:11:27.654Z",
+          "kst": "2026-10-02T19:11:27.654000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T10:11:42.654Z",
+          "kst": "2026-10-02T19:11:42.654000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T10:11:57.653Z",
+          "kst": "2026-10-02T19:11:57.653000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T10:12:12.655Z",
+          "kst": "2026-10-02T19:12:12.655000+09:00",
+          "phase": "AFTER",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T10:12:22.809Z",
+          "kst": "2026-10-02T19:12:22.809000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1371455488.0,
+          "oom_kill_counter": 0.0,
+          "connections": 7.0
+        },
+        {
+          "utc": "2026-10-02T10:12:37.679Z",
+          "kst": "2026-10-02T19:12:37.679000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1371455488.0,
+          "oom_kill_counter": 0.0,
+          "connections": 7.0
+        },
+        {
+          "utc": "2026-10-02T10:12:52.659Z",
+          "kst": "2026-10-02T19:12:52.659000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1371455488.0,
+          "oom_kill_counter": 0.0,
+          "connections": 7.0
+        },
+        {
+          "utc": "2026-10-02T10:13:07.660Z",
+          "kst": "2026-10-02T19:13:07.660000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1371455488.0,
+          "oom_kill_counter": 0.0,
+          "connections": 7.0
+        }
+      ],
+      "restart_actor": "UNCONFIRMED",
+      "causal_cpu_oom_connection_saturation": "NOT_ESTABLISHED"
+    },
+    {
+      "postmaster_start_utc": "2026-10-02T10:31:45.925847+00:00",
+      "postmaster_start_kst": "2026-10-02T19:31:45.925847+09:00",
+      "samples_3min_before_1min_after": [
+        {
+          "utc": "2026-10-02T10:28:52.691Z",
+          "kst": "2026-10-02T19:28:52.691000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 601657344.0,
+          "oom_kill_counter": 0.0,
+          "connections": 12.0
+        },
+        {
+          "utc": "2026-10-02T10:29:07.834Z",
+          "kst": "2026-10-02T19:29:07.834000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 601657344.0,
+          "oom_kill_counter": 0.0,
+          "connections": 12.0
+        },
+        {
+          "utc": "2026-10-02T10:29:22.704Z",
+          "kst": "2026-10-02T19:29:22.704000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 601657344.0,
+          "oom_kill_counter": 0.0,
+          "connections": 12.0
+        },
+        {
+          "utc": "2026-10-02T10:29:37.685Z",
+          "kst": "2026-10-02T19:29:37.685000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 601657344.0,
+          "oom_kill_counter": 0.0,
+          "connections": 12.0
+        },
+        {
+          "utc": "2026-10-02T10:29:53.027Z",
+          "kst": "2026-10-02T19:29:53.027000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 592764928.0,
+          "oom_kill_counter": 0.0,
+          "connections": 12.0
+        },
+        {
+          "utc": "2026-10-02T10:30:10.644Z",
+          "kst": "2026-10-02T19:30:10.644000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 592764928.0,
+          "oom_kill_counter": 0.0,
+          "connections": 13.0
+        },
+        {
+          "utc": "2026-10-02T10:30:27.655Z",
+          "kst": "2026-10-02T19:30:27.655000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": true,
+          "health_available": false,
+          "memory_available_bytes": 592764928.0,
+          "oom_kill_counter": 0.0,
+          "connections": 13.0
+        },
+        {
+          "utc": "2026-10-02T10:30:42.652Z",
+          "kst": "2026-10-02T19:30:42.652000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T10:30:57.652Z",
+          "kst": "2026-10-02T19:30:57.652000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T10:31:12.652Z",
+          "kst": "2026-10-02T19:31:12.652000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T10:31:27.655Z",
+          "kst": "2026-10-02T19:31:27.655000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T10:31:42.652Z",
+          "kst": "2026-10-02T19:31:42.652000+09:00",
+          "phase": "BEFORE",
+          "metrics_available": false,
+          "health_available": false,
+          "memory_available_bytes": null,
+          "oom_kill_counter": null,
+          "connections": null
+        },
+        {
+          "utc": "2026-10-02T10:31:52.871Z",
+          "kst": "2026-10-02T19:31:52.871000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1470038016.0,
+          "oom_kill_counter": 0.0,
+          "connections": 5.0
+        },
+        {
+          "utc": "2026-10-02T10:32:07.739Z",
+          "kst": "2026-10-02T19:32:07.739000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1470038016.0,
+          "oom_kill_counter": 0.0,
+          "connections": 5.0
+        },
+        {
+          "utc": "2026-10-02T10:32:22.641Z",
+          "kst": "2026-10-02T19:32:22.641000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1470038016.0,
+          "oom_kill_counter": 0.0,
+          "connections": 5.0
+        },
+        {
+          "utc": "2026-10-02T10:32:37.681Z",
+          "kst": "2026-10-02T19:32:37.681000+09:00",
+          "phase": "AFTER",
+          "metrics_available": true,
+          "health_available": true,
+          "memory_available_bytes": 1470038016.0,
+          "oom_kill_counter": 0.0,
+          "connections": 5.0
+        }
+      ],
+      "restart_actor": "UNCONFIRMED",
+      "causal_cpu_oom_connection_saturation": "NOT_ESTABLISHED"
+    }
+  ],
+  "conclusion": "Agent did not restart or resize. Available metrics do not establish OOM, CPU or connection exhaustion as restart cause. Transport gaps are preserved; disk percent is not reliable. Platform maintenance/restart actor/kernel termination requires provider evidence."
+}

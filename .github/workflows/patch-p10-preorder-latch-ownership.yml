@@ -1,10 +1,14 @@
 name: Patch P10 pre-order latch ownership
 
+# Retired: production P10 entry is permanently suspended, and its scan was removed
+# in PR 317. Editing this historical patcher must never re-install that entry loop.
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/patch-p10-preorder-latch-ownership.yml"
+  workflow_dispatch:
+    inputs:
+      version_marker:
+        description: "Retired P10 path: P10_ENTRY_RETIRED_20261002"
+        type: string
+        required: true
 
 permissions:
   contents: write
@@ -15,6 +19,8 @@ concurrency:
 
 jobs:
   patch:
+    if: github.repository == 'sanbital/Trading-booooo' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && false
+    environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
