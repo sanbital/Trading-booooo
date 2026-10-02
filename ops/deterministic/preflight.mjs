@@ -13,7 +13,7 @@ const query=`select jsonb_build_object('utc',now(),'postmaster',pg_postmaster_st
  'positions',(select coalesce(jsonb_agg(to_jsonb(p)),'[]') from public.v11_long_regime_positions p where state='OPEN' or remaining_quantity>0),
  'orders',(select coalesce(jsonb_agg(to_jsonb(o)-'request_payload'-'response_payload'),'[]') from public.v11_long_regime_orders o where state in ('PLANNED','DISPATCHED','SUBMITTING','PARTIALLY_FILLED','UNKNOWN','RECONCILIATION_PENDING','RECONCILIATION_FAILED')),
  'fills',(select coalesce(jsonb_agg(to_jsonb(f)-'raw_response'),'[]') from public.exchange_trade_fills f where exchange='binance_futures' and account_scope='futures' and executed_at>=now()-interval '24 hours'),
- 'history_symbols',(select coalesce(jsonb_agg(symbol),'[]') from (select distinct market symbol from public.exchange_trade_fills where exchange='binance_futures' and account_scope='futures' and executed_at>=now()-interval '7 days' union select distinct symbol from public.v11_long_regime_positions where state='OPEN' or closed_at>=now()-interval '7 days')s),
+ 'history_symbols',(select coalesce(jsonb_agg(symbol),'[]') from (select distinct market symbol from public.exchange_trade_fills where exchange='binance_futures' and account_scope='futures' and executed_at>=now()-interval '24 hours' union select distinct symbol from public.v11_long_regime_positions where state='OPEN' or closed_at>=now()-interval '24 hours')s),
  'account_snapshot',(select jsonb_build_object('captured_at',captured_at,'equity',total_equity_quote,'available',available_quote) from public.trading_account_snapshots where exchange='binance_futures' order by captured_at desc limit 1),
  'leader20',(select to_jsonb(c) from public.leader20_control c where singleton),
  'capture',(select to_jsonb(c)-'lease_owner' from doa_capture.control c where id=1),
@@ -35,6 +35,7 @@ try{
  const [portfolio,openOrders,mode]=await Promise.all(['p10_portfolio','v18_open_orders','futures_position_mode'].map(action=>readVenue({...config,command:{action}})));
  ev.timing.signed_account_orders_mode_roundtrip_ms=Date.now()-started;ev.venue={portfolio,openOrders,mode};
  ev.holdings=reconcileHoldings({db:ev.before,portfolio,openOrders,mode});seal();
+ console.log(JSON.stringify({stage:'SIGNED_HOLDINGS_READ',...ev.holdings}));
  const symbols=[...new Set([...ev.before.history_symbols,...portfolio.positions.map(p=>p.market)])].sort();
  if(symbols.length>30)throw Error('PREFLIGHT_HISTORY_SCOPE_TOO_LARGE');
  ev.history={};for(const market of symbols)ev.history[market]=await readVenue({...config,command:{action:'trade_history',market,limit:1000}});
@@ -59,4 +60,4 @@ try{
   timing:ev.timing};seal();
  console.log(JSON.stringify(ev.summary));writeFileSync('infra-evidence/deterministic-preflight-summary.json',JSON.stringify(ev.summary,null,2));
  if(failures.length)process.exitCode=2;
-}catch(e){ev.error=/^[A-Z0-9_]+$/.test(e.message)?e.message:'PREFLIGHT_READ_FAILED';seal();console.error(ev.error);process.exitCode=1;}
+}catch(e){ev.error=/^[A-Z0-9_]+$/.test(e.message)?e.message:'PREFLIGHT_READ_FAILED';seal();console.error(JSON.stringify({error:ev.error,mutations:0,holdings:ev.holdings??null}));process.exitCode=1;}

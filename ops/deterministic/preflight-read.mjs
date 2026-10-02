@@ -48,5 +48,5 @@ export function reconcileTrades(fills,history,since){
  }
  if(trades.some(t=>!fills.some(f=>matches(f,t))))failures.push('EXCHANGE_FILL_MISSING_IN_DB');
  return {failures:[...new Set(failures)],canonical_fills:fills.length,exchange_fills:trades.length,
-  scope:'Last 24 hours; symbols from the last seven days of DB positions/fills plus current venue holdings. Other-symbol manual history is not proven.'};
+  scope:'Last 24 hours; symbols from DB positions/fills in that window plus current venue holdings. Other-symbol manual history is not proven.'};
 }
