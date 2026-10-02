@@ -1,13 +1,12 @@
 name: Deploy B06133 entry selection
 
 on:
-  push:
-    branches: [release/b06133-live-20260920]
-    paths:
-      - "supabase/functions/_shared/leader-b06133-entry.mjs"
-      - "supabase/functions/_shared/leader-b06133-entry.test.mjs"
-      - "supabase/functions/v10-lane-executor/index.ts"
-      - ".github/workflows/deploy-b06133-entry-selection-20260920.yml"
+  workflow_dispatch:
+    inputs:
+      retirement_version:
+        description: Archived one-shot release; rerun is blocked by its completed manifest
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -26,6 +25,8 @@ env:
 
 jobs:
   release:
+    if: github.repository == 'sanbital/Trading-booooo' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -34,6 +35,16 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Refuse replay of a completed one-shot release
+        env:
+          REQUESTED_RETIREMENT_VERSION: ${{ inputs.retirement_version }}
+        run: |
+          test "$REQUESTED_RETIREMENT_VERSION" = 'B06133_ENTRY_SELECTION_1'
+          if test -f 'deployment-evidence/b06133-20260920.json'; then
+            echo '::error::This one-shot release is already completed. Use a new audited migration/release.'
+            exit 1
+          fi
 
       - name: Prove release scope and frozen operating constraints
         shell: bash
