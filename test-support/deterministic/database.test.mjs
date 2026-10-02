@@ -65,7 +65,7 @@ test('disabled control or an unconfirmed state cannot materialize an auto-approv
  await pg.exec('update deterministic_control set enabled=true');features.deterministic.decision.decision='WAIT';
  assert.equal((await pg.query("select deterministic_candidate('SYMBOL0USDT',$1,$2) result",[now,features])).rows[0].result.created,false);
  features.deterministic.decision.decision='BUY';const valid=(await pg.query("select deterministic_candidate('SYMBOL0USDT',$1,$2) result",[now,features])).rows[0].result;
- assert.equal(valid.created,true);assert.equal((await pg.query('select count(*) n from net.requests')).rows[0].n,1);
+ assert.equal(valid.created,true);assert.equal((await pg.query('select count(*) n from net.requests')).rows[0].n,0,'the fenced external clock is the sole delivery path');
  assert.equal((await pg.query('select deterministic_entry_authority($1) result',[valid.id])).rows[0].result.allowed,true);
  await pg.exec('update deterministic_control set generation=2');assert.equal((await pg.query('select deterministic_entry_authority($1) result',[valid.id])).rows[0].result.allowed,false);await pg.close();
 });

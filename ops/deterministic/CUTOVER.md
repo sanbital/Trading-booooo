@@ -1,8 +1,26 @@
 # Deterministic engine release and operator cutover
 
-Status: review branch only. No migration, Edge deployment, scheduler change,
-account-authority change or real order was performed by this work. This document
-is an operator procedure, not evidence of a completed release.
+Status: review branch. The follow-up repair applied the normal operator entry
+pause before staging. Migration, Edge deployment, deterministic authority and
+real orders still require actual workflow/runtime evidence. This document is an
+operator procedure, not evidence of a completed release.
+
+The follow-up repair uses `deterministic-cutover.yml` on exact main with the normal
+production environment. `stage` requires the observed flat signed baseline,
+pauses/retire legacy admission, drains holders, applies only the exact migration,
+deploys and verifies both complete bundles, and binds the existing two clock jobs
+at five seconds while deterministic admission remains disabled. The operator
+permission can then return to its previous value for unchanged V18 incident
+recovery; it cannot grant BUY while deterministic control is disabled. `verify`
+checks fresh signed account/fill/balance proof, source parity, all Top20/BTC
+trajectories and candle features, recovered scheduler and zero new provider calls.
+`activate` repeats those gates before one generation/CAS authority transaction.
+Failure pauses new admission; no AI rollback or direct circuit reset is performed.
+
+Credential lookup failures return retryable 503 rather than permanent 401; actual
+invalid callers remain 401. The executor preserves the scheduler's entry-free
+`account-recovery` route. Candidate wake keeps its compatibility signature but
+does not add a pg_net caller alongside the single fenced external clock.
 
 The release changes trading decisions; it preserves leverage 3, slot margin
 150 USDT, maximum 10 slots, native hard floor 2.5%, ONE_WAY verification,

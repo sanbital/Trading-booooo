@@ -95,12 +95,10 @@ begin
 end $$;
 create or replace function public.deterministic_wake_executor() returns void
 language plpgsql security definer set search_path='' as $$
-declare token text;
 begin
- select t.token into token from public.edge_internal_tokens t where name='v10-lane-executor';
- if token is null then raise exception 'executor authentication unavailable';end if;
- perform net.http_post(url:='https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/v10-lane-executor',
-  headers:=jsonb_build_object('Content-Type','application/json','x-v10-executor-token',token),body:='{"mode":"execute"}'::jsonb,timeout_milliseconds:=90000);
+ -- The sole fenced five-second external clock drains durable deterministic BUYs.
+ -- Retain the candidate hook signature without adding an unfenced pg_net caller.
+ return;
 end $$;
 
 -- Capture control, lease and causal row admission remain independent of audit/cold storage.

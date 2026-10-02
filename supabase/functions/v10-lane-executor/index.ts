@@ -2,6 +2,7 @@
 // Decision authority is deterministic. Existing lease, receipt and reconciliation infrastructure remains intact.
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import {admitSchedulerRequest} from '../_shared/scheduler-admission.mjs';
+import {authenticateInternalToken} from '../_shared/internal-token-auth.mjs';
 import {createAnalysisReadCoalescer} from './analysis-read-coalescer.mjs';
 import {createHostAccountScopes} from './account-host-scopes.mjs';
 import {currentExecutionContext,currentAccountOwner,contextualOwners,contextualState,executionContextHeaders,assertActiveExecutionRequest} from './account-scope-context.mjs';
@@ -447,7 +448,7 @@ function fill(p){const o=p?.order??p??{},f=p?.fill??{},q=Math.max(0,N(f.executed
 function N(v,d=0){const x=Number(v);return Number.isFinite(x)?x:d}
 function rec(v){return v&&typeof v==="object"&&!Array.isArray(v)?v:{}}
 function res(s,b){return new Response(JSON.stringify(b),{status:s,headers:{"content-type":"application/json","cache-control":"no-store"}})}
-async function auth(db,req){const p=(req.headers.get("x-v10-executor-token")||"").trim();const t=await db.from("edge_internal_tokens").select("token").eq("name","v10-lane-executor").maybeSingle();return!t.error&&p&&t.data?.token&&eq(p,String(t.data.token))}
+async function auth(db,req){return authenticateInternalToken({db,request:req,name:'v10-lane-executor',header:'x-v10-executor-token'});}
 function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
   return async(cmd,timeout=20000)=>{
     const cycle=cycleBudgets.get(db),cost=cmd.action==="v17_stop_fill"?3:["v18_open_orders","trade_history","order_history"].includes(cmd.action)?2:1;
@@ -1165,7 +1166,8 @@ Deno.serve(async req=>{
  if(owner)headers.set('x-v18-execution-owner',owner);
  return fetch(url,{...init,headers,signal:AbortSignal.any([AbortSignal.timeout(2500),...(init.signal?[init.signal]:[]),...(context?.signal?[context.signal]:[])])});
  }}});
- if(!await auth(db,req))return res(401,{ok:false,error:'UNAUTHORIZED'});
+ const authenticated=await auth(db,req);
+ if(!authenticated.allowed){if(authenticated.status===503)console.error(authenticated.error);return res(authenticated.status,{ok:false,error:authenticated.error});}
  const body=await req.json().catch(()=>({})),mode=String(body.mode??'run').toLowerCase();
  try{
   if(['run','execute'].includes(mode)){
@@ -1180,8 +1182,13 @@ Deno.serve(async req=>{
     available_quote:pf.available_quote,position_mode:{supported:supportedFuturesMode(modeTruth),mode:modeTruth.position_mode},universe:universe.data,controls:{runtime:controls.runtime,operator:controls.control},
     decision_dependencies:['market_data','completed_candles','deterministic_state','capacity','execution_lease','exchange_truth'],provider_calls:0});
   }
-  if(!['run','execute'].includes(mode))return res(400,{ok:false,error:'RETIRED_OR_INVALID_MODE'});
+  if(!['run','execute','account-recovery'].includes(mode))return res(400,{ok:false,error:'RETIRED_OR_INVALID_MODE'});
   await loadAccountExecutionMode(db);
+  if(mode==='account-recovery'){
+   if(!shortAccountWriter(db))return res(503,{ok:false,error:'SHORT_WRITER_REQUIRED'});
+   const ready=await accountHostScopes.get(db).critical(db,()=>ensureShortWriterRecovery(db));
+   return res(200,{ok:true,ready:ready===true,authority:ENGINE,entry_attempted:false});
+  }
   return res(200,shortAccountWriter(db)?await accountHostScopes.get(db).periodic(async()=>{const recovered=await withAccountMutation(db,()=>ensureShortWriterRecovery(db));return run(db,{recoveryReady:recovered});}):await runWithLease(db,async()=>{const recovered=await ensureShortWriterRecovery(db);return run(db,{recoveryReady:recovered});}));
  }catch(e){console.error('DETERMINISTIC_EXECUTOR_ERROR',String(e.message??e));return res(503,{ok:false,patch:PATCH,error:String(e.message??e)});}
 });

@@ -7,6 +7,10 @@ on:
       - 'supabase/functions/v10-lane-signal-generator/index.ts'
       - 'supabase/migrations/20261002102500_deterministic_dynamic_state.sql'
       - 'test-support/deterministic/**'
+      - 'ops/deterministic/**'
+      - 'supabase/functions/_shared/internal-token-auth.mjs'
+      - 'tests/deterministic-release.test.mjs'
+      - '.github/workflows/deterministic-cutover.yml'
       - '.github/workflows/deterministic-verification.yml'
   workflow_dispatch:
 permissions:
