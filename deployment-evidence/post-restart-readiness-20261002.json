@@ -1,0 +1,85 @@
+{
+  "observed_utc": "2026-10-02T04:50:56.002Z",
+  "observed_kst": "2026-10-02T13:50:56.002+09:00",
+  "project": "etaajwpernzrcdrifdnw",
+  "audit_run": 36966323876,
+  "postgres_started_utc": "2026-10-02T04:44:07.929995+00:00",
+  "postgres_started_kst": "2026-10-02 13:44:07.929995 KST",
+  "health": {
+    "ok": true,
+    "utc": "2026-10-02T04:50:57.702Z",
+    "value": [
+      {
+        "name": "db",
+        "healthy": true,
+        "status": "ACTIVE_HEALTHY"
+      },
+      {
+        "name": "db_postgres_user",
+        "healthy": true,
+        "status": "ACTIVE_HEALTHY"
+      },
+      {
+        "name": "rest",
+        "healthy": true,
+        "status": "ACTIVE_HEALTHY",
+        "info": {
+          "db_schema": "public,graphql_public"
+        }
+      },
+      {
+        "name": "pooler",
+        "healthy": true,
+        "status": "ACTIVE_HEALTHY"
+      }
+    ]
+  },
+  "sql_ready": true,
+  "exchange": {
+    "observed_utc": "2026-10-02T04:53:03.383Z",
+    "observed_kst": "2026-10-02 13:53:03.383 KST",
+    "positions_complete": true,
+    "position_count": 0,
+    "orders_complete": true,
+    "ordinary_order_count": 0,
+    "algo_order_count": 0
+  },
+  "backup_counts": {
+    "cron_backup": 73,
+    "function_backup": 39,
+    "tables": 57,
+    "columns": 793,
+    "constraints": 133,
+    "indexes": 89,
+    "triggers": 63,
+    "settings": 9
+  },
+  "cohort_query": {
+    "ok": false,
+    "error": "TIMEOUT"
+  },
+  "native_protection_ledger": {
+    "pending_closed_positions": 7,
+    "observed_utc": "2026-10-02 04:54 UTC",
+    "observed_kst": "2026-10-02 13:54 KST",
+    "states": [
+      "CANCEL_PENDING"
+    ],
+    "errors": [
+      "GW_400:Order does not exist.",
+      "V18_API_BUDGET_EXHAUSTED"
+    ],
+    "resolved": false
+  },
+  "post_restart_buys": {
+    "final_buy": 2,
+    "dispatch": 2,
+    "claim": 2,
+    "terminal_reasons": {
+      "PRE_EXECUTION_GPT_CANCEL_OR_ERROR:CANCEL_BUY": 2
+    },
+    "exchange_submission_confirmed": false,
+    "window": "postmaster restart through 2026-10-02 04:54 UTC / 13:54 KST"
+  },
+  "production_conversion_complete": false
+}
