@@ -1,7 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
 import {PGlite} from '@electric-sql/pglite';
 import {scenario} from './fixtures.mjs';
-const migration=fs.readFileSync(new URL('../../supabase/migrations/20261002092245_deterministic_dynamic_state.sql',import.meta.url),'utf8');
+const migration=fs.readFileSync(new URL('../../supabase/migrations/20261002102500_deterministic_dynamic_state.sql',import.meta.url),'utf8');
 async function setup(){const pg=new PGlite();await pg.exec(fs.readFileSync(new URL('schema.sql',import.meta.url),'utf8'));
  await pg.exec(fs.readFileSync(new URL('capacity-baseline.sql',import.meta.url),'utf8'));await pg.exec(migration);return pg;}
 async function snapshot(pg,margin=305){await pg.query("insert into trading_account_snapshots values('binance_futures',clock_timestamp(),true,$1,'[]')",[margin]);}

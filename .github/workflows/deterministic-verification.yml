@@ -5,7 +5,7 @@ on:
       - 'supabase/functions/_shared/deterministic/**'
       - 'supabase/functions/v10-lane-executor/**'
       - 'supabase/functions/v10-lane-signal-generator/index.ts'
-      - 'supabase/migrations/20261002092245_deterministic_dynamic_state.sql'
+      - 'supabase/migrations/20261002102500_deterministic_dynamic_state.sql'
       - 'test-support/deterministic/**'
       - '.github/workflows/deterministic-verification.yml'
   workflow_dispatch:

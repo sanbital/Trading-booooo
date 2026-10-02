@@ -46,7 +46,7 @@ preserved; the branch does not silently set either.
 
 ## Install with entries paused
 
-Apply `20261002092245_deterministic_dynamic_state.sql` only after the entry pause.
+Apply `20261002102500_deterministic_dynamic_state.sql` only after the entry pause.
 It defaults the new entry control to disabled, preserves history, retires four
 provider-era journal/wake triggers, adds Top20 and batched capture RPCs, and replaces
 provider-bound gateway BUY proof with deterministic submit proof. Keep the preceding
