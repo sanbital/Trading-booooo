@@ -1,3 +1,4 @@
+import {snapshotProofProgram} from './snapshot-review-read.mjs';
 import {readFileSync,mkdirSync,writeFileSync} from 'node:fs';
 import {randomUUID,randomBytes,createCipheriv,publicEncrypt} from 'node:crypto';
 const project='etaajwpernzrcdrifdnw',version='REVIEW_SNAPSHOT_EPOCH_145_1';
@@ -12,7 +13,7 @@ try{
  ev.before=await db("select pg_postmaster_start_time() postmaster,to_jsonb(r) runtime from public.v11_long_regime_runtime r where singleton");seal();
  const app='trading-booooo-sanbital-gateway',base=`https://api.machines.dev/v1/apps/${app}`,headers={authorization:'Bearer '+process.env.FLY_API_TOKEN,'content-type':'application/json'};
  const machines=await request(base+'/machines',{headers}),machine=machines.find(m=>m.state==='started');if(!machine)throw Error('REVIEW_NO_RUNNING_GATEWAY');
- const script=`const c=require('node:crypto');(async()=>{const h=await fetch('http://127.0.0.1:8080/health').then(r=>r.json());if(h.deployment_commit!==${JSON.stringify(process.env.GITHUB_SHA)}||h.order_writer.required!==true)throw Error('BUILD');const secret=c.createHash('sha256').update('gateway:'+process.env.LEARNING_ACCESS_TOKEN).digest('hex');async function read(action){const body=JSON.stringify({exchange:'binance_futures',action}),ts=String(Date.now()),nonce=c.randomUUID(),sig=c.createHmac('sha256',secret).update(ts+'\\n'+nonce+'\\n'+body).digest('hex');const r=await fetch('http://127.0.0.1:8080/v1/command',{method:'POST',headers:{'content-type':'application/json','x-gateway-ts':ts,'x-gateway-nonce':nonce,'x-gateway-signature':sig},body,signal:AbortSignal.timeout(4000)}),d=await r.json();if(!r.ok||!d.ok)throw Error('READ');return d.result}const [portfolio,openOrders]=await Promise.all([read('p10_portfolio'),read('v18_open_orders')]);console.log(JSON.stringify({portfolio,openOrders}));})().catch(()=>{console.log(JSON.stringify({error:'READ_FAILED'}));process.exitCode=1});`;
+ const script=snapshotProofProgram(process.env.REVIEW_GATEWAY_COMMIT);
  const quote=s=>"'"+s.replaceAll("'","'\"'\"'")+"'";
  const proof=await request(base+'/machines/'+machine.id+'/exec',{method:'POST',headers,body:JSON.stringify({cmd:'node -e '+quote(script),timeout:10})});
  if(proof.exit_code!==0)throw Error('REVIEW_VENUE_PROOF_FAILED');

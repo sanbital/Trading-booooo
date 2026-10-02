@@ -15,7 +15,11 @@ export function createSchedulerRepository({url,key,fetchImpl=fetch}) {
       ...(body===undefined?{}:{body:JSON.stringify(body)}),
     });
     if(!response.ok)throw error(response.status);
-    return response.json();
+    // PostgreSQL void RPCs return HTTP 204 with no JSON document. The SQL
+    // completed successfully; parsing that empty body is not a job failure.
+    if(response.status===204)return null;
+    const bodyText=await response.text();
+    return bodyText.trim()?JSON.parse(bodyText):null;
   };
   const args=l=>({p_scheduler:l.scheduler_key,p_owner:l.owner,p_fence:l.fence});
   const rpc=(name,body,signal)=>request(`rpc/${name}`,body,signal);

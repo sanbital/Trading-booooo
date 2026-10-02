@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createScheduledJobRunner} from './scheduler-repository.mjs';
+import {createScheduledJobRunner,createSchedulerRepository} from './scheduler-repository.mjs';
 test('audited endpoint auth binds deterministic tick without exposing tokens to state',async()=>{
  let request,reads=0;const runner=createScheduledJobRunner({url:'https://db.example',repository:{token:async name=>{reads++;assert.equal(name,'market-regime-observer');return 'internal-test-token';}},fetchImpl:async(url,init)=>{request={url,...init};return {ok:true,json:async()=>({ok:true})};}});
  await runner({target:{endpoint:'market-regime-observer',body:{action:'tick'}},scheduler_key:'production',job_key:'observer',tick:1,owner:'owner',fence:2,idempotency_key:'production:observer:1'},{signal:new AbortController().signal});
@@ -23,4 +23,24 @@ test('registered DB maintenance sends original bounded arguments; HTTP 200 inter
  await runner({target:{rpc:'leader20_clock_telemetry_maintain'}},{});assert.deepEqual(calls[0],['leader20_clock_telemetry_maintain',{}]);
  await runner({target:{rpc:'gpt_final_review_expire',limit:30}},{});assert.deepEqual(calls[1],['gpt_final_review_expire',{p_limit:30}]);
  await assert.rejects(runner({target:{endpoint:'v10-lane-executor',body:{}}},{}),e=>e.status===503&&e.message==='ENDPOINT_REPORTED_FAILURE');
+});
+
+
+test('real HTTP 204 from a void PostgreSQL maintenance RPC records a completed job',async()=>{
+ let request;
+ const repository=createSchedulerRepository({url:'https://db.example',key:'test-key',fetchImpl:async(url,options)=>{
+  request={url,...options};return new Response(null,{status:204});
+ }});
+ const runner=createScheduledJobRunner({url:'https://db.example',repository});
+ assert.equal(await runner({target:{rpc:'leader20_clock_telemetry_maintain'}},{signal:new AbortController().signal}),null);
+ assert.equal(request.url,'https://db.example/rest/v1/rpc/leader20_clock_telemetry_maintain');
+ assert.deepEqual(JSON.parse(request.body),{});
+});
+
+
+test('successful empty HTTP 200 RPC body is accepted; a malformed JSON body still fails',async()=>{
+ const repository=createSchedulerRepository({url:'https://db.example',key:'test-key',fetchImpl:async()=>new Response('',{status:200})});
+ assert.equal(await repository.rpc('leader20_clock_telemetry_maintain',{}),null);
+ const broken=createSchedulerRepository({url:'https://db.example',key:'test-key',fetchImpl:async()=>new Response('broken',{status:200})});
+ await assert.rejects(broken.rpc('leader20_clock_telemetry_maintain',{}),SyntaxError);
 });

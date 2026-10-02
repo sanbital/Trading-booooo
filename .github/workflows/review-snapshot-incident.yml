@@ -8,6 +8,9 @@ on:
       expected_commit:
         type: string
         required: true
+      gateway_commit:
+        type: string
+        required: true
       executor_version:
         type: string
         required: true
@@ -35,6 +38,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           REVIEW_VERSION: ${{ inputs.version }}
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          REVIEW_GATEWAY_COMMIT: ${{ inputs.gateway_commit }}
           REVIEW_EXECUTOR_VERSION: ${{ inputs.executor_version }}
         run: node ops/execution-infra/review-snapshot-incident.mjs
       - uses: actions/upload-artifact@v4
