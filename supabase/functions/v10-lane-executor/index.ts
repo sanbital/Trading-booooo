@@ -44,6 +44,7 @@ import {SETUP_POLICY,SETUP_POLICY_VERSION,SETUP_REASON,SETUP_STATE,advancePullba
 import {B06133_VERSION,evaluateB06133,fetchB06133Inputs} from "../_shared/leader-b06133-entry.mjs";
 import {V30_FRONT_LIVE_VERSION,v30FrontDecision,entryBranchOf,baselineAllowedV30} from "../_shared/gpt-final-review/contract.mjs";
 import {CEC0040_CONFIG,CEC0040_TARGET_VERSION,CEC0040_VERSION,P142_POLICY_VERSION,advanceP142Completed,nextExitP142,p142Mean44Target} from "../_shared/leader-cec0040.mjs";
+import {createProviderJournal} from "./account-provider-journal.mjs";
 import {createHostAccountScopes} from "./account-host-scopes.mjs";
 import {currentExecutionContext,currentAccountOwner,contextualOwners,contextualState,executionContextHeaders,assertActiveExecutionRequest} from "./account-execution-context.mjs";
 const REVISION="V11-LONG-REGIME-1.0.1",PATCH="FD1-MULTISLOT-CAPACITY-1",OBSERVER_REVISION="MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET",PROTOCOL="8.0.0-P10-DONCHIAN-SLOW4R";
@@ -3746,6 +3747,8 @@ Deno.serve(async req=>{
     global:{fetch:async(url,init={})=>{
       const context=assertActiveExecutionRequest(db);
       if(context?.kind==="CLEANUP"&&!/\/rpc\/v17_release_(execution|analysis)_lease$/.test(new URL(String(url)).pathname))throw Error("LEASE_CLEANUP_RPC_ONLY");
+      if(context?.kind==="REVIEW"&&!["GET","HEAD"].includes(String(init.method??"GET").toUpperCase())&&
+        !/\/rpc\/(leader20_entry_authority|leader20_clock_execution_note|doa_context_for_role_v1|doa_gpt_capture_context_v3)$/.test(new URL(String(url)).pathname))throw Error("REVIEW_TRADING_WRITE_FORBIDDEN");
       const headers=new Headers(init.headers),owner=leaseOwners.get(db);
       for(const [name,value]of Object.entries(executionContextHeaders(db)))headers.set(name,value);
       if(owner)headers.set("x-v18-execution-owner",owner);
@@ -3755,11 +3758,7 @@ Deno.serve(async req=>{
   });
   const receipts=createClient(U,K,{auth:{persistSession:false,autoRefreshToken:false},
     global:{fetch:(url,init={})=>fetch(url,{...init,signal:init.signal?AbortSignal.any([init.signal,AbortSignal.timeout(2500)]):AbortSignal.timeout(2500)})}});
-  db.providerJournal={receipts,assertCanStart:()=>assertActiveExecutionRequest(db),ledger:{rpc:(name,args)=>{
-    if(name==="ai_call_reserve_owned"||(name==="ai_call_transition"&&args.p_state==="DISPATCHED"))assertActiveExecutionRequest(db);
-    if(!["ai_call_reserve_owned","ai_call_transition","ai_call_settle_receipt"].includes(name))throw Error("PROVIDER_JOURNAL_RPC_ONLY");
-    return receipts.rpc(name,args);
-  }}};
+  db.providerJournal=createProviderJournal(db,receipts);
   if(!(await auth(db,req)))return res(401,{ok:false,error:"UNAUTHORIZED"});
   // The durable review row's DB trigger owns the immediate pg_net wake, with the
   // five-second outbox sweep as fallback. Starting execution inside this long-running

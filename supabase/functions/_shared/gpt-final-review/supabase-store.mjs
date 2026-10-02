@@ -6,10 +6,13 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 /** Writes exclusively to the review journal and its budget ledger. Never trading tables. */
 export class SupabaseReviewStore {
   constructor(db){this.sourceDb=db;this.db=db.providerJournal?.receipts??db;this.ledgerModes=new Map();this.deferClaimUntilPrepared=true;}
+  async reviewScope(key,record,operation){
+    return this.sourceDb.providerJournal?.reviewScope?this.sourceDb.providerJournal.reviewScope({key,deadline:record.expires_at_ms},operation):operation();
+  }
   async get(key){const r=await this.db.from('gpt_final_entry_reviews').select('job_key,owner,state,record').eq('job_key',key).maybeSingle();
     ensure(!r.error,'REVIEW_STORE_READ');return r.data?{...r.data,key:r.data.job_key}:null;}
   async claim(key,record,config){
-    this.sourceDb.providerJournal?.assertCanStart();
+    this.sourceDb.providerJournal?.assertCanStart(key);
     // The RPC may commit before its response is lost. Only this invocation may
     // recover that acknowledgement, never another worker or a completed review.
     // The marker is journal metadata; immutable packet/identity/TTL are untouched.

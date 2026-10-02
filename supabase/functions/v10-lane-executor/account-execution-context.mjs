@@ -28,6 +28,7 @@ export function contextualOwners(fallback=new WeakMap()){
 export async function withWriterContext(db,owner,operation,{signal}={}){
  if(!owner)throw Error('WRITER_OWNER_REQUIRED');
  const inherited=assertActiveExecutionRequest(db);
+ if(inherited?.kind==='REVIEW')throw Error('REVIEW_CANNOT_ACQUIRE_ACCOUNT_WRITER');
  if(inherited?.kind==='WRITER'){
   if(inherited.owner!==owner)throw Error('NESTED_WRITER_OWNER_MISMATCH');
   inherited.signal?.throwIfAborted();return operation(inherited);
@@ -54,5 +55,14 @@ export function assertAnalysisContext(db){
 export async function withLeaseCleanup(db,operation){
  // Only owner-scoped release RPCs are permitted by the host fetch boundary.
  const context={db,owner:null,kind:'CLEANUP',active:true};
+ try{return await contexts.run(context,operation);}finally{context.active=false;}
+}
+
+/** One already-scheduled immutable review owns its lifetime, independent of a scan.
+ * It grants no trading write capability. Provider receipts can settle after expiry. */
+export async function withReviewContext(db,{key,deadline},operation,{now=Date.now}={}){
+ assertActiveExecutionRequest(db);if(currentAccountOwner(db))throw Error('REVIEW_INSIDE_ACCOUNT_WRITER_FORBIDDEN');
+ const remaining=deadline-now();if(!key||!Number.isSafeInteger(deadline)||remaining<=0)throw Error('REVIEW_TRIGGER_EXPIRED');
+ const context={db,kind:'REVIEW',active:true,reviewKey:key,signal:AbortSignal.timeout(remaining)};
  try{return await contexts.run(context,operation);}finally{context.active=false;}
 }

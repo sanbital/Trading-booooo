@@ -203,7 +203,11 @@ export class FinalReviewCoordinator {
         ...(!checked.valid&&row.record?.result?.error?{error:String(row.record.result.error).slice(0,80)}:{})};
     }catch{return deny('GPT_REVIEW_STORAGE_OR_VALIDATION_ERROR');}
   }
-  async work(key,owner,record,{deferredClaim=false}={}){
+  async work(key,owner,record,options={}){
+    const run=()=>this.workOwned(key,owner,record,options);
+    return this.store.reviewScope?this.store.reviewScope(key,record,run):run();
+  }
+  async workOwned(key,owner,record,{deferredClaim=false}={}){
     let preparationStage='TRANSPORT';
     try{
       let fetchFn=this.fetchFn;
