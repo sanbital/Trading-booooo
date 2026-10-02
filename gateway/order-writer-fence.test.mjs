@@ -49,3 +49,12 @@ test('authorizer rejects transient HTTP and malformed authorization without expo
     fetchImpl:async()=>({ok:true,json:async()=>({true:true})})});
   assert.equal(await falseAuth(command.writer,{}),false);
 });
+test('authorizer classifies DB timeout/DNS/reset/refused without leaking transport messages',async()=>{
+  for(const [error,code]of [[Object.assign(Error('sensitive fixture detail'),{name:'TimeoutError'}),'WRITER_DB_TIMEOUT'],
+    [Object.assign(Error('sensitive fixture detail'),{cause:{code:'EAI_AGAIN'}}),'WRITER_DB_DNS_FAILURE'],
+    [Object.assign(Error('sensitive fixture detail'),{cause:{code:'ECONNRESET'}}),'WRITER_DB_CONNECTION_RESET'],
+    [Object.assign(Error('sensitive fixture detail'),{cause:{code:'ECONNREFUSED'}}),'WRITER_DB_CONNECTION_REFUSED']]){
+    const auth=createGatewayAuthorizer({url:'https://example.invalid',key:'fixture-only',fetchImpl:async()=>{throw error;}});
+    await assert.rejects(auth(command.writer,{}),e=>e.code===code&&!e.message.includes('sensitive'));
+  }
+});
