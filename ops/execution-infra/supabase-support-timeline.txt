@@ -70,3 +70,7 @@ Health at 01:51:34.480 UTC / 10:51:34.480 KST: DB, postgres user and REST UNHEAL
 Both session pooler 5432 and transaction pooler 6543 returned upstream DB timeout. Existing service-role REST read timed out; SQL management returned HTTP 544. Project metadata ACTIVE_HEALTHY did not establish readiness.
 Signed complete exchange positions/open ordinary/open conditional snapshots were all zero at 01:52:22.482 UTC / 10:52:22.482 KST. DB unresolved ledger remains unavailable.
 No trading deployment, production restart or compute modification was performed.
+
+Latest independent audit run 36956185458: 2026-10-02T02:33:40.548Z UTC / 11:33:40.548 KST.
+DB/postgres-user/REST still UNHEALTHY. Both 5432 and 6543 pooler probes report upstream connection timeout; service-role REST timeout; SQL HTTP 544.
+Complete signed exchange positions/open ordinary/open conditional snapshots all zero at 02:34:40.804 UTC / 11:34:40.804 KST. DB ledger remains unavailable; no system-failure-rate claim.
