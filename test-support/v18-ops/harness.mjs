@@ -1,6 +1,10 @@
 import {createAnalysisReadCoalescer} from '../../supabase/functions/v10-lane-executor/analysis-read-coalescer.mjs';
 import * as executionContext from '../../supabase/functions/v10-lane-executor/account-execution-context.mjs';
 import {createHostAccountScopes} from '../../supabase/functions/v10-lane-executor/account-host-scopes.mjs';
+import {detachAudit} from '../../supabase/functions/_shared/deterministic/runtime.mjs';
+import {PROFILE} from '../../supabase/functions/_shared/deterministic/calibration.mjs';
+import {ENGINE} from '../../supabase/functions/_shared/deterministic/market-state.mjs';
+import * as deterministicExit from '../../supabase/functions/_shared/deterministic/exit-authority.mjs';
 import * as leader20LegacyBindings from '../leader20-legacy-bindings.mjs';
 import {validCapture} from '../dynamic-fixtures.mjs';
 import * as dynamicFlow from '../../supabase/functions/_shared/gpt-final-decision/dynamic-flow.mjs';
@@ -232,9 +236,9 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
   if(cmd.action==='v17_create_stop')return{...cmd.params,algoId:'algo-'+cmd.params.clientAlgoId,algoStatus:'NEW'};
   if(cmd.action==='v17_cancel_stop'){(state.cancelled??=new Set()).add(cmd.clientAlgoId);return{};}
   if(cmd.action==='get_order'){const r=state.software[cmd.identifier];if(r instanceof Error)throw r;if(!r)throw Error('ORDER_READ_PENDING');return clone(r);}
+  if(cmd.action==='cancel_order')return {canceled:true};
   if(cmd.action==='trade_history')return clone(state.tradeHistory[cmd.market]??[]);
   if(cmd.action==='order_history')return clone(state.orderHistory[cmd.market]??[]);
-  if(cmd.action==='cancel_order')return{canceled:true};
   if(cmd.action==='create_order'){
    if(state.createOrder){const result=await state.createOrder(cmd,state);
     if(result&&cmd.order?.identifier&&!state.software[cmd.order.identifier])state.software[cmd.order.identifier]=clone(result);
@@ -248,14 +252,16 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
   baseline?execFileSync('git',['show',BASE+':supabase/functions/v10-lane-executor/index.ts'],{cwd:root,encoding:'utf8'}):readFileSync(new URL('supabase/functions/v10-lane-executor/index.ts',root),'utf8');
  source=source.replace(/\r\n/g,'\n').replace(/^import .*;\n/gm,'').replace('const exchangeGateway=gateway;','const exchangeGateway=__gateway;');source=source.slice(0,source.indexOf('Deno.serve'));
  // Only exchange/DB/time boundaries are replaced. run/manage/open/close are actual source.
- source+='\ngateway=__gateway;this.runCycle=()=>runWithLease(__db);this.open=(...args)=>openBull(__db,...args);this.close=(...args)=>closePos(__db,...args);this.manage=(...args)=>manageLeader(__db,...args);this.setLease=()=>leaseOwners.set(__db,"test-owner");this.enableShort=()=>loadAccountExecutionMode(__db);this.periodic=operation=>accountHostScopes.get(__db).periodic(operation);this.mutate=operation=>withAccountMutation(__db,operation);this.actualShortCycle=()=>runLeaseCycleWithDispatchPriority(__db);this.runtimeTelemetry=(...args)=>writeRuntimeTelemetry(__db,...args);this.fencedGateway=cmd=>scopedGateway(__db,createBudget({ms:90000,calls:240}))(cmd);';
+ source+='\nasync function hashJson(value){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(value)));return [...new Uint8Array(b)].map(v=>v.toString(16).padStart(2,"0")).join("");}\ngateway=__gateway;this.runCycle=()=>runWithLease(__db);this.open=(...args)=>openBull(__db,...args);this.close=(...args)=>closePos(__db,...args);this.manage=(...args)=>manageLeader(__db,...args);this.setLease=()=>leaseOwners.set(__db,"test-owner");this.enableShort=()=>loadAccountExecutionMode(__db);this.periodic=operation=>accountHostScopes.get(__db).periodic(operation);this.mutate=operation=>withAccountMutation(__db,operation);this.actualShortCycle=()=>accountHostScopes.get(__db).periodic(()=>run(__db));this.runtimeTelemetry=(...args)=>writeRuntimeTelemetry(__db,...args);this.fencedGateway=cmd=>scopedGateway(__db,createBudget({ms:90000,calls:240}))(cmd);';
  const ctx={...executionContext,createHostAccountScopes,createAnalysisReadCoalescer,...dispatch,...exitAuthority,...retry,...lifecycle,...liveChase,...capacity,...cec,...b06133,...gpt,...fd1,FD1_TIME_REASONS:fd1.TIME_REASONS,...entryEvidence,...momentum,...review,...ops,createBudget:(opts={})=>ops.createBudget({...opts,clock:Clock.now}),...settlement,...entrySettlement,...entryOrderState,...dbOnly,...entryControl,...fillEvidence,...qv3,...e1,...slotSizing,...booBindings,...pullbackSetup,setupIsTerminal:pullbackSetup.isTerminal,
   fetchE1AggTrades:e1Tape??e1.fetchE1AggTrades,QV3_LIVE_CUTOVER:qv3Cutover,qv3Candles:(symbol,at,start)=>qv3.qv3Candles(symbol,at,start,qv3Fetch??(()=>{throw Error("NETWORK_FORBIDDEN")})),leaderPortfolioMatches:momentum.portfolioMatches,protectNewLeaderPosition,createGatewayProtection:baseline?baselineAdapter.createGatewayProtection:createGatewayProtection,
   Date:Clock,console,crypto,Map,Set,WeakMap,AbortController,TextEncoder,Response,Headers,fetch:()=>{throw Error('NETWORK_FORBIDDEN')},
   setTimeout:advanceTimers?(fn,ms)=>{state.now+=Number(ms)||0;return setTimeout(fn,0)}:setTimeout,clearTimeout,
   Deno:{env:{get:k=>k==='V17_NATIVE_STOP'?'true':k==='V23_E1_ENTRY_OVERRIDE'?(e1Enabled?'true':'false'):
     k==='V23_X1_FAST_OBSERVATION'?(x1Enabled?'true':'false'):''}},__gateway:gateway,__db:db};
- Object.assign(ctx,leader20LegacyBindings);vm.createContext(ctx);vm.runInContext(source,ctx);ctx.setLease();
+ Object.assign(ctx,leader20LegacyBindings);
+ if(!baseline&&!sourceRef)Object.assign(ctx,{ENGINE,PROFILE,detachAudit,...deterministicExit,control:async()=>({enabled:false}),currentMarket:async()=>{throw Error('FIXTURE_SYMBOL_MARKET_DATA_UNAVAILABLE')}});
+ vm.createContext(ctx);vm.runInContext(source,ctx);ctx.setLease();
  // These historical suites exercise execution/reconciliation, not the strategy
  // admission that was introduced later. Model an approved candidate at that boundary;
  // tests/fd1-final-recheck.test.mjs separately runs the real GPT/detector authority.

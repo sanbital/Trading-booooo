@@ -22,5 +22,10 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+      - run: npm ci --prefix test-support/deterministic
       - run: node --test tests/signal-generator-production-baseline.test.mjs tests/leader20-generator.test.mjs
-      - run: deno check --no-config supabase/functions/v10-lane-signal-generator/index.ts
+      - run: |
+          ln -s "$PWD/test-support/deterministic/node_modules" "$PWD/node_modules"
+          deno check --no-config --node-modules-dir=manual \
+            --import-map test-support/v19-ops/deno-import-map.json \
+            supabase/functions/v10-lane-signal-generator/index.ts

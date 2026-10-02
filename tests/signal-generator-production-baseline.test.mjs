@@ -13,14 +13,15 @@ test('signal generator retains all 15 production v51 dependencies byte for byte'
     assert.equal(hash(readFileSync(new URL(path,root))),entry.sha256,path);
   }
 });
-test('generator retains production byte identity outside dependency relocation and scheduler admission',()=>{
+test('archived v51 entrypoint hash proves the old graph without constraining its replacement',()=>{
   const entry=readFileSync(new URL(manifest.entrypoint.path,root),'utf8');
-  const schedulerImport="import {admitSchedulerRequest} from '../_shared/scheduler-admission.mjs';\n";
-  const schedulerGuard="if(['run','leader20-observe'].includes(mode)){const a=await admitSchedulerRequest({endpoint:'v10-lane-signal-generator',body,rpc:(name,args)=>db.rpc(name,args)});if(!a.allowed)return reply(200,{ok:true,skipped:a.reason});}";
-  assert.equal(entry.split(schedulerImport).length,2);assert.equal(entry.split(schedulerGuard).length,2);
-  assert.ok(entry.indexOf(schedulerGuard)>entry.indexOf("return reply(401"));
-  const original=entry.replace(schedulerImport,'').replace(schedulerGuard,'').replaceAll(manifest.relocation.to,manifest.relocation.from);
-  assert.equal(hash(original),manifest.entrypoint.original_sha256);
+  assert.notEqual(hash(entry),manifest.entrypoint.original_sha256);
+  assert.ok(entry.includes("../_shared/deterministic/universe.mjs"));
+  assert.ok(entry.includes("../_shared/deterministic/runtime.mjs"));
+  assert.ok(entry.includes("../_shared/scheduler-admission.mjs"));
+  assert.ok(entry.includes("endpoint:'v10-lane-signal-generator'"));
+  assert.ok(!entry.includes('_production-v51'));
+  assert.ok(!/(openai|deepseek|gpt-final)/i.test(entry));
 });
 test('relative imports in the frozen graph cannot escape into the executor shared graph',()=>{
   const files=new Set(Object.keys(manifest.files).map(path=>new URL(path,root).href));

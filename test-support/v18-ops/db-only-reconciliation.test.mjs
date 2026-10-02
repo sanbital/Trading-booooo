@@ -75,7 +75,7 @@ test('01 sanitized production-shaped run -> classify -> stale-stop reconcile -> 
   h.advance();const second=await h.ctx.runCycle();assert.equal(second.symbolRecovery[0].resolved,true);
   h.advance();await h.ctx.runCycle();
   assert.equal(h.state.tables.v11_long_regime_runtime[0].circuit_open,false);
-  assert.equal(h.state.tables.v11_long_regime_runtime[0].entry_block_reason,'NO_FRESH_BULL_SIGNAL');
+  assert.equal(h.state.tables.v11_long_regime_runtime[0].entry_block_reason,'DETERMINISTIC_ENTRY_PAUSED');
   assert.equal(h.state.tables.v11_long_regime_runtime[0].last_reconciliation_success_at,reconciliationSuccess);
 });
 

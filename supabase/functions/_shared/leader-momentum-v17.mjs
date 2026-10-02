@@ -126,7 +126,7 @@ export function postFillEntryGuard(features,fillPrice,p=POLICY) {
       reason:'V21_POST_FILL_ENTRY_INPUT_INVALID',referenceClose:ref,fillPrice:price,
       driftPct:null,maxDriftPct:Number.isFinite(limit)?limit:null};
   const driftPct=price/ref-1,exceeded=Math.abs(driftPct)-limit>1e-12;
-  // A valid fill is already an executed GPT-approved position. Price drift alone is
+  // A valid fill is already an executed position. Price drift alone is
   // strategy evidence, not an execution-safety reason to reverse the trade locally.
   return {version:ENTRY_EXECUTION_POLICY_VERSION,action:'KEEP',
     reason:exceeded?'FD1_POST_FILL_DRIFT_EVIDENCE':'FD1_POST_FILL_ENTRY_VALID',

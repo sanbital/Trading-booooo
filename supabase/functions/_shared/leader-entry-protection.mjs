@@ -13,7 +13,7 @@ export async function protectNewLeaderPosition({enabled,position,manualSymbols=[
     const rows=pf.positions.filter(x=>String(x.market??x.symbol??'').toUpperCase()===position.symbol);
     const match=portfolioMatches([position],{positions:rows});
     if(!match.ok)throw Error(`ENTRY_PROTECTION_OWNERSHIP:${match.reason}`);
-    // A paid model/capture call can stall. Install the existing hard protection first.
+    // Market data reads can stall. Install the existing hard protection first.
     // The host returns the fresh CAS snapshot; never give the manager a pre-install row.
     if(installNative){
       try{initial=await installNative(position,{manualSymbols});}

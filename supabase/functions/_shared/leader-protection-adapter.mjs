@@ -1,6 +1,6 @@
 import {freshPortfolio} from './leader-ops-isolation.mjs';
 import {createNativeProtection} from './leader-native-protection.mjs';
-import {EXIT_CLASS,exitClass} from './exit-authority.mjs';
+import {EXIT_CLASS,exitClass} from './deterministic/exit-authority.mjs';
 /** Existing position row is the atomic accounting/receipt journal. CAS journal; V18 migration permits explicitly pending accounting. */
 export function createPositionProtectionStore(db,verifyLease=async()=>{}) {
  const snapshots=new Map();

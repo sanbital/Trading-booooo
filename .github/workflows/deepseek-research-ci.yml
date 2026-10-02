@@ -1,4 +1,4 @@
-name: AI strategy and capture regression
+name: Deterministic strategy and capture regression
 on:
   push:
     branches: [main]
@@ -18,6 +18,8 @@ on:
       - 'research/deepseek-counter-20260925/**'
       - 'research/deepseek-temporal-20260925/**'
       - 'research/qv3/**'
+      - 'supabase/functions/_shared/deterministic/**'
+      - 'test-support/deterministic/**'
       - '.github/workflows/deepseek-research-ci.yml'
   pull_request:
     paths:
@@ -36,6 +38,8 @@ on:
       - 'research/deepseek-counter-20260925/**'
       - 'research/deepseek-temporal-20260925/**'
       - 'research/qv3/**'
+      - 'supabase/functions/_shared/deterministic/**'
+      - 'test-support/deterministic/**'
       - '.github/workflows/deepseek-research-ci.yml'
   workflow_dispatch:
 permissions:
@@ -55,12 +59,15 @@ jobs:
           node-version: '22'
       - name: Install isolated SQL test runtime
         run: npm install --prefix "$RUNNER_TEMP/pglite" --ignore-scripts --no-audit --no-fund @electric-sql/pglite@0.3.14
-      - name: Production arbitration, capture and execution safety regressions (no API keys or deployment)
+      - name: Install current deterministic verification dependencies
+        run: npm ci --prefix test-support/deterministic
+      - name: Current market, capture and execution safety regressions (no API keys or deployment)
         env:
           PGLITE_MODULE: ${{ runner.temp }}/pglite/node_modules/@electric-sql/pglite/dist/index.js
         run: |
-          node --test \
-            tests/fd1*.test.mjs \
-            test-support/v17-entry/*.test.mjs test-support/v17-exit/*.test.mjs \
-            collectors/doa-capture/*.test.mjs development/gpt-final-decision/tests/*.test.mjs \
-            research/qv3/*.test.mjs
+          npm test --prefix test-support/deterministic
+          node --test collectors/doa-capture/*.test.mjs \
+            test-support/v17-exit/native-protection.test.mjs \
+            test-support/v17-exit/exit-settle.test.mjs \
+            test-support/v17-exit/native-fill-reconcile.test.mjs \
+            tests/native-submission-phase.test.mjs tests/native-proof-program.test.mjs

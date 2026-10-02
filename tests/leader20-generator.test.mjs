@@ -2,33 +2,30 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
+
 const source=readFileSync(new URL('../supabase/functions/v10-lane-signal-generator/index.ts',import.meta.url),'utf8')
  .replace(/^import .*;\r?\n/gm,'').replace('export async function generate','async function generate').split('Deno.serve')[0];
-function harness(control) {
- const calls={scan:0,leader:0};
- const scope={leaderControl:async()=>control,
-  generateLeader20:async()=>{calls.leader++;return {ok:true,state:'OBSERVATION_ONLY'};},
-  scanMarket:async()=>{calls.scan++;return {legacy:true};},STRATEGY:'legacy'};
- vm.runInNewContext(source+';globalThis.generate=generate;',scope);
- return {calls,run:options=>scope.generate({},options)};
+function harness(){
+ const calls={refresh:0,scan:[]},scope={};vm.runInNewContext(source+';globalThis.generate=generate;',scope);
+ const refresh=async()=>{calls.refresh++;return {generation:1};};
+ const scan=async(_db,options)=>{calls.scan.push(options??null);return {ok:true,state:'OBSERVATION_ONLY'};};
+ return {calls,run:options=>scope.generate({}, {...options,refresh,scan}),
+  failing:()=>scope.generate({}, {refresh:async()=>{calls.refresh++;throw Error('UNIVERSE_DOWN');},scan})};
 }
-test('20-second observer tick only runs Leader20 work and never starts a legacy market scan',async()=>{
- const h=harness({observation_enabled:true,active_strategy:'LEGACY'});
- const r=await h.run({leader20Only:true});
- assert.equal(r.state,'OBSERVATION_ONLY');assert.deepEqual(h.calls,{scan:0,leader:1});
-});
-test('disabled observation cannot fall through into a legacy scan or materialization',async()=>{
- const h=harness({observation_enabled:false,active_strategy:'LEGACY'});
- const r=await h.run({leader20Only:true});
- assert.equal(r.skipped,'LEADER20_OBSERVATION_DISABLED');assert.deepEqual(h.calls,{scan:0,leader:0});
+
+test('every normal tick refreshes the Top20 lease and then observes it',async()=>{
+ const h=harness(),r=await h.run();
+ assert.equal(r.state,'OBSERVATION_ONLY');assert.equal(r.universe_refresh_error,null);
+ assert.deepEqual(h.calls,{refresh:1,scan:[null]});
 });
 
-test('legacy five-minute tick yields to the single one-minute Top10 observer',async()=>{
- const h=harness({observation_enabled:true,active_strategy:'LEADER20_DYNAMIC_1'});
- const r=await h.run({});assert.equal(r.skipped,'LEADER20_OBSERVER_OWNS_SCHEDULE');
- assert.deepEqual(h.calls,{scan:0,leader:0});
+test('a refresh failure preserves observation but is explicit and cannot mint authority',async()=>{
+ const h=harness(),r=await h.failing();
+ assert.equal(r.state,'OBSERVATION_ONLY');assert.equal(r.universe_refresh_error,'UNIVERSE_DOWN');
+ assert.deepEqual(h.calls,{refresh:1,scan:[null]});
 });
-test('existing legacy diagnostic retains its normal scan route',async()=>{
- const h=harness({observation_enabled:false,active_strategy:'LEGACY'});
- const r=await h.run({diagnostic:true});assert.equal(r.legacy,true);assert.deepEqual(h.calls,{scan:1,leader:0});
+
+test('diagnostic mode reads diagnostics without refreshing membership',async()=>{
+ const h=harness(),r=await h.run({diagnostic:true});
+ assert.equal(r.state,'OBSERVATION_ONLY');assert.equal(h.calls.refresh,0);assert.equal(h.calls.scan.length,1);assert.equal(h.calls.scan[0].diagnostic,true);
 });

@@ -1,0 +1,9 @@
+{
+  "baseline_main": "c7b83d435b273b262f46915d2410b007b93b0bbe",
+  "expected_versions": {
+    "v10-lane-executor": 190,
+    "v10-lane-signal-generator": 52
+  },
+  "gateway_commit": "1bd5e3bf76bfb55f9df749818e325f91b5c6ab02",
+  "migration_sha256": "73ea63d6eac28cd0303d54b304be8cdfdd32e1bd07605e01f503ca401ae0e3c2"
+}

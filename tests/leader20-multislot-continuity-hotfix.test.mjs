@@ -42,24 +42,20 @@ test('SQL batch claim mirrors the late-wake boundary and keeps both absolute exp
 
 test('post-fill capacity proof has a separate read-only budget, never a write escape hatch',async()=>{
   const src=await read('supabase/functions/v10-lane-executor/index.ts');
-  assert.ok(src.includes('const CAPACITY_REFRESH_BUDGET=Object.freeze({ms:6000,calls:4})'));
+  assert.match(src,/CAPACITY_REFRESH_BUDGET=Object\.freeze\(\{ms:6000,calls:4\}\)/);
   assert.ok(src.includes('capacityRefreshGateway(db)'));
   assert.ok(src.includes('{allowCycleBudgetExceeded:true}'));
   assert.ok(src.includes('CAPACITY_REFRESH_WRITE_FORBIDDEN'));
-  assert.ok(src.includes('const safetyGateway=typeof capacityRefreshGateway==="function"?capacityRefreshGateway(db):undefined'));
+  assert.match(src,/safetyGateway=typeof capacityRefreshGateway==="function"\?capacityRefreshGateway\(db\):undefined/);
   assert.ok(src.includes('readOpsPair(db,safetyGateway)'));
   assert.ok(src.includes('await verifyExecutionLease(db,allowCycleBudgetExceeded)'));
 });
 
-test('malformed retry book gets one bounded fresh quote and must pass all safety again',async()=>{
+test('every deterministic order attempt gets a current market and executable-book validation',async()=>{
   const src=await read('supabase/functions/v10-lane-executor/index.ts');
-  const marker='A one-shot malformed REST depth must not consume an otherwise valid second slot.';
-  assert.equal(src.split(marker).length-1,1,'one recovery site only');
-  assert.ok(src.includes('const freshQuote=await gateway({action:"quote",market:s.symbol},refreshTimeout)'));
-  assert.ok(src.includes('{ok:false,reason:"PRE_EXECUTION_REFRESH_REQUIRES_FULL_VALIDITY_CHECK"}'),
-    'a clock retry cannot attach a refreshed quote to an older rolling-capture proof');
-  assert.ok(src.includes('executionDynamicSafety(s,attempt.gptFinalReview,attempt.finalRecheck,retryNow)'),
-    'the legacy retry still reruns its existing dynamic safety');
-  assert.ok(src.includes('if(!retryBook.health.bookHealthy)'));
-  assert.ok(src.includes('EXECUTION_SAFETY_REJECT:INVALID_BOOK'));
+  assert.ok(src.includes('const validated=await validateOrder(db,s,initialQuote)'));
+  assert.ok(src.includes("if(!validated.allowed)return {entered:false,reason:validated.reason}"));
+  assert.ok(src.includes('check=await validateOrder(db,s,quote)'));
+  assert.ok(src.includes('book=normalizeEntryBook(quote,1500,Date.now())'));
+  assert.ok(src.includes("if(!check.allowed||!book.health.bookHealthy)return {allowed:false"));
 });
