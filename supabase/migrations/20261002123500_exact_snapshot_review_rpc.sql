@@ -1,10 +1,9 @@
--- Explicit one-shot operator review. Never clears a circuit or replays an order.
--- Caller substitutes only a JSON object using a SQL literal with quote escaping.
-begin;
-set local lock_timeout='500ms';set local statement_timeout='3000ms';
-select set_config('trading.review',__REVIEW_JSON__,true);
-do $review$
-declare a jsonb:=current_setting('trading.review')::jsonb;e jsonb:=a->'evidence';
+begin;set local lock_timeout='2s';set local statement_timeout='10s';
+-- No state change on installation. Only this reviewed generation 145 may classify,
+-- never clear, the incident; unchanged normal recovery still owns circuit release.
+create function public.trading_review_snapshot_epoch145(p_review jsonb) returns jsonb
+language plpgsql security invoker set search_path=pg_catalog,public set lock_timeout='500ms' as $review$
+declare a jsonb:=p_review;e jsonb:=a->'evidence';
  r public.v11_long_regime_runtime%rowtype;old public.v18_ops_incidents%rowtype;
  owner_id uuid:=(a->>'owner')::uuid;seen timestamptz;result jsonb;
 begin
@@ -12,8 +11,8 @@ begin
     (a->>'postmaster')::timestamptz is distinct from pg_postmaster_start_time() then raise exception 'REVIEW_VERSION_OR_RESTART';end if;
  if not public.v17_acquire_execution_lease(owner_id) then raise exception 'REVIEW_WRITER_BUSY';end if;
  select * into strict r from public.v11_long_regime_runtime where singleton for update;
- select * into strict old from public.v18_ops_incidents where id='3d38253a-77a8-4b6b-ae78-6b38d41987a1' for update;
- if r.circuit_open is not true or r.incident_id is distinct from '4e0deb37-e159-4521-ad90-916f58fc1cc6'::uuid or
+ select * into strict old from public.v18_ops_incidents where id=(a->>'previousIncident')::uuid for update;
+ if r.circuit_open is not true or r.incident_id is distinct from (a->>'expectedIncident')::uuid or
     r.incident_generation<>145 or r.incident_kind is distinct from 'MANUAL_REVIEW_REQUIRED' or
     r.circuit_reason is distinct from 'ACCOUNT_ENTRY_HOLD:ACCOUNT_EVIDENCE_INCOMPLETE_OR_STALE' or
     r.last_error is not null or old.generation<>144 or old.kind is distinct from 'INCOMPLETE_OR_STALE_SNAPSHOT' or
@@ -48,6 +47,9 @@ begin
  update public.v18_ops_incidents set resolution_evidence=coalesce(resolution_evidence,'{}')||jsonb_build_object('reviewClassification',result,'review',a),
   status='SUPERSEDED',resolved_at=coalesce(resolved_at,clock_timestamp()) where id in (r.incident_id,old.id);
  perform public.v17_release_execution_lease(owner_id);
+ return (select jsonb_build_object('circuit_open',circuit_open,'incident_id',incident_id,'incident_generation',incident_generation,'incident_kind',incident_kind) from public.v11_long_regime_runtime where singleton);
 end $review$;
-select circuit_open,incident_id,incident_generation,incident_kind from public.v11_long_regime_runtime where singleton;
+revoke all on function public.trading_review_snapshot_epoch145(jsonb) from public,anon,authenticated;
+grant execute on function public.trading_review_snapshot_epoch145(jsonb) to service_role;
+comment on function public.trading_review_snapshot_epoch145(jsonb) is 'REVIEW_SNAPSHOT_EPOCH_145_1: one-shot classified hold; never reset circuit';
 commit;
