@@ -1,0 +1,9 @@
+# Install native protection before the model manager
+
+Previously, all three post-fill entry paths called protectNewLeaderPosition, which verified portfolio ownership and then entered manageLeader. On a hold decision manageLeader can read candles/captures and wait for GPT before calling syncNativeStop. A stalled model therefore delayed exchange-resident protection on already filled exposure.
+
+The host now installs the same existing hard floor or stronger already GPT-approved resident level before model/capture management. It uses the existing native lifecycle, exact ownership checks, confirmed acknowledgement, monotonic acknowledge-before-cancel replacement, and fenced CAS store. An already crossed hard/approved level continues through the original immediate close path. The returned fresh position snapshot prevents a stale pre-install CAS from overwriting the native acknowledgement. Native install failures still invoke the existing immediate software manager; a lease/fence loss aborts. A later model failure does not relabel an already acknowledged stop as absent and is recorded separately as managementStatus=FAILED.
+
+GPT model/authority, DeepSeek handling, entry/exit strategy, native enable flag, hard-floor policy, leverage, sizing, slots, capture/freshness/deadline/capacity guards remain unchanged. No additional entry order, retry authority, fixed time exit or weakened stop is introduced. All three first-fill, retry-fill and recovery paths use the host binding.
+
+Validation: five protection/model tests plus the complete local regression: 1909 passed, 0 failed, 0 skipped. The full local tree also contains 14 as-yet unbound account-context/critical-section tests; those are not production writer separation evidence. Deno checks the production host graph. This change protects existing fills sooner; it does not resolve the remaining long account lease or unclaimed BUY cohort.
