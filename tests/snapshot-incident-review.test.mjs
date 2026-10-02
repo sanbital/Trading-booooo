@@ -14,7 +14,7 @@ async function fixture(t){const {PGlite}=await import(pathToFileURL(process.env.
  insert into v18_ops_incidents(id,generation,kind,reason,evidence) values('3d38253a-77a8-4b6b-ae78-6b38d41987a1',144,'INCOMPLETE_OR_STALE_SNAPSHOT','ACCOUNT_ENTRY_HOLD:ACCOUNT_EVIDENCE_INCOMPLETE_OR_STALE','{"decision":{"reasons":["ACCOUNT_EVIDENCE_INCOMPLETE_OR_STALE"]}}'),('4e0deb37-e159-4521-ad90-916f58fc1cc6',145,'MANUAL_REVIEW_REQUIRED','ACCOUNT_ENTRY_HOLD:ACCOUNT_EVIDENCE_INCOMPLETE_OR_STALE','{"source":"PRE_EXISTING_WRITER"}');`);
  const a={expectedIncident:'4e0deb37-e159-4521-ad90-916f58fc1cc6',previousIncident:'3d38253a-77a8-4b6b-ae78-6b38d41987a1',version:'REVIEW_SNAPSHOT_EPOCH_145_1',commit:'a'.repeat(40),owner:crypto.randomUUID(),postmaster:'2026-10-02T10:31:45Z',evidence:{portfolio:{exchange:'binance_futures',account_scope:'futures',positions_complete:true,positions:[],observation:{source:'BINANCE_ACCOUNT_REST',id:crypto.randomUUID(),requested_at_ms:Date.now(),received_at_ms:Date.now()}},openOrders:{complete:true,orders:[],algos:[],observed_at_ms:Date.now()}}};
  await db.exec("create role anon;create role authenticated;create role service_role;");
- await db.exec(load('supabase/migrations/20261002123500_exact_snapshot_review_rpc.sql').replaceAll('pg_postmaster_start_time()',"timestamptz '2026-10-02T10:31:45Z'"));
+ await db.exec(load('supabase/migrations/20261002123820_exact_snapshot_review_rpc.sql').replaceAll('pg_postmaster_start_time()',"timestamptz '2026-10-02T10:31:45Z'"));
  const apply=()=>db.query('select public.trading_review_snapshot_epoch145($1::jsonb)',[a]);
  return {db,a,apply};
 }
