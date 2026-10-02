@@ -1,6 +1,7 @@
 // @ts-nocheck
 // Decision authority is deterministic. Existing lease, receipt and reconciliation infrastructure remains intact.
 import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.57.4';
+import {admitSchedulerRequest} from '../_shared/scheduler-admission.mjs';
 import {createHostAccountScopes} from './account-host-scopes.mjs';
 import {currentExecutionContext,currentAccountOwner,contextualOwners,contextualState,executionContextHeaders,assertActiveExecutionRequest} from './account-scope-context.mjs';
 import {ENGINE,decidePosition} from '../_shared/deterministic/market-state.mjs';
@@ -1149,6 +1150,10 @@ Deno.serve(async req=>{
  if(!await auth(db,req))return res(401,{ok:false,error:'UNAUTHORIZED'});
  const body=await req.json().catch(()=>({})),mode=String(body.mode??'run').toLowerCase();
  try{
+  if(['run','execute'].includes(mode)){
+   const admission=await admitSchedulerRequest({endpoint:'v10-lane-executor',body,rpc:(name,args)=>db.rpc(name,args)});
+   if(!admission.allowed)return res(200,{ok:true,skipped:admission.reason});
+  }
   if(['preflight','diagnostic','ops-readiness'].includes(mode)){
    const symbol=String(body.symbol??'BTCUSDT'),[pf,info,quote,controls,ctl,universe,modeTruth]=await Promise.all([gateway({action:'p10_portfolio'},3000),gateway({action:'symbol_info',market:symbol},2500),gateway({action:'quote',market:symbol},2500),opsControls(db),control(db),db.rpc('deterministic_universe'),gateway({action:'futures_position_mode'},2000)]);
    const sizing=sizeEntry(Number(quote.best_ask),Number(info.quantity_step??info.step_size),symbolFilters(info));

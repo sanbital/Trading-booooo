@@ -18,6 +18,8 @@ test('archived v51 entrypoint hash proves the old graph without constraining its
   assert.notEqual(hash(entry),manifest.entrypoint.original_sha256);
   assert.ok(entry.includes("../_shared/deterministic/universe.mjs"));
   assert.ok(entry.includes("../_shared/deterministic/runtime.mjs"));
+  assert.ok(entry.includes("../_shared/scheduler-admission.mjs"));
+  assert.ok(entry.includes("endpoint:'v10-lane-signal-generator'"));
   assert.ok(!entry.includes('_production-v51'));
   assert.ok(!/(openai|deepseek|gpt-final)/i.test(entry));
 });

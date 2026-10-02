@@ -11,6 +11,8 @@ async function fixture(t,{seedClaims=false}={}){const {PGlite}=await import(path
  create table v11_long_regime_orders(id uuid primary key,created_at timestamptz default clock_timestamp(),signal_id uuid,intent text,state text,exchange_order_id text,client_order_id text,symbol text,requested_quantity numeric,request_payload jsonb,response_payload jsonb);`);
  if(seedClaims) await db.exec(`insert into leader20_execution_dispatches(signal_id,claim_owner,executor_claimed_at) values ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000011','2026-10-02T08:35:00Z'),('00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000012','2026-10-02T08:37:00Z');`);
  await db.exec((await readFile(new URL('../supabase/migrations/20261002100333_account_analysis_scope_expand.sql',import.meta.url),'utf8')).replaceAll('pg_postmaster_start_time()','public.test_postmaster_start()'));
+ await db.exec("create table trading_scheduler_control(scheduler_key text,enabled boolean);create table trading_scheduler_jobs(scheduler_key text,job_key text,enabled boolean,period_ms int,timeout_ms int,recovery_mode text,job_kind text,requires_recovery boolean,target jsonb)");
+ await db.exec((await readFile(new URL('../supabase/migrations/20261002110000_gateway_reduce_only_close_compat.sql',import.meta.url),'utf8')).replaceAll('pg_postmaster_start_time()','public.test_postmaster_start()'));
  const owner=crypto.randomUUID(),signal=crypto.randomUUID(),order=crypto.randomUUID(),call=async(name,...args)=>(await db.query(`select ${name}(${args.map((_,i)=>'$'+(i+1)).join(',')}) value`,args)).rows[0].value;
  const dispatch=async()=>{await db.query(`insert into leader20_execution_dispatches(signal_id,claim_owner,claim_attempts,state,claim_lease_until,valid_until,gpt_completed_at,claim_postmaster_at) values($1,$2,1,'EXECUTION_CLAIMED',clock_timestamp()+interval '50 seconds',clock_timestamp()+interval '60 seconds','2026-10-02T08:36:28Z',test_postmaster_start())`,[signal,owner]);await db.query(`insert into v11_long_regime_orders(id,signal_id,intent,state,request_payload,response_payload) values($1,$2,'OPEN_LONG','PLANNED',$3,'{}')`,[order,signal,{entry_gpt_decision:{clockFinalAuthority:{signal_id:signal,authority_version:'TOP20_CLOCK_GPT_FINAL_3',completed_at_ms:Date.parse('2026-10-02T08:36:28Z')}}}]);};
  const writer=async()=>{await db.query(`update v17_execution_lease set owner=$1,fence=1,expires_at=clock_timestamp()+interval '150 seconds',postmaster_started_at=test_postmaster_start()`,[owner]);await db.query(`select set_config('request.headers',$1,false)`,[JSON.stringify({'x-v18-execution-owner':owner})]);};
@@ -29,3 +31,18 @@ test('post-restart unsubmitted claim is safely handed over without waiting 90s o
 test('post-restart SUBMITTING identity is UNKNOWN and cannot be handed over for another BUY',async t=>{const f=await fixture(t);await f.dispatch();await f.db.query(`update leader20_execution_dispatches set state='ORDER_SUBMITTING',order_id=$1`,[f.order]);await f.restart();const r=await f.call('leader20_execution_claim',f.signal,crypto.randomUUID(),24000);assert.equal(r.claimed,false);assert.equal(r.row.state,'UNKNOWN');assert.equal(r.row.terminal_at,null);assert.equal((await f.db.query('select count(*)::int n from v11_long_regime_orders')).rows[0].n,1);});
 
 test('expand never stamps pre-restart claims as a current-generation authority',async t=>{const f=await fixture(t,{seedClaims:true}),rows=(await f.db.query('select signal_id,claim_postmaster_at from leader20_execution_dispatches order by signal_id')).rows;assert.equal(rows[0].claim_postmaster_at,null);assert.equal(new Date(rows[1].claim_postmaster_at).toISOString(),'2026-10-02T08:36:27.000Z');});
+
+test('existing SHORT close BUY shares writer but cannot impersonate a new BUY',async t=>{
+ const f=await fixture(t);await f.writer();const command={exchange:'binance_futures',action:'create_order',order:{side:'BUY',position_effect:'CLOSE',position_side:'SHORT',quantity:1}};
+ const authorize=c=>f.call('v17_gateway_authorize','legacy-close-execution-key','binance_futures:futures',f.owner,1,c);
+ assert.equal(await authorize(command),true);assert.equal(await authorize({...command,order:{...command.order,position_effect:'OPEN'}}),false);
+ await f.restart();assert.equal(await authorize(command),false);
+});
+
+ test('deadline sweeper records exact cause, never touches UNKNOWN or a recorded intent',async t=>{
+ const f=await fixture(t);await f.dispatch();await f.db.exec("delete from v11_long_regime_orders;update leader20_execution_dispatches set state='READY_TO_EXECUTE',executor_claimed_at=null,valid_until=clock_timestamp()-interval '1 second'");
+ assert.equal((await f.call('leader20_execution_expire',30)).expired,1);assert.equal((await f.db.query('select terminal_reason from leader20_execution_dispatches')).rows[0].terminal_reason,'UNCLAIMED_DEADLINE_EXPIRED');
+ await f.db.exec("update leader20_execution_dispatches set state='UNKNOWN',terminal_at=null,terminal_reason=null");assert.equal((await f.call('leader20_execution_expire',30)).expired,0);
+ await f.db.exec("update leader20_execution_dispatches set state='READY_TO_EXECUTE',last_error='PRE_EXECUTION_INVALID:FLOW_REVERSED'");assert.equal((await f.call('leader20_execution_expire',30)).expired,1);assert.equal((await f.db.query('select terminal_reason from leader20_execution_dispatches')).rows[0].terminal_reason,'LATEST_DATA_VALIDATION_FAILED');
+ await assert.rejects(f.call('leader20_execution_expire',101),/DISPATCH_EXPIRY_BOUND/);
+ });

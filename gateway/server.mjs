@@ -1,3 +1,5 @@
+import { createSchedulerOrchestrator } from "./scheduler-orchestrator.mjs";
+import { createScheduledJobRunner, createSchedulerRepository } from "./scheduler-repository.mjs";
 import { readFuturesModeEvidence } from "./futures-mode-evidence.mjs";
 import { createV17StopCommands } from "./v17-stop-commands.mjs";
 import {
@@ -39,7 +41,7 @@ const VERSION = "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT";
  *
  * Bump this on every gateway release.
  */
-const GATEWAY_BUILD = "2026-10-02-account-writer-fence-1";
+const GATEWAY_BUILD = "2026-10-02-external-clock-1";
 // Keep exactly one audited previous protocol revision during the rolling cutover. Both the
 // old engine/new gateway and new engine/old gateway therefore remain order-compatible;
 // arbitrary or older revisions stay rejected.
@@ -64,6 +66,8 @@ const orderWriterFence = createOrderWriterFence({
   authorize: createGatewayAuthorizer(writerDatabase),
   acquireLegacy: createGatewayLegacyLease(writerDatabase),
 });
+const EXTERNAL_SCHEDULER_ENABLED = boolEnv("EXTERNAL_SCHEDULER_ENABLED", false);
+let externalScheduler = null;
 const SCHEDULER_ENABLED = boolEnv("SCHEDULER_ENABLED", true);
 const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 12, 8, 3600) * 1000;
 const COLD_START_SCAN_MS = integerEnv("LOB_COLD_START_SCAN_SECONDS", 3, 1, 120) * 1000;
@@ -2747,12 +2751,17 @@ function createServer() {
             active_accounts: orderWriterFence.activeAccounts(),
           },
           scheduler_enabled: SCHEDULER_ENABLED,
+          external_scheduler: {
+            enabled: EXTERNAL_SCHEDULER_ENABLED,
+            state: externalScheduler?.state ?? null,
+          },
           scheduler: schedulerState,
           intervals: {
             scan_seconds: SCAN_INTERVAL_MS / 1000,
             monitor_seconds: MONITOR_INTERVAL_MS / 1000,
           },
           build: GATEWAY_BUILD,
+          deployment_commit: process.env.RELEASE_COMMIT ?? "unknown",
           capabilities: {
             p10_top_of_book_batch: true,
             p10_position_proof: true,
@@ -2806,7 +2815,38 @@ export async function startServer() {
   if (BINANCE_API_KEY && BINANCE_SECRET_KEY) {
     syncBinanceTime(true).catch((error) => console.warn("Binance time sync failed", error.message));
   }
-  if (SCHEDULER_ENABLED) {
+  if (EXTERNAL_SCHEDULER_ENABLED) {
+    const repository = createSchedulerRepository(writerDatabase);
+    const runJob = createScheduledJobRunner({
+      url: SUPABASE_URL,
+      repository,
+      staticTokens: { "market-autotrader": AUTOTRADE_TOKEN },
+    });
+    externalScheduler = createSchedulerOrchestrator({
+      repository,
+      runJob,
+      recover: async (lease, { signal }) => {
+        const result = await runJob({
+          target: { endpoint: "v10-lane-executor", body: { mode: "account-recovery" } },
+          ...lease,
+        }, { signal });
+        if (result?.ready !== true) return false;
+        return repository.rpc("trading_scheduler_recovered", {
+          p_scheduler: lease.scheduler_key,
+          p_owner: lease.owner,
+          p_fence: lease.fence,
+          p_account: "binance_futures:futures",
+        }, signal);
+      },
+      breaker: {
+        suppressed: (n) =>
+          autotraderDbCircuitSuppresses(n, autotraderDbRetryAt, autotraderDbFailures),
+        open: (n) => openAutotraderDbCircuit(n, true),
+        clear: clearAutotraderDbCircuit,
+      },
+    });
+    externalScheduler.start();
+  } else if (SCHEDULER_ENABLED) {
     scheduleMonitorLoop();
     // v6.2: the first scan used to wait 20 seconds after boot, so every deploy and every
     // machine restart bought roughly two scan cycles of nothing. The heat sample is

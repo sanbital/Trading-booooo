@@ -35,5 +35,13 @@ export function createHostAccountScopes(db,{budget,onEvent=()=>{},timers=globalT
  };
  const dispatch=async(claim,row,operation)=>withAnalysisContext(db,()=>operation(db),{
   owner:claim.owner,capabilities:{fence:Number(row.claim_attempts),claim,budget:budget?.()}});
- return {critical,periodic,dispatch,verify,current:()=>currentExecutionContext(db)};
+ // Parallel analyses share only this short mutation queue. Nested operations keep
+ // their existing writer; queued callers revalidate original authority on acquisition.
+ let mutationTail=Promise.resolve();
+ const serializedCritical=(...args)=>{
+  if(currentExecutionContext(db)?.kind==='WRITER')return critical(...args);
+  const task=mutationTail.then(()=>critical(...args));
+  mutationTail=task.catch(()=>{});return task;
+ };
+ return {critical:serializedCritical,periodic,dispatch,verify,current:()=>currentExecutionContext(db)};
 }

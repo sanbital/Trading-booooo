@@ -35,17 +35,11 @@ test('concurrent owners cannot both pass a contended lease', async () => {
   ]);
   assert.deepEqual(result, [true, false]);
 });
-test('lease timeout retries with exactly the same owner and fails closed', async () => {
-  const seen = [];
-  const rpc = async (_name, args, timeout) => {
-    seen.push({ ...args, timeout });
-    if (seen.length === 1) throw Error('Signal timed out.');
-    return true;
-  };
-  assert.equal(await acquireCycleLease(rpc, lease), true);
-  assert.equal(seen.length, 2);
-  assert.deepEqual(seen[0], seen[1]);
-  await assert.rejects(acquireCycleLease(async () => { throw Error('Signal timed out.'); }, lease), /timed out/);
+test('uncertain lease acquisition never retries or confirms ownership', async () => {
+  const seen=[];
+  const rpc=async (_name,args)=>{seen.push(args);throw Error('Signal timed out.');};
+  await assert.rejects(acquireCycleLease(rpc,lease),/timed out/);
+  assert.equal(seen.length,1);assert.equal(seen[0].p_owner,lease.owner);
 });
 test('non-transient lease error never retries', async () => {
   let calls = 0;

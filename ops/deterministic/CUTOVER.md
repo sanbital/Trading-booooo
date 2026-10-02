@@ -14,7 +14,8 @@ account/order truth blocks new exposure. Existing native protection remains live
 ## Review and reproduce
 
 1. Review the exact commit and migration against current main. The parent includes
-   PR #311 account critical sections and final gateway fencing. Compare deployed
+   PR #311 account critical sections and final gateway fencing plus the external
+   scheduler admission/restart fencing merged through PR #315/#317. Compare deployed
    source, gateway build and applied migrations; version numbers alone are insufficient.
 2. `npm ci --prefix test-support/deterministic`
 3. `npm test --prefix test-support/deterministic`
@@ -63,6 +64,11 @@ clock-gated observer #107 with a continuous five-second generator observation an
 one five-second deterministic executor cycle. Do not run old and new entry schedulers
 concurrently. Read current IDs by name before changing them; the observed IDs are not
 permanent authority. Preserve the archive maintenance route and its bounded retention.
+Use the current external scheduler catalog and `trading_scheduler_admit` fencing from
+the merged mainline. Do not bypass admission by sending an unfenced duplicate clock;
+the legacy allowance exists only for the audited cutover window. Back up the exact
+active schedule through `EXTERNAL-CLOCK-CUTOVER.md`, drain accepted ticks, then switch
+the generator/executor target bodies to the deterministic modes.
 
 Publish a valid fresh Top20 epoch while entry admission remains paused. Collector
 watch must contain all 20 symbols plus BTC and every held symbol. Wait until each

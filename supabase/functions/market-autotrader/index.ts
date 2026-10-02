@@ -1,3 +1,4 @@
+import { admitSchedulerRequest } from "../_shared/scheduler-admission.mjs";
 // Trading-booooo v8.0.0 — existing P10/I46 LONG + S096 RSI-momentum SHORT orchestration.
 // Private service-role function. No withdrawal or transfer route exists. Futures short
 // orders are accepted only through explicit, direction-safe OPEN/CLOSE intent.
@@ -10476,149 +10477,18 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
   }
   const maintenanceMs = Math.round(performance.now() - maintenanceStartedAt);
 
-  if (!exchanges.some((exchange) => circuits[exchange]?.allowNewEntry)) {
-    await event("P10_ENTRY_CIRCUIT_BLOCK", "P10 new entries blocked on all exchanges", {
-      strategy_key: P10_STRATEGY_KEY,
-      circuits,
-      circuit_diagnostics: circuitDiagnostics,
-      stats,
-    }, { cycleId, level: "WARNING" });
-    await patchTradingHeartbeat({
-      lastFullScanAt: new Date().toISOString(),
-      lastGatewayHeartbeatAt: new Date().toISOString(),
-    });
-    return {
-      skipped: true,
-      strategy_key: P10_STRATEGY_KEY,
-      circuits,
-      stats,
-      maintenance: {
-        owner: "P10_SCAN",
-        fee_reconciliations: feeReconciliations.length,
-        snapshot_errors: snapshotErrors,
-        joint_snapshots: jointSnapshots,
-        lock_venues_checked: lockVenuesChecked,
-        residual_sweeps: residualSweeps.length,
-        errors: maintenanceErrors,
-        duration_ms: maintenanceMs,
-      },
-    };
-  }
-
-  const signals = await loadP10Signals();
-  const active = await db(
-    "trading_positions?state=in.(ENTRY_PENDING,OPEN,EXITING,RECONCILING,RECONCILIATION_FAILED,MANUAL_INTERVENTION_REQUIRED)&select=id,exchange,market,base_asset",
-  ) as any[];
-  const activeMarkets = new Set(active.map((row) => `${row.exchange}:${row.market}`));
-  const entries: any[] = [];
-  const maxNew = Math.max(
-    0,
-    Math.min(
-      positionSlots - active.length,
-      Math.floor(finite(settings.max_new_entries_per_scan, positionSlots)),
-    ),
-  );
-  for (const signal of signals) {
-    if (entries.filter((entry) => entry.entered || entry.reserved).length >= maxNew) break;
-    const exchange = p10VenueExchange(signal.venue);
-    if (
-      !exchanges.includes(exchange) || !circuits[exchange]?.allowNewEntry ||
-      activeMarkets.has(`${exchange}:${signal.market}`)
-    ) continue;
-    try {
-      const result = await enterP10Signal(signal, settings, portfolios[exchange], cycleId);
-      entries.push({ ...result, signal_time: signal.signal_time, score: signal.score });
-      if (result.entered || result.reserved) {
-        activeMarkets.add(`${exchange}:${signal.market}`);
-      }
-      if (result.pending_reconcile) break;
-    } catch (error) {
-      const disposition = p10PreOrderEntryDisposition(error);
-      if (disposition.kind === "POLICY_BLOCK") {
-        entries.push({
-          entered: false,
-          exchange,
-          market: signal.market,
-          side: signal.side,
-          policy_blocked: true,
-          reason: disposition.reason,
-        });
-        try {
-          await event("P10_ENTRY_POLICY_BLOCK", disposition.reason, {
-            strategy_key: P10_STRATEGY_KEY,
-            venue: signal.venue,
-            market: signal.market,
-            side: signal.side,
-            signal_time: signal.signal_time,
-            order_submitted: false,
-            caught_at: "P10_SCAN",
-          }, { cycleId, level: "INFO" });
-        } catch (eventError) {
-          console.error("P10_ENTRY_POLICY_BLOCK_EVENT_FAILED", eventError);
-        }
-        continue;
-      }
-      entries.push({
-        entered: false,
-        exchange,
-        market: signal.market,
-        side: signal.side,
-        pre_order_error: true,
-        error: disposition.reason,
-      });
-      try {
-        await event("P10_ENTRY_PREORDER_ERROR", disposition.reason, {
-          strategy_key: P10_STRATEGY_KEY,
-          venue: signal.venue,
-          market: signal.market,
-          side: signal.side,
-          signal_time: signal.signal_time,
-          order_submitted: false,
-        }, { cycleId, level: "CRITICAL" });
-      } catch (eventError) {
-        console.error("P10_ENTRY_PREORDER_ERROR_EVENT_FAILED", eventError);
-      }
-      // Only enterP10Signal owns post-submit reconciliation. This catch has no durable
-      // proof that an exchange order was sent, so it must never globally latch entries.
-      break;
-    }
-  }
-  const heartbeatAt = new Date().toISOString();
+  // P10 new entry is permanently retired. Keep all preceding reconciliation,
+  // accounting, snapshots and cleanup; the independent monitor keeps native
+  // protection and exit management. Do not fetch/claim entry signals or try orders.
   await patchTradingHeartbeat({
-    lastFullScanAt: heartbeatAt,
-    lastGatewayHeartbeatAt: heartbeatAt,
-    gatewayErrorCount: 0,
+    lastFullScanAt: new Date().toISOString(),
+    lastGatewayHeartbeatAt: new Date().toISOString(),
   });
-  const routinePolicyOnly = entries.length > 0 &&
-    entries.every((row) => row.policy_blocked === true || row.reason === "signal already claimed");
-  await event(
-    "P10_SCAN_SUMMARY",
-    `${entries.filter((row) => row.entered).length} P10 entries filled`,
-    {
-      strategy_key: P10_STRATEGY_KEY,
-      revision: P10_REVISION,
-      eligible_signals: signals.length,
-      attempted: entries.length,
-      filled: entries.filter((row) => row.entered).length,
-      reserved: entries.filter((row) => row.reserved).length,
-      rejections: entries.filter((row) => !row.entered && !row.reserved).map((row) => ({
-        exchange: row.exchange,
-        market: row.market,
-        reason: row.reason || row.error,
-      })),
-    },
-    {
-      cycleId,
-      level: entries.some((row) => row.entered || row.reserved) || routinePolicyOnly
-        ? "INFO"
-        : "WARNING",
-    },
-  );
   return {
+    skipped: true,
+    reason: "P10_ENTRY_PATH_RETIRED",
+    version: "P10_ENTRY_RETIREMENT_20261002_1",
     strategy_key: P10_STRATEGY_KEY,
-    revision: P10_REVISION,
-    eligible_signals: signals.length,
-    entries,
     circuits,
     stats,
     maintenance: {
@@ -12798,6 +12668,17 @@ Deno.serve(async (request: Request) => {
     requiredConfiguration();
     const body = await request.json().catch(() => ({})) as JsonRecord;
     action = String(body.action || "status").toLowerCase();
+
+    if (action === "scan" || action === "monitor") {
+      const schedulerAdmission = await admitSchedulerRequest({
+        endpoint: "market-autotrader",
+        body,
+        rpc: (name: string, args: JsonRecord) => rpc(name, args),
+      });
+      if (!schedulerAdmission.allowed) {
+        return response({ ok: true, skipped: schedulerAdmission.reason });
+      }
+    }
 
     // Acquire the existing per-cycle lease BEFORE the first settings read. The old ordering
     // allowed every overlapping cron invocation to hit trading_settings before discovering
