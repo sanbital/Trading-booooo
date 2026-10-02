@@ -32,6 +32,7 @@ import * as retry from '../../supabase/functions/v10-lane-executor/entry-ioc-ret
 import * as lifecycle from '../../supabase/functions/v10-lane-executor/entry-lifecycle.mjs';
 import * as liveChase from '../../supabase/functions/_shared/leader-live-chase.mjs';
 import * as capacity from '../../supabase/functions/v10-lane-executor/entry-capacity.mjs';
+import * as dispatch from '../../supabase/functions/v10-lane-executor/execution-dispatch.mjs';
 import * as v24Adapter from '../../supabase/functions/v10-lane-executor/v24-entry-adapter.mjs';
 import * as booAdapter from '../../supabase/functions/v10-lane-executor/boo-entry-adapter.mjs';
 import {R1_VERSION} from '../../supabase/functions/_shared/boo/r1-strategy.mjs';
@@ -119,6 +120,7 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
   if(name==='v17_acquire_execution_lease'){if(state.leaseOwner)return{data:false};state.leaseOwner=args.p_owner;return{data:state.lease};}
   if(name==='v17_release_execution_lease'){if(state.leaseOwner===args.p_owner)state.leaseOwner=null;return{data:true};}
   if(!state.lease)throw Error('V18_EXECUTION_FENCED');
+  if(name==='leader20_reconcile_execution_dispatches')return{data:{inspected:0,reconciled:0,no_resubmit:true}};
   if(name==='v18_closed_protection_backlog'){
    const all=state.tables.v11_long_regime_positions.filter(p=>p.state==='CLOSED'&&(p.metadata?.exitAccountingPending===true||
     p.metadata?.exitProtection?.orders?.some(o=>o.terminal!==true))).sort((a,b)=>String(a.updated_at).localeCompare(String(b.updated_at)));
@@ -235,7 +237,7 @@ export function harness({positions=[],baseline=false,sourceRef=null,circuit=fals
  source=source.replace(/\r\n/g,'\n').replace(/^import .*;\n/gm,'').replace('const exchangeGateway=gateway;','const exchangeGateway=__gateway;');source=source.slice(0,source.indexOf('Deno.serve'));
  // Only exchange/DB/time boundaries are replaced. run/manage/open/close are actual source.
  source+='\ngateway=__gateway;this.runCycle=()=>runWithLease(__db);this.open=(...args)=>openBull(__db,...args);this.close=(...args)=>closePos(__db,...args);this.manage=(...args)=>manageLeader(__db,...args);this.setLease=()=>leaseOwners.set(__db,"test-owner");';
- const ctx={...exitAuthority,...retry,...lifecycle,...liveChase,...capacity,...cec,...b06133,...gpt,...fd1,FD1_TIME_REASONS:fd1.TIME_REASONS,...entryEvidence,...momentum,...review,...ops,createBudget:(opts={})=>ops.createBudget({...opts,clock:Clock.now}),...settlement,...entrySettlement,...entryOrderState,...dbOnly,...entryControl,...fillEvidence,...qv3,...e1,...slotSizing,...booBindings,...pullbackSetup,setupIsTerminal:pullbackSetup.isTerminal,
+ const ctx={...dispatch,...exitAuthority,...retry,...lifecycle,...liveChase,...capacity,...cec,...b06133,...gpt,...fd1,FD1_TIME_REASONS:fd1.TIME_REASONS,...entryEvidence,...momentum,...review,...ops,createBudget:(opts={})=>ops.createBudget({...opts,clock:Clock.now}),...settlement,...entrySettlement,...entryOrderState,...dbOnly,...entryControl,...fillEvidence,...qv3,...e1,...slotSizing,...booBindings,...pullbackSetup,setupIsTerminal:pullbackSetup.isTerminal,
   fetchE1AggTrades:e1Tape??e1.fetchE1AggTrades,QV3_LIVE_CUTOVER:qv3Cutover,qv3Candles:(symbol,at,start)=>qv3.qv3Candles(symbol,at,start,qv3Fetch??(()=>{throw Error("NETWORK_FORBIDDEN")})),leaderPortfolioMatches:momentum.portfolioMatches,protectNewLeaderPosition,createGatewayProtection:baseline?baselineAdapter.createGatewayProtection:createGatewayProtection,
   Date:Clock,console,crypto,Map,Set,WeakMap,AbortController,TextEncoder,Response,Headers,fetch:()=>{throw Error('NETWORK_FORBIDDEN')},
   setTimeout:advanceTimers?(fn,ms)=>{state.now+=Number(ms)||0;return setTimeout(fn,0)}:setTimeout,clearTimeout,
