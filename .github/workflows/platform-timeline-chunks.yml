@@ -1,0 +1,54 @@
+name: Export existing encrypted platform evidence in bounded chunks
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  split-existing-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.repository == 'sanbital/Trading-booooo' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Fetch the completed read-only timeline
+        uses: actions/download-artifact@v4
+        with:
+          name: platform-timeline-36974995849
+          run-id: 36974995849
+          github-token: ${{ github.token }}
+          path: encrypted
+      - name: Split ciphertext without decrypting or accessing production
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          matches=list(Path('encrypted').rglob('platform-timeline.encrypted.json'))
+          assert len(matches)==1
+          data=matches[0].read_bytes()
+          size=24*1024*1024
+          chunks=[data[i:i+size] for i in range(0,len(data),size)]
+          assert 1<=len(chunks)<=3
+          Path('chunks').mkdir()
+          for i,chunk in enumerate(chunks):
+              Path(f'chunks/timeline.part{i}').write_bytes(chunk)
+          print('ciphertext_bytes',len(data),'parts',len(chunks),'sha256',hashlib.sha256(data).hexdigest())
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: timeline-part0
+          path: chunks/timeline.part0
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: timeline-part1
+          path: chunks/timeline.part1
+          if-no-files-found: warn
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: timeline-part2
+          path: chunks/timeline.part2
+          if-no-files-found: warn
+          retention-days: 7
