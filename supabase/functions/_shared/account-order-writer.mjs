@@ -31,6 +31,13 @@ export function assertCurrentEntry(row, now, verdict) {
 const REFUSALS = new Set(['DEADLINE_EXPIRED','AUTHORITY_EXPIRED','MARKET_DATA_STALE',
   'CAPTURE_VALIDATION_FAILED','CAPACITY_REJECTED','CIRCUIT_OPEN','RECOVERY_INCOMPLETE',
   'ORDER_IDENTITY_UNRESOLVED','EXCHANGE_REJECTED']);
+export function assertSettlementResult(row,receipt,result) {
+  if (result?.state!=='FILLED') return;
+  const observed=receipt?.receipt??receipt;
+  const quantity=Number(observed?.quantity??observed?.q),requested=Number(row.payload?.order?.quantity);
+  if (!(requested>0&&quantity>0)||Math.abs(quantity-requested)>Math.max(1e-10,requested*1e-8)||
+    observed?.status==='PARTIALLY_FILLED') throw new WriterError('PARTIAL_FILL_CANNOT_BE_FILLED');
+}
 
 export function createWriterRepository(db) {
   const rpc = async (name, args) => {
@@ -46,6 +53,9 @@ export function createWriterRepository(db) {
     heartbeat:lease=>rpc('trading_writer_heartbeat',args(lease)),
     release:lease=>rpc('trading_writer_release',args(lease)),
     claim:lease=>rpc('trading_execution_claim',args(lease)),
+    recoveryStatus:account=>rpc('trading_writer_recovery_status',{p_account:account}),
+    completeRecovery:(lease,generation,evidence)=>rpc('trading_writer_recovery_complete',
+      {...args(lease),p_generation:generation,p_evidence:evidence}),
     transition:(row,lease,state,reason=null,evidence={})=>rpc('trading_execution_transition',
       {...args(lease),p_key:row.execution_key,p_state:state,p_reason:reason,p_evidence:evidence}),
   };
@@ -53,12 +63,23 @@ export function createWriterRepository(db) {
 
 export async function writerTurn({account,owner,repository,exchange,validate,settle,
   now=Date.now,timers=globalThis,onEvent=()=>{}}) {
-  const lease = await repository.acquire(account,owner);
+  let lease;
+  try { lease=await repository.acquire(account,owner); }
+  catch (error) {
+    const code=executionErrorCode(error);
+    try {Promise.resolve(onEvent({state:'WRITER_UNAVAILABLE',reason:code,at:new Date(now()).toISOString()})).catch(()=>{});}catch{}
+    // An acknowledgement may be lost after acquisition committed. The owner is
+    // unique to this turn; without a returned fence it cannot safely do work.
+    return {status:code,error:code,terminal:false};
+  }
   if (!lease) return {status:'WRITER_BUSY',terminal:false};
   const abort = new AbortController();
-  let lost = false, timer, row, submitting = false, heartbeatRunning = false;
-  const event = (state,reason=null) => onEvent({correlation_id:row?.correlation_id,
-    execution_key:row?.execution_key,state,reason,fence:lease.fence,at:new Date(now()).toISOString()});
+  let lost = false, timer, row, exchangeAttempted = false, heartbeatRunning = false;
+  const event = (state,reason=null) => {
+    // Observability failures must not replace the durable order outcome.
+    try { Promise.resolve(onEvent({correlation_id:row?.correlation_id,
+      execution_key:row?.execution_key,state,reason,fence:lease.fence,at:new Date(now()).toISOString()})).catch(()=>{}); } catch {}
+  };
   const verify = async () => {
     if (lost || !(await repository.verify(lease))) {
       lost=true; abort.abort(); throw new WriterError('LEASE_FENCED');
@@ -96,6 +117,7 @@ export async function writerTurn({account,owner,repository,exchange,validate,set
       }
       await move('ACKNOWLEDGED',null,{exchange_order_id:existing.orderId});
       const result=await settle(row,existing,{lease,signal:abort.signal,verify});
+      assertSettlementResult(row,existing,result);
       await move(result.state,result.reason,result.evidence); return {status:result.state};
     }
     await move('VALIDATING');
@@ -105,7 +127,7 @@ export async function writerTurn({account,owner,repository,exchange,validate,set
     await verify();
     // Durable SUBMITTING precedes the exchange call. A lost acknowledgement remains
     // reconcilable even if the process dies before writing UNKNOWN.
-    await move('SUBMITTING'); submitting=true;
+    await move('SUBMITTING');
     await verify();
     assertCurrentEntry(row,now(),verdict);
     // Re-read the existing production guards after durable DB I/O. Reusing a
@@ -114,20 +136,28 @@ export async function writerTurn({account,owner,repository,exchange,validate,set
     assertCurrentEntry(row,now(),boundaryVerdict);
     if (row.kind !== 'ENTRY' && boundaryVerdict?.allowed !== true) throw new WriterError(boundaryVerdict?.reason??'VALIDATION_FAILED');
     await verify();
+    exchangeAttempted=true;
     const receipt=await exchange.submitFenced(row,{lease,signal:abort.signal,verify});
     await move('ACKNOWLEDGED',null,{exchange_order_id:receipt.orderId});
     const result=await settle(row,receipt,{lease,signal:abort.signal,verify});
+    assertSettlementResult(row,receipt,result);
     await move(result.state,result.reason,result.evidence);
     return {status:result.state};
   } catch (error) {
     const code=executionErrorCode(error); event('ERROR',code);
     if (row && !lost) {
       try {
-        const ambiguous=submitting || Boolean(row.submitting_at);
-        await move(ambiguous?'UNKNOWN':REFUSALS.has(code)?code==='DEADLINE_EXPIRED'?'EXPIRED':'REJECTED':'PENDING',code);
+        // A restart must reconcile a durable SUBMITTING row conservatively. In this
+        // live turn, however, an explicit boundary refusal before the exchange
+        // adapter was called proves that this process sent nothing. Preserve the
+        // exact strategic refusal instead of inventing an UNKNOWN exchange order.
+        const beforeSubmitRefusal=!exchangeAttempted && row.state==='SUBMITTING' && REFUSALS.has(code);
+        const ambiguous=exchangeAttempted || (Boolean(row.submitting_at) && !beforeSubmitRefusal);
+        const state=ambiguous?'UNKNOWN':REFUSALS.has(code)?code==='DEADLINE_EXPIRED'?'EXPIRED':'REJECTED':'PENDING';
+        await move(state,code,beforeSubmitRefusal?{submission_attempted:false,pre_submit_refused:true}:{});
       } catch { /* Durable prior state remains the recovery source of truth. */ }
     }
-    return {status:row?.submitting_at?'UNKNOWN':lost?'LEASE_FENCED':code,error:code};
+    return {status:row?.state==='UNKNOWN'?'UNKNOWN':lost?'LEASE_FENCED':code,error:code};
   } finally {
     if (timer !== undefined) timers.clearInterval(timer);
     abort.abort();

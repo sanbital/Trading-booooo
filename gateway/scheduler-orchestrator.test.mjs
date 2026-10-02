@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createSchedulerOrchestrator,dependencyFailure,retryDelayMs} from './scheduler-orchestrator.mjs';
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
-function fixture({runJob=async()=>({ok:true}),recover=async()=>true,jobs}={}) {
+function fixture({runJob=async()=>({ok:true}),recover=async()=>true,jobs,onEvent}={}) {
   let current=0,dbDown=false;
   const calls=[],seen=new Set(),timeouts=new Map();let timerId=0;
   const repository={
@@ -22,7 +22,7 @@ function fixture({runJob=async()=>({ok:true}),recover=async()=>true,jobs}={}) {
     clear:()=>{failures=0;retryAt=0;}};
   const timers={setInterval:()=>0,clearInterval:()=>{},setTimeout:fn=>{timeouts.set(++timerId,fn);return timerId;},
     clearTimeout:id=>timeouts.delete(id)};
-  const scheduler=createSchedulerOrchestrator({repository,runJob,recover,breaker,now:()=>current,timers,random:()=>1});
+  const scheduler=createSchedulerOrchestrator({repository,runJob,recover,breaker,now:()=>current,timers,random:()=>1,onEvent});
   scheduler.start();
   const tick=async()=>{await scheduler.tick();await flush();await flush();};
   return{scheduler,calls,seen,timeouts,tick,advance:ms=>{current+=ms;},db:(down)=>{dbDown=down;},repository};
@@ -84,3 +84,23 @@ test('permanent 4xx requests are marked for durable job disablement',async()=>{
   f.repository.finish=async(l,c,r)=>{permanent=r.permanent;return true;};
   await f.tick();await f.tick();assert.equal(permanent,true);await f.scheduler.stop();
 });
+test('HTTP 200 with failed endpoint outcome never advances the success clock or cursor',async()=>{
+  const f=fixture({runJob:async()=>({ok:false,error:'DB_TIMEOUT',cursor:'UNCOMMITTED'})});
+  let finished;
+  f.repository.finish=async(l,c,r)=>{finished=r;return true;};
+  await f.tick();await f.tick();assert.equal(finished.state,'FAILED');assert.equal(finished.cursor,undefined);
+  assert.equal(f.scheduler.state.jobs['new-signal'].lastSuccess,undefined);
+  await f.scheduler.stop();
+});
+for(const [name,onEvent]of [['throw',()=>{throw Error('telemetry sink unavailable');}],
+  ['reject',async()=>{throw Error('telemetry sink unavailable');}]]) {
+  test(`telemetry ${name} cannot kill jobs or the scheduler process`,async()=>{
+    let runs=0;
+    const f=fixture({onEvent,runJob:async()=>{runs++;return{ok:true};}});
+    await f.tick();await f.tick();assert.equal(runs,1);
+    assert.equal(f.scheduler.state.jobs['new-signal'].result,'SUCCEEDED');
+    assert.equal(f.scheduler.activeJobs().length,0);
+    f.advance(5000);await f.tick();assert.equal(runs,2);
+    await f.scheduler.stop();
+  });
+}
