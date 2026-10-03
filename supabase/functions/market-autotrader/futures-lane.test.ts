@@ -253,7 +253,9 @@ Deno.test("the gateway uses explicit direction and effect for futures long and s
 
 Deno.test("futures positions are quoted and monitored on the perpetual venue", () => {
   assert(GATEWAY.includes('publicBinanceFutures("/fapi/v1/depth"'));
-  assert(GATEWAY.includes('publicBinanceFutures("/fapi/v1/ticker/bookTicker"'));
+  // Futures execution prices and liquidity now share one depth snapshot. The
+  // behavioral quote regression proves that no drifting ticker is combined.
+  assert(GATEWAY.includes('publicBinanceFutures("/fapi/v1/trades"'));
   const minuteMarket = Deno.readTextFileSync(
     new URL("supabase/functions/_shared/lob/minute-entry-market.ts", ROOT),
   );

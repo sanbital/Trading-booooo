@@ -10,6 +10,7 @@ import {ENGINE,decidePosition} from '../_shared/deterministic/market-state.mjs';
 import {PROFILE} from '../_shared/deterministic/calibration.mjs';
 import {control,currentMarket,requireEntryAuthority,isLeader20,detachAudit,validateOrder} from '../_shared/deterministic/runtime.mjs';
 import {normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode} from '../_shared/deterministic/book.mjs';
+import {plannedEntryRiskView} from '../_shared/deterministic/planned-entry-risk.mjs';
 import {EXIT_AUTHORITY_VERSION,EXIT_CLASS,exitClass,hardSafetyState,approvedProtection,assertExitAuthority,positionGeneration} from '../_shared/deterministic/exit-authority.mjs';
 import {POLICY,STRATEGY,ENTRY_EXECUTION_POLICY_VERSION,postFillEntryGuard} from '../_shared/leader-momentum-v17.mjs';
 import {exitAttemptId,classifyExitResponse} from '../_shared/leader-exit-review.mjs';
@@ -811,7 +812,7 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
     // approval or quote budget and then send a stale order. No venue call on refusal.
     let generationError=null;
     try{await requireEntryAuthority(db,s);}catch(error){generationError=String(error.message);}
-    const authority=generationError?{allowed:false,reason:generationError}:await authorize?.();
+    const authority=generationError?{allowed:false,reason:generationError}:await authorize?.({order:oi.data,signal:s,attemptNo,request:rp});
     if(authority?.allowed!==true){
       const reason=authority?.reason??"IOC_DISPATCH_AUTHORITY_MISSING";
       const wr=await db.from("v11_long_regime_orders").update({state:"REJECTED",reject_reason:reason,
@@ -1069,10 +1070,12 @@ async function openBull(db,s,openPositions,manual=null,attempt={},managementFail
    const payload={price_tick:filters.priceTick,quantity_step:filters.quantityStep,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION},deterministic:{version:ENGINE,seed:seed.decision},entry_latency:timing,
     ...(firstIntent?{retry_of_order_id:firstIntent}:{}),entry_ioc:{attempt:no,target_quantity:targetQuantity,filled_before:filled}};
    const sent=await dispatchEntryIocAttempt(db,s,gw,{attemptNo:no,quantity,limitPrice,step:filters.quantityStep,payload,attempt,
-    authorize:async()=>{
+    authorize:async intent=>{
      await requireLeaderEntryControls(db);
      const [fresh,orders]=await Promise.all([readOpsPair(db,gw,s.symbol),gw({action:'v18_open_orders'},2500)]),c=await opsControls(db);
-     const risk=decideEntryWith(c,fresh,s.symbol,orders,{proposedMargin:Math.max(0,quantity*limitPrice/LEV),cashBuffer:ENTRY_CASH_BUFFER_USDT,existingPositionId:position?.id??null,managementFailures});
+     const scoped=plannedEntryRiskView(fresh,intent);
+     if(!scoped.allowed)return {allowed:false,reason:scoped.reason};
+     const risk=decideEntryWith(c,scoped.pair,s.symbol,orders,{proposedMargin:Math.max(0,quantity*limitPrice/LEV),cashBuffer:ENTRY_CASH_BUFFER_USDT,existingPositionId:position?.id??null,managementFailures});
      if(!risk.allowed)return {allowed:false,reason:'ENTRY_CONTROL:'+risk.reasons.join(',')};
      const quote=await gw({action:'quote',market:s.symbol},1500),check=await validateOrder(db,s,quote),book=normalizeEntryBook(quote,1500,Date.now());
      if(!check.allowed||!book.health.bookHealthy)return {allowed:false,reason:check.reason??'STALE_EXECUTION_BOOK'};

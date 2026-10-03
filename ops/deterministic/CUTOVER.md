@@ -1,18 +1,76 @@
 # Deterministic engine release and operator cutover
 
-Status observed 2026-10-03 04:35:48 UTC: NEW ENTRY ADMISSION RESUMED by the normal
-trading-control workflow 37096513797 after the Futures quote snapshot repair and
-all fresh read-only resume gates (`pause_new_entries=false`). Deterministic
-management and reconciliation remain installed and running. Deterministic control
+Status observed 2026-10-03 05:09:38 UTC: NEW ENTRY ADMISSION PAUSED by normal
+trading-control workflow 37098484095 (`pause_new_entries=true`). Two naturally
+qualified candidates, VELVET and SAND, reached durable PLANNED entry intents but
+were REJECTED before exchange dispatch: the final fresh account classifier
+included the very intent being authorized as UNKNOWN_ORDER_OUTCOME. Both rows
+have `notDispatched=true`, no exchange order ID and no fills. Do not report them
+as actual exchange trades. Positions, unresolved orders and open incidents were
+all zero; the circuit was closed and clock recovery matched the current
+04:41:14.489719 UTC postmaster. Management and reconciliation continue. Control
 is enabled,
 generation 2, source e966badf791b641801dabac3ae282ac673c04819 (executor v191,
 generator v53). The protected activation transaction ran at 01:06:28 UTC from
 release-runner main cd4960d9f87589a8bac15030a82a3f596c6917be. The former GPT and
 batch authorities remain OFF/disabled; one fenced five-second external clock
 drives the new generator/executor. Entry admission additionally requires current
-exchange truth, capacity and complete same-symbol data. No new order or fill has
-been observed in this resumed window yet; natural real-fill proof remains pending.
+exchange truth, capacity and complete same-symbol data. No new exchange fill has
+been observed; natural real-fill proof remains pending. The earlier read-only
+watcher 37096534089 failed on a runtime-proof DB read at 04:40 UTC, preceding the
+04:41 database restart. Watcher 37097945991 was canceled to repair the confirmed
+own-intent dispatch defect. Neither run completed real-fill validation.
 Authority and data observations do not establish improved strategy returns.
+
+The source-only own-intent repair uses the existing protected production cutover
+workflow, operation `repair-entry`, exact current main SHA and confirmation
+`PLANNED_ENTRY_REPAIR_1`. It first compares the deployed v191/v53 bundles to the
+immutable pinned e966badf source and repeats all paused resume gates. With signed
+flat truth, no unresolved orders/incidents and drained holders, it deploys only
+the executor through the normal Supabase CLI, requires v192/v53 and complete
+candidate-source bundle parity, then records the exact deployed source without
+changing generation, sizing, modes, scheduler, financial rows or protection.
+Entries remain paused; failures preserve management and pause entry. No new
+migration is needed. After success, pin the manifest's actual source and service
+versions in release-request.json, run fresh `verify-resume`, and use the normal
+trading-control resume workflow. Observe natural fills with runtime-proof;
+never submit a validation order or waive fresh data/execution evidence.
+
+The dispatch exception is a temporary in-memory risk view for exactly one
+matching, unsent PLANNED row created by that fenced request. Signal, client ID,
+symbol, quantity, immutable IOC request and deterministic authority must match.
+Changed, missing, duplicate, acknowledged or submitted rows are refused. All
+other risk orders and portfolio issues remain fail closed; the durable intent,
+reservation, mandatory submit proof, gateway writer fence and partial-IOC native
+protection are preserved. This is prepared source, not deployed v192 evidence.
+
+At 05:09 UTC normal GitHub CLI workflow access failed HTTP 401 (Bad credentials).
+The attached environment reported no configured secret or outbound identity.
+GitHub connector source review and read-only Supabase access remained available;
+do not extract credentials or replace normal deployment/approval paths. The
+repair must remain unapplied until normal Actions execution access is restored.
+
+Read-only verify-resume 37097801396 attempt 2 passed at 05:22:56 UTC against the
+unchanged deployed v191/v53 bundles and per-app gateway pins. Fresh signed truth
+showed 0 venue/DB positions, 0 ordinary/protective orders, 18 canonical/exchange
+matched fills, reconciled balance, ONE_WAY and no failures. All 20 candle/volume
+feature sets were complete; 19 trade contexts and the BTC sensor had all 24
+buckets. The newly warming IMX context was DATA/REJECT. Seven historical CLOSED
+floating-dust rows remain classified as terminal accounting records, not holdings.
+This passes account/data gates but cannot repair the still-deployed self-blocking
+executor or prove a new real fill. The rejected-row capture metric is per ingest
+batch, not cumulative; the collector also queues closed candle rows whereas the
+reviewed hot ingest contract admits micro rows. Current technical features use
+completed REST candles independently. Do not infer missing dynamic buckets or
+successful entry from that aggregate counter alone.
+
+In 04:51:53-05:20:50 UTC runtime logs, executor/generator had 1757/606 log rows,
+zero provider and GPT dependency events, and the entry/exit provider ledger was
+zero. Executor v191 had 146 requests, no HTTP errors, p50 8662ms/p95 13338.75ms;
+generator v53 had 301 requests, one HTTP 503 at 04:59:20, p50 1310ms/p95 2071ms.
+Later signed readiness and clock observations passed, but this does not prove
+the earlier 503's cause or a five-second end-to-end SLA. The candidate repair's
+34-file service dependency closure also contains no AI provider dependency.
 
 Fresh signed account proof passed at 03:34:15 UTC (37093625505), and all current
 read-only resume gates passed at 03:43:46 UTC (37094127813). The normal
@@ -63,7 +121,7 @@ staging were zero. Full regression for #331/#332 passed 1516/1517 active tests.
 In that pre-repair/resume log window executor v191 had 140 requests, one error,
 p50 8930ms/p95 43796ms/max 53734ms; generator v53 had 396 requests, no errors,
 p50 1284ms/p95 2307ms. These are measured latencies, not a five-second cycle SLA.
-The current postmaster remains 03:20:19 UTC with completed recovery. Its earlier
+At that earlier observation the postmaster was 03:20:19 UTC with completed recovery. Its earlier
 abnormal interruption cause remains unproven; no platform restart/resource or
 credential change was performed. Keep that risk and new-position runtime proof
 explicit until fresh evidence resolves them.
