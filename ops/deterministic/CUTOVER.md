@@ -1,76 +1,76 @@
 # Deterministic engine release and operator cutover
 
-Status observed 2026-10-03 05:09:38 UTC: NEW ENTRY ADMISSION PAUSED by normal
-trading-control workflow 37098484095 (`pause_new_entries=true`). Two naturally
-qualified candidates, VELVET and SAND, reached durable PLANNED entry intents but
-were REJECTED before exchange dispatch: the final fresh account classifier
-included the very intent being authorized as UNKNOWN_ORDER_OUTCOME. Both rows
-have `notDispatched=true`, no exchange order ID and no fills. Do not report them
-as actual exchange trades. Positions, unresolved orders and open incidents were
-all zero; the circuit was closed and clock recovery matched the current
-04:41:14.489719 UTC postmaster. Management and reconciliation continue. Control
-is enabled,
-generation 2, source e966badf791b641801dabac3ae282ac673c04819 (executor v191,
-generator v53). The protected activation transaction ran at 01:06:28 UTC from
-release-runner main cd4960d9f87589a8bac15030a82a3f596c6917be. The former GPT and
-batch authorities remain OFF/disabled; one fenced five-second external clock
-drives the new generator/executor. Entry admission additionally requires current
-exchange truth, capacity and complete same-symbol data. No new exchange fill has
-been observed; natural real-fill proof remains pending. The earlier read-only
-watcher 37096534089 failed on a runtime-proof DB read at 04:40 UTC, preceding the
-04:41 database restart. Watcher 37097945991 was canceled to repair the confirmed
-own-intent dispatch defect. Neither run completed real-fill validation.
-Authority and data observations do not establish improved strategy returns.
+Status observed 2026-10-03 05:32:48 UTC: own-intent dispatch repair DEPLOYED,
+NEW ENTRY ADMISSION STILL PAUSED (`pause_new_entries=true`). Production executor
+v192 is ACTIVE at source 5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4; generator v53
+was not redeployed and its complete bundle remains unchanged. Deterministic
+control is enabled, generation 2, source 5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4.
+GPT remains OFF, the old batch authority disabled, one fenced five-second external
+clock drives the deterministic engine, and management/reconciliation continue.
+Native hard stop stays 2.5%, leverage 3, margin 150 USDT and max slots 10. No new
+migration, sizing/mode/order-policy/scheduler/financial-row change was made in
+this repair. Natural new exchange fills remain zero; real-fill proof is pending.
+Authority and replay observations do not establish improved strategy returns.
 
-The source-only own-intent repair uses the existing protected production cutover
-workflow, operation `repair-entry`, exact current main SHA and confirmation
-`PLANNED_ENTRY_REPAIR_1`. It first compares the deployed v191/v53 bundles to the
-immutable pinned e966badf source and repeats all paused resume gates. With signed
-flat truth, no unresolved orders/incidents and drained holders, it deploys only
-the executor through the normal Supabase CLI, requires v192/v53 and complete
-candidate-source bundle parity, then records the exact deployed source without
-changing generation, sizing, modes, scheduler, financial rows or protection.
-Entries remain paused; failures preserve management and pause entry. No new
-migration is needed. After success, pin the manifest's actual source and service
-versions in release-request.json, run fresh `verify-resume`, and use the normal
-trading-control resume workflow. Observe natural fills with runtime-proof;
-never submit a validation order or waive fresh data/execution evidence.
+PR #335 final head 51e29ca74e40352d0274cd5fc47f2b1bc5066dfc passed all CI, including
+1526/1526 active complete regressions, deterministic/Leader20/entry/capture and
+workflow lint. It fixes confirmed VELVET and SAND durable PLANNED intents which
+were incorrectly classified as UNKNOWN by their own final account check. Both
+old intents are REJECTED, notDispatched=true, without exchange order IDs/fills.
+The temporary dispatch risk view requires an exact own unsent identity and full
+immutable IOC payload match; every other uncertain order and portfolio issue
+remains fail closed. Durable intent/reservation, submit proof, gateway fencing,
+partial IOC settlement and native protection remain intact. Legacy Futures
+routing validation was aligned to the already-deployed coherent depth quote;
+behavioral quote tests continue to prohibit the drifting ticker/depth mixture.
 
-The dispatch exception is a temporary in-memory risk view for exactly one
-matching, unsent PLANNED row created by that fenced request. Signal, client ID,
-symbol, quantity, immutable IOC request and deterministic authority must match.
-Changed, missing, duplicate, acknowledged or submitted rows are refused. All
-other risk orders and portfolio issues remain fail closed; the durable intent,
-reservation, mandatory submit proof, gateway writer fence and partial-IOC native
-protection are preserved. This is prepared source, not deployed v192 evidence.
+Protected normal production repair-entry 37100047133 succeeded at 05:32:09 UTC.
+It verified actual old v191/v53 bytes against immutable e966badf source, repeated
+paused signed/data/authority gates, observed drained holders with flat account
+truth, deployed only executor v192, compared complete downloaded bundles and
+CAS-recorded the deployed source without unpausing or changing generation.
+Executor: 32 files, digest
+3e36217d18437e9cc752e616af5890cfa0acb5866a3a5417b68899f2339c9a7d.
+Generator: 13 files, unchanged digest
+3434c05e38911b7b8425a2a50faee19d70f2c542a4d25d4d714400931c898a66.
+Normal CLI authentication temporarily failed at 05:09, recovered at 05:27 and
+was used for normal workflow dispatch. No credential extraction, approval bypass
+or competing entry authority was used. Paris gateway remains d68f80678c1a29de4fc993c014a58ca54007288b;
+Tokyo clock remains 1bd5e3bf76bfb55f9df749818e325f91b5c6ab02.
 
-At 05:09 UTC normal GitHub CLI workflow access failed HTTP 401 (Bad credentials).
-The attached environment reported no configured secret or outbound identity.
-GitHub connector source review and read-only Supabase access remained available;
-do not extract credentials or replace normal deployment/approval paths. The
-repair must remain unapplied until normal Actions execution access is restored.
+Post-deploy signed proof passed at 05:31:58 UTC: venue/DB positions 0,
+ordinary/protective orders 0, canonical/exchange fills 18 matched, balance
+reconciled, ONE_WAY and no failures. Seven historical CLOSED floating-dust rows
+remain terminal accounting records, not holdings. Final deployed-source resume
+gates passed at 05:32:09 with all 20 candle/volume feature sets complete, 17 full
+24-bucket trade contexts and a strict 24-bucket BTC sensor. EVAA/SYN were warming
+and 龙虾 had an invalid/noncausal bucket; all three were DATA/REJECT. Missing or
+invalid symbol data never borrowed another symbol's data. Current postmaster is
+04:41:14.489719 UTC with completed fenced recovery; earlier restart causes remain
+unproven. Pin these actual service versions/source in release-request.json, repeat
+fresh verify-resume, then use normal trading-control resume. Observe natural
+fills with runtime-proof, never with fabricated validation orders.
 
-Read-only verify-resume 37097801396 attempt 2 passed at 05:22:56 UTC against the
-unchanged deployed v191/v53 bundles and per-app gateway pins. Fresh signed truth
-showed 0 venue/DB positions, 0 ordinary/protective orders, 18 canonical/exchange
-matched fills, reconciled balance, ONE_WAY and no failures. All 20 candle/volume
-feature sets were complete; 19 trade contexts and the BTC sensor had all 24
-buckets. The newly warming IMX context was DATA/REJECT. Seven historical CLOSED
-floating-dust rows remain classified as terminal accounting records, not holdings.
-This passes account/data gates but cannot repair the still-deployed self-blocking
-executor or prove a new real fill. The rejected-row capture metric is per ingest
-batch, not cumulative; the collector also queues closed candle rows whereas the
-reviewed hot ingest contract admits micro rows. Current technical features use
-completed REST candles independently. Do not infer missing dynamic buckets or
-successful entry from that aggregate counter alone.
+At 05:19 the continuous collector had 21 watched/synced trade/candle streams,
+RSS 125394944 bytes, queue 42/1200 and current REST weight 0/100 local cap (2400
+exchange cap). Rejected-row metrics are per ingest batch; the collector queues
+closed candle rows while hot ingest admits micro rows. Technical/volume features
+use completed REST candles independently. A 155s grid at 05:31 had no duplicate
+or future rows; mature symbols retained 30-31 five-second buckets, while PIXEL
+and 龙虾 showed rejoin gaps. Payloads contain no embedded symbol marker; isolation
+is established by per-symbol worker state, stored symbol keys and bounded SQL
+reads, not a claim of matching nonexistent payload markers. No gap was filled.
 
-In 04:51:53-05:20:50 UTC runtime logs, executor/generator had 1757/606 log rows,
-zero provider and GPT dependency events, and the entry/exit provider ledger was
-zero. Executor v191 had 146 requests, no HTTP errors, p50 8662ms/p95 13338.75ms;
-generator v53 had 301 requests, one HTTP 503 at 04:59:20, p50 1310ms/p95 2071ms.
-Later signed readiness and clock observations passed, but this does not prove
-the earlier 503's cause or a five-second end-to-end SLA. The candidate repair's
-34-file service dependency closure also contains no AI provider dependency.
+In runtime window 04:51:53-05:20:50 UTC, executor/generator had 1757/606 log rows,
+zero provider/GPT dependency events and zero entry/exit provider ledger calls.
+Executor v191: 146 requests, 0 errors, p50 8662ms/p95 13338.75ms. Generator v53:
+301 requests, one HTTP 503, p50 1310ms/p95 2071ms. Later readiness passed; these
+observations do not prove the earlier 503 cause or a five-second end-to-end SLA.
+The deployed candidate's 34-file source closure has zero provider dependencies.
+Fresh v192 trading/fill/latency observations are still required after resumption.
+
+The following records describe earlier cutover observations and superseded
+admission states; the current status above takes precedence.
 
 Fresh signed account proof passed at 03:34:15 UTC (37093625505), and all current
 read-only resume gates passed at 03:43:46 UTC (37094127813). The normal
