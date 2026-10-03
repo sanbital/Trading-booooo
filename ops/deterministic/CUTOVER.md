@@ -1,6 +1,6 @@
 # Deterministic engine release and operator cutover
 
-Status observed 2026-10-03 05:48:44 UTC: own-intent dispatch repair DEPLOYED,
+Status observed 2026-10-03 06:09:48 UTC: own-intent dispatch repair DEPLOYED,
 NEW ENTRY ADMISSION RESUMED (`pause_new_entries=false`). Normal trading-control
 37100422079 resumed admission after fresh signed verify-resume 37100318954
 passed at 05:36:18 UTC; DB permission was observed resumed at 05:38:15 UTC. Production executor
@@ -57,6 +57,40 @@ watcher 37100456120 observes natural new fills from 05:37:01 UTC for a bounded
 30-minute window. No new exchange fill has been proved yet; native stop, fill
 attribution and settled-wallet proof for a new position therefore remain pending.
 Do not submit a fabricated validation order to complete the report.
+
+The resumed 30-minute natural-fill watcher 37100456120 completed at 06:08:49 UTC
+with REAL_FILL_NOT_VERIFIED_WITHIN_WINDOW and exit code 3: no new fill was
+available. This is incomplete real-fill proof, not a successful live-fill test.
+At 06:08:36 admission remained resumed, circuit/incidents/unresolved orders and
+open positions were zero, the last cycle completed at 06:08:32, and the entry
+reason was NO_DETERMINISTIC_BUY. The same window exercised zero order commands
+in the observer. New-position HOLD/PROTECT/EXIT, native stop acknowledgements and
+new-fill attribution/accounting remain unverified without an actual position.
+Normal read-only signed account workflow 37101746660 passed at 06:02:46:
+venue/DB positions and ordinary/protective orders zero, 18 canonical/exchange
+fills matched including fees/attribution/accounting, balance reconciled, ONE_WAY,
+no failures. Its scope is DB-known symbols/current holdings and the last 24h;
+other-symbol manual closed history and a held-position margin mode are unproven.
+
+The final 05:37:01-06:08:05 UTC provider search included both function_logs and
+function_edge_logs: executor v192 had 1962 rows and generator v53 967, with zero
+OpenAI/DeepSeek and GPT wait/budget/timeout events; the trading provider ledger
+also remained zero. Actual request measurements: executor 136/0 HTTP errors,
+p50 9283ms, p95 19459.75ms, max 51312ms; generator 328/1 HTTP error, p50 1287ms,
+p95 1876.95ms, max 3920ms. All request status fields were present. Five-second
+scheduler cadence is still not an end-to-end latency SLA.
+
+At 06:08:36, 16/20 current symbols had complete 24-bucket capture. ATH had an
+invalid/noncausal bucket; PHAROS/IMX/Q had incomplete trajectories. BTC's sensor
+was AVAILABLE with 24 buckets and its finite-depth/no-extrapolation contract.
+At 06:09:48, mature current symbols retained 31 five-second rows without gaps;
+PHAROS had a gap and incomplete book rows, IMX/Q had recently started rows and
+incomplete book rows, and returning EVAA had only 19 recent rows. Recent epoch
+membership confirms churn; these observations do not establish the cause of
+every incomplete bucket or make every current symbol trade-ready. At 06:01:26
+the collector had 21 watched/synced streams, queue 21/1200, REST weight 22/100,
+zero last-batch rejects and no degraded archive. Its symbol-specific fail-closed
+gates remain required. No missing interval or absent depth was synthesized.
 
 At 05:19 the continuous collector had 21 watched/synced trade/candle streams,
 RSS 125394944 bytes, queue 42/1200 and current REST weight 0/100 local cap (2400
