@@ -4,8 +4,10 @@ import {readVenue,reconcileHoldings,reconcileTrades} from './preflight-read.mjs'
 import {readReadiness} from './readiness-read.mjs';
 import {GATEWAY_APPS,expectedGatewayCommit} from './gateway-source.mjs';
 import {ENGINE,assertAccountProof,assertActivation,assertResume,protectedSettings} from './release-policy.mjs';
+import {serviceSourceRoot} from './service-source.mjs';
 const project='etaajwpernzrcdrifdnw',sha=process.env.GITHUB_SHA,operation=process.env.CUTOVER_OPERATION;
-if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.GITHUB_REF!=='refs/heads/main'||sha!==process.env.EXPECTED_COMMIT||!/^[a-f0-9]{40}$/.test(sha??'')||!['stage','repair-capture','verify','verify-resume','activate'].includes(operation))throw Error('EXACT_MAIN_RELEASE_REQUIRED');
+if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.GITHUB_REF!=='refs/heads/main'||sha!==process.env.EXPECTED_COMMIT||!/^[a-f0-9]{40}$/.test(sha??'')||!['stage','repair-capture','repair-entry','verify','verify-resume','activate'].includes(operation))throw Error('EXACT_MAIN_RELEASE_REQUIRED');
+if(operation==='repair-entry'&&process.env.ENTRY_REPAIR_CONFIRMATION!=='PLANNED_ENTRY_REPAIR_1')throw Error('ENTRY_REPAIR_EXACT_BASELINE_REQUIRED');
 const request=JSON.parse(fs.readFileSync('ops/deterministic/release-request.json','utf8'));
 const sourceSha=request.staged_source_commit??sha;
 fs.mkdirSync('infra-evidence',{recursive:true});const evidence={source_commit:sha,operation,started_at:new Date().toISOString(),stages:[],order_commands:0};
@@ -79,23 +81,86 @@ async function stage(){
  const manifest={source_commit:sha,staged_at:new Date().toISOString(),functions:await functionList(),migration_sha256:request.migration_sha256,gateway_commits:Object.fromEntries(GATEWAY_APPS.map(app=>[app,expectedGatewayCommit(request,app)])),protected_settings_sha256:createHash('sha256').update(JSON.stringify(protectedSettings(before))).digest('hex')};
  evidence.manifest=manifest;fs.writeFileSync('infra-evidence/deterministic-stage-manifest.json',JSON.stringify(manifest,null,2));save();
 }
-async function verify(){
+async function verify({serviceSourceCommit=sourceSha,versions=request.expected_staged_versions??{}}={}){
  const s=await value(stateSQL);evidence.current=s;if(!s.installed)throw Error('DETERMINISTIC_NOT_INSTALLED');await signedProof(s);
  const listed=await functionList(),rows=listed.functions??listed;
- for(const [slug,version] of Object.entries(request.expected_staged_versions??{})){const f=rows.find(x=>x.slug===slug);if(f?.version!==version||f.verify_jwt!==false||f.status!=='ACTIVE')throw Error('STAGED_FUNCTION_CHANGED');}
- for(const slug of Object.keys(request.expected_versions)){const out=process.env.RUNNER_TEMP+'/verify-'+slug;fs.mkdirSync(out,{recursive:true});run('supabase',['functions','download',slug,'--project-ref',project,'--use-api','--workdir',out]);evidence[slug]=JSON.parse(run('node',['ops/gpt-final-review/verify-bundle-parity.mjs',out,'.',slug]));}
+ for(const [slug,version] of Object.entries(versions)){const f=rows.find(x=>x.slug===slug);if(f?.version!==version||f.verify_jwt!==false||f.status!=='ACTIVE')throw Error('STAGED_FUNCTION_CHANGED');}
+ const sourceRoot=serviceSourceRoot(serviceSourceCommit);
+ for(const slug of Object.keys(request.expected_versions)){const out=process.env.RUNNER_TEMP+'/verify-'+slug;fs.mkdirSync(out,{recursive:true});run('supabase',['functions','download',slug,'--project-ref',project,'--use-api','--workdir',out]);evidence[slug]=JSON.parse(run('node',['ops/gpt-final-review/verify-bundle-parity.mjs',out,sourceRoot,slug]));}
  const readiness=await endpoint('v10-lane-executor',{mode:'ops-readiness'}),diagnostic=await endpoint('v10-lane-signal-generator',{mode:'diagnostic'});evidence.diagnostic=diagnostic;evidence.readiness=readiness;save();
  // The diagnostic is the last endpoint observation. These independent final DB
  // reads do not consume its unchanged ten-second capture deadline serially.
  const [detail,after]=await Promise.all([
  value(`with cutoff as materialized(select clock_timestamp() at) select jsonb_build_object('control',(select to_jsonb(c) from deterministic_control c where singleton),'captures',(select jsonb_agg(jsonb_build_object('symbol',symbol,'status',capture->>'status','buckets',(capture->>'buckets')::int,'reason',capture->>'reason')) from (select m.symbol,deterministic_capture_raw(m.symbol,cutoff.at,null,cutoff.at) capture from leader20_members m join leader20_control c on m.epoch_id=c.epoch_id where c.singleton) contexts),'marketSensor',doa_market_sensor_context_v1('BTCUSDT',cutoff.at),'marketSensorAsOf',floor(extract(epoch from cutoff.at)*1000)::bigint,'unresolvedIncidents',(select count(*)::int from v18_ops_incidents where exchange='binance_futures' and account_scope='futures' and resolved_at is null and status in ('OPEN','VERIFYING')),'providerCalls',(select count(*)::int from ai_call_ledger where created_at>=(select updated_at from deterministic_control where singleton) and purpose in ('ENTRY','EXIT'))) evidence from cutoff`),value(stateSQL)]);
  if(after.postmaster!==s.postmaster||JSON.stringify(s.positions)!==JSON.stringify(after.positions)||JSON.stringify(s.orders)!==JSON.stringify(after.orders))throw Error('EXECUTION_TRUTH_CHANGED_DURING_VERIFY');
- const validation={...after,...detail,diagnostic,readiness,sourceCommit:sourceSha};evidence.validation=validation;save();
+ const validation={...after,...detail,diagnostic,readiness,sourceCommit:serviceSourceCommit};evidence.validation=validation;save();
  // Emit only the existing non-secret diagnostic projection before validation:
  // a failed gate needs the exact observed symbol and watermark, not a guess.
- note('PRE_ACTIVATION_EVIDENCE',{source_commit:sourceSha,release_runner_commit:sha,diagnostic_version:diagnostic.version,diagnostic_members:diagnostic.members,diagnostic_observed_at:diagnostic.observed_at,captures:detail.captures,btc_sensor:{status:detail.marketSensor.status,buckets:detail.marketSensor.buckets,contract:detail.marketSensor.contract,depth_semantics:detail.marketSensor.depth_semantics},provider_calls:detail.providerCalls,phases:diagnostic.results.map(r=>({symbol:r.symbol,phase:r.phase,setup:r.setup,trigger:r.trigger,confirmation:r.confirmation,decision:r.decision,technical:r.technical,capture_end_ms:r.capture_end_ms,reasons:r.reasons,timing:r.timing})),runtime_cycle:after.runtime.last_cycle_completed_at});
- if(operation==='verify-resume'){assertResume(validation);note('PRE_RESUME_GATES_PASSED',{source_commit:sourceSha,release_runner_commit:sha,generation:validation.control.generation,entry_paused:validation.settings.pause_new_entries});}
+ note('PRE_ACTIVATION_EVIDENCE',{source_commit:serviceSourceCommit,release_runner_commit:sha,diagnostic_version:diagnostic.version,diagnostic_members:diagnostic.members,diagnostic_observed_at:diagnostic.observed_at,captures:detail.captures,btc_sensor:{status:detail.marketSensor.status,buckets:detail.marketSensor.buckets,contract:detail.marketSensor.contract,depth_semantics:detail.marketSensor.depth_semantics},provider_calls:detail.providerCalls,phases:diagnostic.results.map(r=>({symbol:r.symbol,phase:r.phase,setup:r.setup,trigger:r.trigger,confirmation:r.confirmation,decision:r.decision,technical:r.technical,capture_end_ms:r.capture_end_ms,reasons:r.reasons,timing:r.timing})),runtime_cycle:after.runtime.last_cycle_completed_at});
+ if(['verify-resume','repair-entry'].includes(operation)){assertResume(validation);note('PRE_RESUME_GATES_PASSED',{source_commit:serviceSourceCommit,release_runner_commit:sha,generation:validation.control.generation,entry_paused:validation.settings.pause_new_entries});}
  else {assertActivation(validation);note('PRE_ACTIVATION_GATES_PASSED',{source_commit:sourceSha,release_runner_commit:sha});}return validation;
+}
+async function repairEntry(){
+ if(process.env.ENTRY_REPAIR_CONFIRMATION!=='PLANNED_ENTRY_REPAIR_1'||sourceSha===sha||
+   request.expected_staged_versions?.['v10-lane-executor']!==191||request.expected_staged_versions?.['v10-lane-signal-generator']!==53)throw Error('ENTRY_REPAIR_EXACT_BASELINE_REQUIRED');
+ // Verify old deployed bytes against their immutable source, rather than the
+ // runner's newly reviewed repair. Every signed account/data/authority gate holds.
+ const before=await verify();
+ const protectedBefore=JSON.stringify(protectedSettings(before));
+ let drained;
+ for(let i=0;i<120;i++){
+  const s=await value(stateSQL);
+  if(s.postmaster!==before.postmaster||s.settings.pause_new_entries!==true||s.positions.some(p=>p.state==='OPEN')||s.orders.length||
+    s.runtime.circuit_open||JSON.stringify(protectedSettings(s))!==protectedBefore)throw Error('ENTRY_REPAIR_TRUTH_CHANGED');
+  if(Object.values(s.drain).every(x=>x===0)){drained=s;break;}
+  await new Promise(r=>setTimeout(r,500));
+ }
+ if(!drained)throw Error('ENTRY_REPAIR_HOLDERS_NOT_DRAINED');
+ await signedProof(drained);
+ const migration=await value("select jsonb_build_object('dynamic',(select count(*) from supabase_migrations.schema_migrations where version='20261002102500'),'capture',(select count(*) from supabase_migrations.schema_migrations where version='20261003001800')) evidence");
+ if(migration.dynamic!==1||migration.capture!==1)throw Error('ENTRY_REPAIR_MIGRATION_BASELINE_CHANGED');
+ const list=await functionList(),rows=list.functions??list;
+ for(const [slug,version] of Object.entries(request.expected_staged_versions)){
+  const f=rows.find(x=>x.slug===slug);if(f?.version!==version||f.status!=='ACTIVE'||f.verify_jwt!==false)throw Error('ENTRY_REPAIR_CONCURRENT_DEPLOY');
+ }
+ note('ENTRY_REPAIR_DRAINED_PAUSED',{postmaster:drained.postmaster,positions:0,unresolved_orders:0,generation:before.control.generation});
+ run('supabase',['functions','deploy','v10-lane-executor','--project-ref',project,'--no-verify-jwt','--use-api']);
+ note('ENTRY_REPAIR_EXECUTOR_DEPLOYED',{source_commit:sha,entries_paused:true});
+ const expected={...request.expected_staged_versions,'v10-lane-executor':192};
+ const deployed=await functionList(),deployedRows=deployed.functions??deployed;
+ for(const [slug,version] of Object.entries(expected)){
+  const f=deployedRows.find(x=>x.slug===slug);if(f?.version!==version||f.status!=='ACTIVE'||f.verify_jwt!==false)throw Error('ENTRY_REPAIR_DEPLOY_VERSION_UNPROVEN');
+  const out=process.env.RUNNER_TEMP+'/entry-repair-'+slug;fs.mkdirSync(out,{recursive:true});
+  run('supabase',['functions','download',slug,'--project-ref',project,'--use-api','--workdir',out]);
+  const parity=JSON.parse(run('node',['ops/gpt-final-review/verify-bundle-parity.mjs',out,'.',slug]));evidence[slug]=parity;
+  note('ENTRY_REPAIR_COMPLETE_BUNDLE_PARITY',{slug,version,file_count:parity.fileCount,bundle_digest:parity.bundleDigest,source_commit:sha});
+ }
+ const after=await value(stateSQL);
+ if(after.postmaster!==before.postmaster||after.settings.pause_new_entries!==true||JSON.stringify(protectedSettings(after))!==protectedBefore)throw Error('ENTRY_REPAIR_PROTECTED_STATE_CHANGED');
+ await signedProof(after);
+ // Metadata follows the successfully downloaded service, without a new authority
+ // generation, scheduler change, entry unpause, incident reset or financial write.
+ await query(`begin;set local lock_timeout='750ms';set local statement_timeout='5000ms';
+ lock table deterministic_control,trading_settings,leader20_control,leader20_batch_control,gpt_final_review_control,v11_long_regime_runtime,v11_long_regime_positions,v11_long_regime_orders,v18_ops_incidents,trading_scheduler_control in share row exclusive mode;
+ do $$ begin
+ if not exists(select 1 from deterministic_control where singleton and enabled and generation=2 and source_commit='${sourceSha}')
+ or not exists(select 1 from trading_settings where id=1 and pause_new_entries and not emergency_liquidation and not manual_intervention_required)
+ or not exists(select 1 from leader20_control where singleton and active_strategy='${ENGINE}' and watch_limit=20)
+ or exists(select 1 from leader20_batch_control where singleton and enabled)
+ or exists(select 1 from gpt_final_review_control where singleton and mode<>'OFF')
+ or not exists(select 1 from v11_long_regime_runtime where singleton and not circuit_open and protection_health='FLAT')
+ or exists(select 1 from v11_long_regime_positions where state='OPEN')
+ or exists(select 1 from v11_long_regime_orders where state in ('PLANNED','DISPATCHED','SUBMITTING','PARTIALLY_FILLED','UNKNOWN','RECONCILIATION_PENDING','RECONCILIATION_FAILED'))
+ or exists(select 1 from v18_ops_incidents where exchange='binance_futures' and account_scope='futures' and resolved_at is null and status in ('OPEN','VERIFYING'))
+ or pg_postmaster_start_time()<>'${before.postmaster}'::timestamptz
+ or not exists(select 1 from trading_scheduler_control where scheduler_key='trading-production' and enabled and recovery_complete and recovered_postmaster_at=pg_postmaster_start_time() and heartbeat_at>clock_timestamp()-interval '10 seconds' and expires_at>clock_timestamp())
+ then raise exception 'ENTRY_REPAIR_SOURCE_CAS_FAILED';end if;
+ end $$;
+ update deterministic_control set source_commit='${sha}',updated_at=clock_timestamp() where singleton;
+ commit;`);
+ note('ENTRY_REPAIR_SOURCE_RECORDED_ENTRIES_PAUSED',{source_commit:sha,generation:2,expected_versions:expected});
+ await verify({serviceSourceCommit:sha,versions:expected});
+ fs.writeFileSync('infra-evidence/deterministic-entry-repair-manifest.json',JSON.stringify({source_commit:sha,expected_staged_versions:expected,entries_paused:true,generation:2,utc:new Date().toISOString()},null,2));
 }
 async function repairCapture(){
  const s=await value(stateSQL),ctl=await value("select to_jsonb(c) evidence from deterministic_control c where singleton");evidence.current=s;save();
@@ -132,8 +197,8 @@ async function activate(v){
  commit;`;
  await query(sql);note('DETERMINISTIC_AUTHORITY_ENABLED',{source_commit:sourceSha,release_runner_commit:sha});
 }
-try{save();if(operation==='stage')await stage();else if(operation==='repair-capture')await repairCapture();else{const v=await verify();if(operation==='activate')await activate(v);}note('OPERATION_COMPLETED',{operation});}
+try{save();if(operation==='stage')await stage();else if(operation==='repair-capture')await repairCapture();else if(operation==='repair-entry')await repairEntry();else{const v=await verify();if(operation==='activate')await activate(v);}note('OPERATION_COMPLETED',{operation});}
 catch(e){evidence.error=/^[A-Z0-9_]+$/.test(e.message)?e.message:'RELEASE_FAILED';save();
  // Never restore AI authority or roll a migrated execution proof backward.
- if(!['verify','verify-resume'].includes(operation)){try{await query(pauseSQL);if((await value(stateSQL)).installed)await query('update deterministic_control set enabled=false,updated_at=clock_timestamp() where singleton;');note('ENTRY_PAUSED_AFTER_FAILURE');}catch{note('PAUSE_WRITE_UNCONFIRMED');}}
+ if(!['verify','verify-resume'].includes(operation)){try{await query(pauseSQL);if(operation!=='repair-entry'&&(await value(stateSQL)).installed)await query('update deterministic_control set enabled=false,updated_at=clock_timestamp() where singleton;');note('ENTRY_PAUSED_AFTER_FAILURE',{management_authority_preserved:operation==='repair-entry'});}catch{note('PAUSE_WRITE_UNCONFIRMED');}}
  console.error(JSON.stringify({error:evidence.error,entry_activation_completed:false,order_commands:0}));process.exitCode=1;}

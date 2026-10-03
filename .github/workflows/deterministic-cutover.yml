@@ -8,7 +8,11 @@ on:
       operation:
         type: choice
         required: true
-        options: [stage, repair-capture, verify, verify-resume, activate]
+        options: [stage, repair-capture, repair-entry, verify, verify-resume, activate]
+      entry_repair_confirmation:
+        type: string
+        required: false
+        description: 'repair-entry only: PLANNED_ENTRY_REPAIR_1'
 permissions:
   contents: read
 concurrency:
@@ -47,6 +51,7 @@ jobs:
         env:
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
           CUTOVER_OPERATION: ${{ inputs.operation }}
+          ENTRY_REPAIR_CONFIRMATION: ${{ inputs.entry_repair_confirmation }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}

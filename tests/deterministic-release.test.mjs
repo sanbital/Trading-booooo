@@ -5,8 +5,36 @@ import {classifyMarket} from '../supabase/functions/_shared/deterministic/market
 import {scenario} from '../test-support/deterministic/fixtures.mjs';
 import {readReadiness} from '../ops/deterministic/readiness-read.mjs';
 import {expectedGatewayCommit} from '../ops/deterministic/gateway-source.mjs';
+import {serviceSourceRoot} from '../ops/deterministic/service-source.mjs';
+import os from 'node:os';import path from 'node:path';
 const root=new URL('../',import.meta.url);
 const readinessRequest={project:'etaajwpernzrcdrifdnw',slug:'v10-lane-signal-generator',token:'fixture-only',body:{mode:'diagnostic'},region:'ap-northeast-1'};
+test('deployed source parity uses the pinned commit even when the runner has repaired service bytes',()=>{
+ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'source-pin-test-'));
+ const git=args=>{const r=spawnSync('git',args,{cwd:temp,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout.trim();};
+ try{
+  git(['init']);git(['config','user.email','fixture@example.invalid']);git(['config','user.name','Fixture']);
+  fs.mkdirSync(path.join(temp,'supabase/functions/executor'),{recursive:true});const file=path.join(temp,'supabase/functions/executor/index.ts');
+  fs.writeFileSync(file,'immutable deployed source');git(['add','.']);git(['commit','-m','deployed']);const pin=git(['rev-parse','HEAD']);
+  fs.writeFileSync(file,'subsequent runner repair');
+  const source=serviceSourceRoot(pin,{cwd:temp,temp});assert.equal(fs.readFileSync(path.join(source,'supabase/functions/executor/index.ts'),'utf8'),'immutable deployed source');
+  assert.equal(fs.readFileSync(file,'utf8'),'subsequent runner repair');
+  assert.throws(()=>serviceSourceRoot('main',{cwd:temp,temp}),/SERVICE_SOURCE_PIN_REQUIRED/);
+  assert.throws(()=>serviceSourceRoot('f'.repeat(40),{cwd:temp,temp}),/SERVICE_SOURCE_COMMIT_UNAVAILABLE/);
+ }finally{fs.rmSync(temp,{recursive:true,force:true});}
+});
+test('source-only entry repair rejects branch and confirmation drift before any deploy',()=>{
+ const env={PATH:process.env.PATH,GITHUB_REPOSITORY:'sanbital/Trading-booooo',GITHUB_REF:'refs/heads/main',
+  GITHUB_SHA:'a'.repeat(40),EXPECTED_COMMIT:'a'.repeat(40),CUTOVER_OPERATION:'repair-entry',RUNNER_TEMP:os.tmpdir()};
+ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'entry-repair-test-'));
+ try{
+  for(const rel of ['ops/deterministic','ops/execution-infra'])fs.mkdirSync(path.join(temp,rel),{recursive:true});
+  for(const file of ['ops/deterministic/release-request.json','ops/execution-infra/evidence-public.pem'])fs.copyFileSync(new URL(file,root),path.join(temp,file));
+  const result=spawnSync(process.execPath,[new URL('../ops/deterministic/release.mjs',import.meta.url).pathname],{cwd:temp,encoding:'utf8',env});
+  assert.notEqual(result.status,0);assert.match(result.stderr,/ENTRY_REPAIR_EXACT_BASELINE_REQUIRED/);
+  assert.doesNotMatch(result.stdout,/ENTRY_REPAIR_EXECUTOR_DEPLOYED|ENTRY_REPAIR_SOURCE_RECORDED/);
+ }finally{fs.rmSync(temp,{recursive:true,force:true});}
+});
 test('independent gateway builds require complete exact reviewed pins without clock redeployment',()=>{
  const paris='a'.repeat(40),tokyo='b'.repeat(40),request={gateway_commit:'c'.repeat(40),gateway_commits:{'trading-booooo':paris,'trading-booooo-sanbital-gateway':tokyo}};
  assert.equal(expectedGatewayCommit(request,'trading-booooo'),paris);assert.equal(expectedGatewayCommit(request,'trading-booooo-sanbital-gateway'),tokyo);
