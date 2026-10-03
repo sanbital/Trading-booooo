@@ -1,7 +1,8 @@
 # Deterministic engine release and operator cutover
 
-Status observed 2026-10-03 01:26:23 UTC: NEW ENTRIES PAUSED by the normal
-trading-control workflow 37085659479 (`pause_new_entries=true`). Deterministic
+Status observed 2026-10-03 04:18:52 UTC: NEW ENTRIES PAUSED by the normal
+trading-control workflow 37095061226 (`pause_new_entries=true`) for the Futures
+quote snapshot repair. Deterministic
 management and reconciliation remain installed and running. Deterministic control
 is enabled,
 generation 2, source e966badf791b641801dabac3ae282ac673c04819 (executor v191,
@@ -12,6 +13,25 @@ drives the new generator/executor. Entry admission additionally requires the
 operator pause to be cleared; it currently is not. This is an observed authority
 switch followed by a safety pause, not a claim that an order filled or that
 strategy returns improved.
+
+Fresh signed account proof passed at 03:34:15 UTC (37093625505), and all current
+read-only resume gates passed at 03:43:46 UTC (37094127813). The normal
+trading-control workflow 37094198341 resumed admission at 03:44 UTC. Through the
+subsequent repair pause there were no new fills or holdings; natural BUY seeds
+were rejected by current pre-order revalidation. One signed AXS quote at
+03:57:44 UTC proved a ticker/depth top mismatch; it does not prove that every
+rejection had that cause.
+
+Protected rolling quote repair 37096066787 succeeded at 04:18:52 UTC. Before
+rollout its fresh signed proof showed 0 venue/DB positions, 0 ordinary/protective
+orders, 18 matched attributed ACCOUNTED fills, ONE_WAY, matched balances and no
+failures. Paris now runs d68f80678c1a29de4fc993c014a58ca54007288b; Tokyo remains
+1bd5e3bf76bfb55f9df749818e325f91b5c6ab02. Both mandatory writer fences and the
+original roles were observed after deployment. No Edge service, migration,
+credential, scheduler flag, sizing or native-stop policy changed in this repair.
+Use complete per-app reviewed gateway pins for subsequent signed reads and
+resume gates: a missing/malformed pin must fail, never borrow the other app's
+source. Fresh post-deployment gates and natural real-fill proof are still required.
 
 Release evidence:
 - Stage/migration/source parity: workflow 37079937802.
