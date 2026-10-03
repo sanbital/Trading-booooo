@@ -27,6 +27,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Validate secrets and confirmation
         shell: bash
         env:
@@ -72,12 +78,16 @@ jobs:
             emergency_liquidate) body="{\"action\":\"control\",\"pause_new_entries\":true,\"emergency_liquidation\":true,\"confirmation\":\"${CONFIRMATION}\",\"control_source\":\"GITHUB_ACTIONS\",\"control_reason\":\"EMERGENCY_LIQUIDATION\"}" ;;
             *) echo "unsupported command"; exit 1 ;;
           esac
+          control_response_file="$(mktemp)"
+          trap 'rm -f "$control_response_file"' EXIT
           curl --fail-with-body --retry 2 --retry-delay 3 --max-time 60 \
             -X POST \
             -H "content-type: application/json" \
             -H "x-autotrade-token: ${autotrade_token}" \
             -d "$body" \
-            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-autotrader" | jq .
+            -o "$control_response_file" \
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/market-autotrader"
+          node ops/deterministic/control-result.mjs "$COMMAND" "$control_response_file"
           if [ "$COMMAND" = "emergency_liquidate" ]; then
             curl --fail-with-body --retry 2 --retry-delay 3 --max-time 60 \
               -X POST \

@@ -1,5 +1,30 @@
 # Deterministic engine release and operator cutover
 
+Status observed 2026-10-03 11:01:54 UTC: PRODUCTION DATABASE/REST UNAVAILABLE.
+Independent platform workflow 37118244156 observed db/db_postgres_user/rest
+UNHEALTHY, metrics HTTP 500 and a 15002ms SQL timeout. Two management SQL reads,
+including a minimal runtime read, timed out. Tokyo's process heartbeat continued
+at 11:01, but its last DB clock heartbeat was 10:07:28 and leadership was false
+with DEPENDENCY_UNAVAILABLE. Generator/executor logs stop around 10:08. This is
+an infrastructure block before current entry classification; the earlier
+NO_DETERMINISTIC_BUY observation does not describe this outage.
+
+Normal pause workflow 37118239081 reported HTTP/workflow success, but its
+endpoint returned DB_DEGRADED and LOAD_SETTINGS_DB:Signal timed out. The pause
+was not confirmed. Trading-control now rejects that envelope and requires the
+requested pause permission in the returned settings. Signed preflight
+37118241681 failed before any venue read, so current positions, protective
+orders, fills and DB reconciliation must not be inferred from the earlier flat
+account. The reviewed venue-evidence operation reads portfolio/open orders/mode
+through the existing signed gateway without a DB read, emits encrypted raw
+evidence and a non-secret summary, and grants no entry authority. It does not
+substitute venue-only proof for DB reconciliation or restart/restore the DB.
+Do not resume entries while execution truth or postmaster recovery is unproven.
+Preserve native exchange protection and existing financial history; no duplicate
+stop/close, forced liquidation, provider fallback or key extraction is allowed.
+
+The following status is the last verified healthy cutover before that outage.
+
 Status observed 2026-10-03 06:09:48 UTC: own-intent dispatch repair DEPLOYED,
 NEW ENTRY ADMISSION RESUMED (`pause_new_entries=false`). Normal trading-control
 37100422079 resumed admission after fresh signed verify-resume 37100318954
