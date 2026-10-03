@@ -3,7 +3,29 @@ import {spawnSync} from 'node:child_process';
 import {ENGINE,assertAccountProof,assertActivation} from '../ops/deterministic/release-policy.mjs';
 import {classifyMarket} from '../supabase/functions/_shared/deterministic/market-state.mjs';
 import {scenario} from '../test-support/deterministic/fixtures.mjs';
+import {readReadiness} from '../ops/deterministic/readiness-read.mjs';
 const root=new URL('../',import.meta.url);
+const readinessRequest={project:'etaajwpernzrcdrifdnw',slug:'v10-lane-signal-generator',token:'fixture-only',body:{mode:'diagnostic'},region:'ap-northeast-1'};
+test('readiness observes the production region and preserves endpoint authentication',async()=>{
+ let requests=0;
+ const result=await readReadiness({...readinessRequest,fetchImpl:async(url,init)=>{
+  requests++;assert.equal(url,'https://etaajwpernzrcdrifdnw.supabase.co/functions/v1/v10-lane-signal-generator');
+  assert.equal(init.headers['x-region'],'ap-northeast-1');assert.equal(init.headers['x-v10-lane-token'],'fixture-only');assert.deepEqual(JSON.parse(init.body),{mode:'diagnostic'});
+  return new Response(JSON.stringify({ok:true,members:20}),{headers:{'x-sb-edge-region':'ap-northeast-1'}});
+ }});
+ assert.equal(result.members,20);assert.equal(requests,1);
+});
+test('readiness refuses missing or mismatched regions and never retries another location',async()=>{
+ for(const [region,status,message] of [['us-east-2',200,'READINESS_REGION_CHANGED'],[null,200,'READINESS_REGION_CHANGED'],['ap-northeast-1',503,'READINESS_ENDPOINT_HTTP_503']]){
+  let requests=0;const headers=region?{'x-sb-edge-region':region}:{};
+  await assert.rejects(readReadiness({...readinessRequest,fetchImpl:async()=>{requests++;return new Response('{"ok":true}',{status,headers});}}),new RegExp(message));assert.equal(requests,1);
+ }
+});
+test('readiness routing cannot dispatch a clock, order or unsupported regional request',async()=>{
+ let requests=0;const fetchImpl=async()=>{requests++;throw Error('UNEXPECTED_REQUEST');};
+ for(const change of [{body:{mode:'run'}},{body:{mode:'diagnostic',action:'BUY'}},{slug:'market-autotrader'},{region:'us-east-2'},{project:'other'}])await assert.rejects(readReadiness({...readinessRequest,...change,fetchImpl}),/READINESS_REQUEST_NOT_ALLOWED/);
+ assert.equal(requests,0);
+});
 function sensor(asOf){
  const end=asOf-5000,points=Array.from({length:24},(_,i)=>{const t=end-(23-i)*5000,candle=Math.floor((t-1000)/60000)*60000;
   return {bucket_complete:true,book_complete:true,trade_sequence_complete:true,flow_causal:true,btc_candle_complete:true,
