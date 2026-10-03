@@ -1,7 +1,9 @@
 # Deterministic engine release and operator cutover
 
-Status observed 2026-10-03 05:32:48 UTC: own-intent dispatch repair DEPLOYED,
-NEW ENTRY ADMISSION STILL PAUSED (`pause_new_entries=true`). Production executor
+Status observed 2026-10-03 05:48:44 UTC: own-intent dispatch repair DEPLOYED,
+NEW ENTRY ADMISSION RESUMED (`pause_new_entries=false`). Normal trading-control
+37100422079 resumed admission after fresh signed verify-resume 37100318954
+passed at 05:36:18 UTC; DB permission was observed resumed at 05:38:15 UTC. Production executor
 v192 is ACTIVE at source 5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4; generator v53
 was not redeployed and its complete bundle remains unchanged. Deterministic
 control is enabled, generation 2, source 5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4.
@@ -47,9 +49,14 @@ gates passed at 05:32:09 with all 20 candle/volume feature sets complete, 17 ful
 and 龙虾 had an invalid/noncausal bucket; all three were DATA/REJECT. Missing or
 invalid symbol data never borrowed another symbol's data. Current postmaster is
 04:41:14.489719 UTC with completed fenced recovery; earlier restart causes remain
-unproven. Pin these actual service versions/source in release-request.json, repeat
-fresh verify-resume, then use normal trading-control resume. Observe natural
-fills with runtime-proof, never with fabricated validation orders.
+unproven. PR #336 pins the actual v192/v53 source and versions; main
+24bc3499b26b6ec8f850241df5d1cddbedeee284 passed the subsequent fresh resume gates.
+At 05:36:15, all 20 technical feature sets were complete, 19 trade contexts and
+the BTC sensor had 24 buckets, and warming RESOLV was DATA/REJECT. Read-only
+watcher 37100456120 observes natural new fills from 05:37:01 UTC for a bounded
+30-minute window. No new exchange fill has been proved yet; native stop, fill
+attribution and settled-wallet proof for a new position therefore remain pending.
+Do not submit a fabricated validation order to complete the report.
 
 At 05:19 the continuous collector had 21 watched/synced trade/candle streams,
 RSS 125394944 bytes, queue 42/1200 and current REST weight 0/100 local cap (2400
@@ -67,7 +74,32 @@ Executor v191: 146 requests, 0 errors, p50 8662ms/p95 13338.75ms. Generator v53:
 301 requests, one HTTP 503, p50 1310ms/p95 2071ms. Later readiness passed; these
 observations do not prove the earlier 503 cause or a five-second end-to-end SLA.
 The deployed candidate's 34-file source closure has zero provider dependencies.
-Fresh v192 trading/fill/latency observations are still required after resumption.
+After resumption, the exact v192 dispatch path persisted NIGHT intent
+650cbdcb-0c5b-47b8-bec6-acbcd4d9bf94 and passed the scoped own-intent/fresh risk
+checks. Latest market validation then refused CURRENT_THESIS_INVALID, with
+notDispatched=true and no venue order ID. This is actual runtime wiring evidence,
+not an exchange fill. Signed quote observation 37100477387 had six healthy
+independent REST snapshots with book ages 53-59ms; CT's finite 100 levels did not
+cover 25bp, and no depth extrapolation was used. Top20 storage at 05:44:26 had 20
+unique symbols ranked by descending 24h change. Of 1523 live entry-state audits,
+none granted BUY/WAIT with incomplete data or technical features.
+
+In the post-resume 05:37:01-05:43:06 UTC log window, actual executor v192/generator
+v53 had 327/119 log rows, zero OpenAI/DeepSeek/provider or GPT wait/budget/timeout
+events and zero trading provider ledger calls. Their deployed 34-file source
+closure also contains no provider dependency. Executor: 18 requests/0 HTTP
+errors, p50 10240ms/p95 46830.8ms/max 51312ms. Generator: 61 requests/1 HTTP
+error, p50 1334ms/p95 1878ms. These bounded measurements do not establish a
+five-second end-to-end SLA. At 05:49:27 SQL showed 14/90 DB connections, no temp
+bytes or deadlocks; live micro storage was 5128192 bytes with recent autovacuum.
+Database interruption and transient 503 causes remain unproven. Native safety,
+reconciliation and strict stale-data/execution fences must remain active.
+
+Recovery uses normal trading-control pause_new_entries with PAUSE_NOW, preserving
+deterministic management/reconciliation and existing native protection. Reconcile
+any uncertain order by its exact durable identity before admitting more exposure;
+never duplicate a stop/close, force-close for cutover, restore AI authority or
+roll accounting proof backward.
 
 The following records describe earlier cutover observations and superseded
 admission states; the current status above takes precedence.
