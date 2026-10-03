@@ -8,7 +8,8 @@ import {createHostAccountScopes} from './account-host-scopes.mjs';
 import {currentExecutionContext,currentAccountOwner,contextualOwners,contextualState,executionContextHeaders,assertActiveExecutionRequest} from './account-scope-context.mjs';
 import {ENGINE,decidePosition} from '../_shared/deterministic/market-state.mjs';
 import {PROFILE} from '../_shared/deterministic/calibration.mjs';
-import {control,currentMarket,requireEntryAuthority,isLeader20,detachAudit,validateOrder} from '../_shared/deterministic/runtime.mjs';
+import {control,currentMarket,requireEntryAuthority,isLeader20,detachAudit,validateOrder,validatePreparedOrder} from '../_shared/deterministic/runtime.mjs';
+import {entryEvidence,cancellationCategory} from '../_shared/deterministic/entry-evidence.mjs';
 import {normalizeEntryBook,gatewayTakerFeeRate,supportedFuturesMode} from '../_shared/deterministic/book.mjs';
 import {plannedEntryRiskView} from '../_shared/deterministic/planned-entry-risk.mjs';
 import {EXIT_AUTHORITY_VERSION,EXIT_CLASS,exitClass,hardSafetyState,approvedProtection,assertExitAuthority,positionGeneration} from '../_shared/deterministic/exit-authority.mjs';
@@ -462,18 +463,18 @@ function rec(v){return v&&typeof v==="object"&&!Array.isArray(v)?v:{}}
 function res(s,b){return new Response(JSON.stringify(b),{status:s,headers:{"content-type":"application/json","cache-control":"no-store"}})}
 async function auth(db,req){return authenticateInternalToken({db,request:req,name:'v10-lane-executor',header:'x-v10-executor-token'});}
 function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
-  return async(cmd,timeout=20000)=>{
+  return async(cmd,timeout=20000,{beforeTransport=null}={})=>{
     const cycle=cycleBudgets.get(db),cost=cmd.action==="v17_stop_fill"?3:["v18_open_orders","trade_history","order_history"].includes(cmd.action)?2:1;
     // A post-fill capacity refresh is a read-only safety barrier, not another trading
     // attempt. Give that one barrier its own tiny budget so the previous fill cannot
     // consume the very read required to prove whether another slot is safe.
-    const write=["create_order","cancel_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action);
+    const write=["create_order","cancel_order","v17_create_stop","v17_cancel_stop","prepare_entry"].includes(cmd.action);
     let left;
     try{
       const cycleLeft=!allowCycleBudgetExceeded&&cycle&&cycle!==budget?cycle.take(cost):Infinity;
       left=Math.min(budget.take(cost),cycleLeft);
       if(shortAccountWriter(db)&&write&&!currentAccountOwner(db))throw Error('ACCOUNT_WRITER_CONTEXT_REQUIRED');
-      await verifyExecutionLease(db,allowCycleBudgetExceeded);
+      if(!beforeTransport)await verifyExecutionLease(db,allowCycleBudgetExceeded);
       if(allowCycleBudgetExceeded&&write)throw Error("CAPACITY_REFRESH_WRITE_FORBIDDEN");
     }catch(error){
       // Never stamp the verification AFTER transport as a pre-send refusal.
@@ -490,6 +491,7 @@ function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
         c={owner:l.data.owner,fence:Number(l.data.fence)};
       }
       outgoing={...cmd,writer:{account_key:'binance_futures:futures',owner:c.owner,fence:c.fence,execution_key:await hashJson(cmd)}};
+      if(beforeTransport){const proof=await beforeTransport();if(proof?.owner!==c.owner||Number(proof?.fence)!==c.fence||!proof?.execution_key)throw Object.assign(Error('SUBMISSION_WRITER_BINDING_INVALID'),{exchangeSubmissionAttempted:false,submissionPhase:'PRE_SEND'});outgoing.writer.execution_key=proof.execution_key;}
     }
     let coalescer=analysisGatewayReads.get(db);
     if(!coalescer){coalescer=createAnalysisReadCoalescer();analysisGatewayReads.set(db,coalescer);}
@@ -577,7 +579,7 @@ function qty(p){return Math.abs(N(p?.quantity??p?.positionAmt??p?.position_amoun
 async function market(db){const o=await db.from("market_regime_observations").select("id,observed_at,predicted_regime,bull_score,confidence").eq("model_revision",OBSERVER_REVISION).eq("trading_influence",true).order("observed_at",{ascending:false}).limit(1).maybeSingle();if(o.error)throw new Error(`OBSERVER:${o.error.message}`);const age=o.data?Date.now()-Date.parse(o.data.observed_at):Infinity;return{route:age<=12*60000?route(o.data?.predicted_regime):"CASH",ageMs:age,observer:o.data||null}}
 function eq(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0}
 function route(v){const x=String(v||"").toUpperCase();return x==="RISK_OFF"?"BEAR":x==="NEUTRAL"?"RANGE":x==="BULL"||x==="STRONG_BULL"?"BULL":"CASH"}
-async function gateway(cmd,tm=20000){if(!GW||!SEC)throw new Error("GATEWAY_CONFIG");const x=["create_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action)?{...cmd,engine_version:PROTOCOL}:cmd,raw=JSON.stringify({exchange:"binance_futures",...x}),ts=String(Date.now()),nonce=crypto.randomUUID(),sig=await hmac(SEC,`${ts}\n${nonce}\n${raw}`),c=new AbortController,t=setTimeout(()=>c.abort(),tm);try{const r=await fetch(`${GW}/v1/command`,{method:"POST",signal:c.signal,headers:{"content-type":"application/json","x-gateway-ts":ts,"x-gateway-nonce":nonce,"x-gateway-signature":sig},body:raw}),txt=await r.text();let d;try{d=txt?JSON.parse(txt):null}catch{d={raw:txt}}if(!r.ok||!d?.ok)throw new Error(`GW_${r.status}:${d?.error||txt}`);return d.result}finally{clearTimeout(t)}}
+async function gateway(cmd,tm=20000){if(!GW||!SEC)throw new Error("GATEWAY_CONFIG");const x=["create_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action)?{...cmd,engine_version:PROTOCOL}:cmd,raw=JSON.stringify({exchange:"binance_futures",...x}),ts=String(Date.now()),nonce=crypto.randomUUID(),sig=await hmac(SEC,`${ts}\n${nonce}\n${raw}`),c=new AbortController,t=setTimeout(()=>c.abort(),tm);try{const r=await fetch(`${GW}/v1/command`,{method:"POST",signal:c.signal,headers:{"content-type":"application/json","x-gateway-ts":ts,"x-gateway-nonce":nonce,"x-gateway-signature":sig},body:raw}),txt=await r.text();let d;try{d=txt?JSON.parse(txt):null}catch{d={raw:txt}}if(!r.ok||!d?.ok)throw Object.assign(new Error(`GW_${r.status}:${d?.error||txt}`),d?.submissionPhase?{submissionPhase:d.submissionPhase,exchangeSubmissionAttempted:d.exchangeSubmissionAttempted,writerEvidence:d.writerEvidence,writerValidation:d.writerValidation}:{});return d.result}finally{clearTimeout(t)}}
 async function hmac(s,m){const k=await crypto.subtle.importKey("raw",new TextEncoder().encode(s),{name:"HMAC",hash:"SHA-256"},false,["sign"]),g=await crypto.subtle.sign("HMAC",k,new TextEncoder().encode(m));return[...new Uint8Array(g)].map(x=>x.toString(16).padStart(2,"0")).join("")}
 function capacityRefreshGateway(db){
   return scopedGateway(db,createBudget(CAPACITY_REFRESH_BUDGET),{allowCycleBudgetExceeded:true});
@@ -828,17 +830,22 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
       const reason=authority?.reason??"IOC_DISPATCH_AUTHORITY_MISSING";
       const wr=await db.from("v11_long_regime_orders").update({state:"REJECTED",reject_reason:reason,
         response_payload:{notDispatched:true,entryLatency:{...payload.entry_latency},
-          dispatchAuthority:{allowed:false,reason}},updated_at:new Date().toISOString()}).eq("id",oi.data.id);
+          dispatchAuthority:{allowed:false,reason},entryEvidence:{...attempt.evidence,order_id:oi.data.id,reason,category:cancellationCategory(reason,attempt.evidence?.latest)}},updated_at:new Date().toISOString()}).eq("id",oi.data.id);
       if(wr.error)throw Error("IOC_NO_DISPATCH_WRITE");
       return {blocked:true,reason,oi:oi.data};
     }
-    const submit=await db.rpc('deterministic_begin_submit',{p_order_id:oi.data.id,p_owner:leaseOwners.get(db),p_state:authority.deterministic});
-    if(submit.error||submit.data?.updated!==true||String(submit.data?.order_id)!==String(oi.data.id))throw Object.assign(Error('DETERMINISTIC_SUBMIT_FENCE:'+String(submit.error?.code??submit.data?.reason??'ACKNOWLEDGEMENT_MISSING')),{exchangeSubmissionAttempted:false,submissionPhase:'PRE_SEND'});
+    const beforeTransport=async()=>{
+      payload.entry_latency.submission_started=Date.now();
+      const submit=await db.rpc('deterministic_begin_submit',{p_order_id:oi.data.id,p_owner:leaseOwners.get(db),p_state:authority.deterministic});
+      payload.entry_latency.submission_completed=Date.now();
+      if(submit.error||submit.data?.updated!==true||String(submit.data?.order_id)!==String(oi.data.id))throw Object.assign(Error('DETERMINISTIC_SUBMIT_FENCE:'+String(submit.error?.code??submit.data?.reason??'ACKNOWLEDGEMENT_MISSING')),{exchangeSubmissionAttempted:false,submissionPhase:'PRE_SEND'});
+      attempt.evidence={...attempt.evidence,submission:submit.data.proof};return submit.data.proof;
+    };
     const sentAt=Date.now();
-    attempt.dispatched=true;payload.entry_latency.order_sent=sentAt;const initialRaw=await gw(rp),respondedAt=Date.now(),initial=fill(initialRaw);payload.entry_latency.exchange_ack=respondedAt;
+    attempt.dispatched=true;payload.entry_latency.order_sent=sentAt;const initialRaw=await gw(rp,12000,{beforeTransport}),respondedAt=Date.now(),initial=fill(initialRaw);payload.entry_latency.exchange_ack=respondedAt;
     await verifyExecutionLease(db);
     const pending=await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_PENDING",
-      exchange_order_id:initial.exchangeOrderId,response_payload:{...initialRaw,v22ImmediateEntryQueryPending:true,entryLatency:{...payload.entry_latency}},
+      exchange_order_id:initial.exchangeOrderId,response_payload:{...oi.data.response_payload,...initialRaw,v22ImmediateEntryQueryPending:true,entryLatency:{...payload.entry_latency},entryEvidence:attempt.evidence},
       reject_reason:`IOC_CONFIRMING:${initial.status}`,updated_at:new Date().toISOString()}).eq("id",oi.data.id);
     if(pending.error)throw Error("ENTRY_PENDING_WRITE");
     // The create response is acknowledgement evidence, never final settlement truth.
@@ -851,16 +858,16 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
       sentAt,respondedAt,latencyMs:respondedAt-sentAt,finalStatus:receipt?.status??null,executedQty:receipt?.quantity??null,
       avgPrice:receipt?.price??null,requestedQty:quantity,limitPrice,
       entryLatency:{...payload.entry_latency}};
-    return {oi:oi.data,rp,id,receipt,initial,evidence,settledRaw:{...finalRaw,v22EntryFinality:evidence}};
+    return {oi:oi.data,rp,id,receipt,initial,evidence,settledRaw:{...finalRaw,v22EntryFinality:evidence,entryEvidence:attempt.evidence,writer_evidence:initialRaw.writer_evidence}};
   }catch(error){
     if(classifyFailure(error).fatal)throw error;
     const msg=String(error?.message??error);await verifyExecutionLease(db);
     if(error?.submissionPhase==='PRE_SEND'&&error.exchangeSubmissionAttempted===false){
       attempt.dispatched=false;
-      const stopped=await db.from('v11_long_regime_orders').update({state:'REJECTED',reject_reason:msg,response_payload:{notDispatched:true,submissionPhase:'PRE_SEND',exchangeSubmissionAttempted:false},updated_at:new Date().toISOString()}).eq('id',oi.data.id);
+      const stopped=await db.from('v11_long_regime_orders').update({state:'REJECTED',reject_reason:msg,response_payload:{...oi.data.response_payload,notDispatched:true,submissionPhase:'PRE_SEND',exchangeSubmissionAttempted:false,entryEvidence:{...attempt.evidence,order_id:oi.data.id,reason:msg,category:cancellationCategory(msg)},writerEvidence:error.writerEvidence,writerValidation:error.writerValidation},updated_at:new Date().toISOString()}).eq('id',oi.data.id);
       if(stopped.error)throw Error('PRE_SEND_REFUSAL_WRITE');return {blocked:true,reason:msg,oi:oi.data};
     }
-    await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_FAILED",reject_reason:msg.slice(0,500),
+    await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_FAILED",reject_reason:msg.slice(0,500),response_payload:{...oi.data.response_payload,entryEvidence:{...attempt.evidence,order_id:oi.data.id,phase:'RESULT_UNCERTAIN',reason:msg},writerEvidence:error.writerEvidence},
       updated_at:new Date().toISOString()}).eq("id",oi.data.id);
     await db.from("v11_long_regime_signals").update({status:"ORDERED",updated_at:new Date().toISOString()}).eq("id",s.id);
     await circuit(db,`BULL_ENTRY_AMBIGUOUS:${msg}`,"KNOWN_ORDER_PENDING_RECONCILIATION",
@@ -1050,27 +1057,25 @@ async function manageLeader(db,p,ctx={}){
  return {action:decision.action,reason:decision.reason,position:nativeStop?.position??write.data,nativeStop,state};
 }
 async function openBull(db,s,openPositions,manual=null,attempt={},managementFailures=[]){
- if(shortAccountWriter(db)&&!currentAccountOwner(db)){
-  await currentMarket(db,s.symbol,{return24h:s.features?.deterministic?.return24h,rank:s.features?.deterministic?.rank});
-  return withAccountMutation(db,()=>openBull(db,s,openPositions,manual,attempt,managementFailures),{correlationId:String(s.id)});
- }
- await requireEntryAuthority(db,s);await requireLeaderEntryControls(db);
- const f=s.features,seed=f.deterministic,gw=opsGateway(db),start=Date.now();
+ const universeAuthority=await requireEntryAuthority(db,s,{refresh:true});await requireLeaderEntryControls(db);
+ attempt.evidence=entryEvidence(s,{authority:universeAuthority,timing:{candidate_started:Date.now()}});
+ const f=s.features,seed=f.deterministic,gw=opsGateway(db),start=Date.now(),timing={...seed.timing,candidate_started:start};
  if(f.sizingContractVersion!==SLOT_SIZING_CONTRACT.version||Number(f.targetMarginUsdt)!==MARGIN||Number(f.leverage)!==LEV||Number(f.exitPolicy?.stopPct)!==POLICY.stopPct)throw Error('SIZING_OR_STOP_CONTRACT_CHANGED');
- let [pair,openOrders,info,fees,mode,controls]=await Promise.all([readOpsPair(db,gw,s.symbol),gw({action:'v18_open_orders'},2500),gw({action:'symbol_info',market:s.symbol},2500),gw({action:'fees',market:s.symbol},2500),gw({action:'futures_position_mode'},2000),opsControls(db)]);
+ let [pair,openOrders,info,fees,mode,controls,initialMarket]=await Promise.all([readOpsPair(db,gw,s.symbol),gw({action:'v18_open_orders'},2500),gw({action:'symbol_info',market:s.symbol},2500),gw({action:'fees',market:s.symbol},2500),gw({action:'futures_position_mode'},2000),opsControls(db),currentMarket(db,s.symbol,{return24h:seed.return24h,rank:seed.rank})]);
  if(shortAccountWriter(db)&&!freshPortfolio(pair.pf)){pair=await readOpsPair(db,gw,s.symbol);openOrders=await gw({action:'v18_open_orders'},5000);}
  const fee=gatewayTakerFeeRate(fees,s.symbol);if(!Number.isFinite(fee)||fee>0.0005||!supportedFuturesMode(mode,Date.now(),5000))return {entered:false,reason:'ACCOUNT_FEE_OR_POSITION_MODE_UNVERIFIED'};
- await currentMarket(db,s.symbol,{return24h:seed.return24h,rank:seed.rank});
+ timing.account_reads_completed=Date.now();
  const filters=symbolFilters(info),initialQuote=await gw({action:'quote',market:s.symbol},2000),sized=sizeEntry(Number(initialQuote.best_ask),filters.quantityStep,filters),
   admission=decideEntryWith(controls,pair,s.symbol,openOrders,{proposedMargin:sized.sizedMargin,cashBuffer:ENTRY_CASH_BUFFER_USDT,managementFailures});
  await persistDecisionRisk(db,pair,admission);
  if(!admission.allowed)return {entered:false,reason:'ENTRY_CONTROL:'+admission.scope+':'+admission.reasons.join(','),releaseScope:controlReleaseScope(admission)};
- const validated=await validateOrder(db,s,initialQuote);if(!validated.allowed)return {entered:false,reason:validated.reason};
- const reservation=await db.rpc('deterministic_reserve_entry_slot',{p_symbol:s.symbol,p_slot_ms:seed.decision.capture_end_ms,p_signal_id:s.id,p_expires_at:new Date(Date.now()+120000).toISOString()});
+ const validated=validatePreparedOrder(s,initialMarket,initialQuote);attempt.evidence=entryEvidence(s,{check:validated,quote:initialQuote,authority:universeAuthority,timing});if(!validated.allowed)return {entered:false,reason:validated.reason};
+ const reservation=await withAccountMutation(db,()=>db.rpc('deterministic_reserve_entry_slot',{p_symbol:s.symbol,p_slot_ms:seed.decision.capture_end_ms,p_signal_id:s.id,p_expires_at:new Date(Date.now()+120000).toISOString()}));
  if(reservation.error||reservation.data?.reserved!==true)return {entered:false,reason:reservation.data?.reason??'ATOMIC_CAPACITY_RESERVATION_FAILED'};
- const reservationId=reservation.data.id,timing={...seed.timing,pre_order_validation:Date.now(),capacity_claim:Date.now(),candidate_started:start};
+ const reservationId=reservation.data.id;timing.pre_order_validation=Date.now();timing.capacity_claim=Date.now();
  let position=null,filled=0,firstIntent=null,lastAttempt=null,targetQuantity=sized.amount;
  try{
+  await withAccountMutation(db,()=>gw({action:'prepare_entry',market:s.symbol,leverage:LEV},5000));
   for(let no=1;no<=IOC_RETRY_POLICY.maxAttempts;no++){
    if(no>1&&(!lastAttempt||!['EXPIRED','CANCELED','CANCELLED','PARTIALLY_FILLED_CANCELED'].includes(lastAttempt.receipt.status)))break;
    if(no>1&&position&&N(position.original_quantity)!==N(position.remaining_quantity))break;
@@ -1080,19 +1085,23 @@ async function openBull(db,s,openPositions,manual=null,attempt={},managementFail
    const quantity=no===1?plan.amount:plan.quantity,limitPrice=plan.limitPrice;
    const payload={price_tick:filters.priceTick,quantity_step:filters.quantityStep,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION},deterministic:{version:ENGINE,seed:seed.decision},entry_latency:timing,
     ...(firstIntent?{retry_of_order_id:firstIntent}:{}),entry_ioc:{attempt:no,target_quantity:targetQuantity,filled_before:filled}};
-   const sent=await dispatchEntryIocAttempt(db,s,gw,{attemptNo:no,quantity,limitPrice,step:filters.quantityStep,payload,attempt,
+   await requireEntryAuthority(db,s,{refresh:true});const market=await currentMarket(db,s.symbol,{return24h:seed.return24h,rank:seed.rank});timing.market_revalidation_completed=Date.now();
+   const sent=await withAccountMutation(db,()=>dispatchEntryIocAttempt(db,s,gw,{attemptNo:no,quantity,limitPrice,step:filters.quantityStep,payload,attempt,
     authorize:async intent=>{
      await requireLeaderEntryControls(db);
-     const [fresh,orders]=await Promise.all([readOpsPair(db,gw,s.symbol),gw({action:'v18_open_orders'},2500)]),c=await opsControls(db);
+     const [fresh,orders,c,authority]=await Promise.all([readOpsPair(db,gw,s.symbol),gw({action:'v18_open_orders'},2500),opsControls(db),requireEntryAuthority(db,s)]);timing.final_account_reads_completed=Date.now();
      const scoped=plannedEntryRiskView(fresh,intent);
      if(!scoped.allowed)return {allowed:false,reason:scoped.reason};
      const risk=decideEntryWith(c,scoped.pair,s.symbol,orders,{proposedMargin:Math.max(0,quantity*limitPrice/LEV),cashBuffer:ENTRY_CASH_BUFFER_USDT,existingPositionId:position?.id??null,managementFailures});
      if(!risk.allowed)return {allowed:false,reason:'ENTRY_CONTROL:'+risk.reasons.join(',')};
-     const quote=await gw({action:'quote',market:s.symbol},1500),check=await validateOrder(db,s,quote),book=normalizeEntryBook(quote,1500,Date.now());
+     const quote=await gw({action:'quote',market:s.symbol},1500),check=validatePreparedOrder(s,market,quote),book=normalizeEntryBook(quote,1500,Date.now());
+     attempt.evidence=entryEvidence(s,{check,quote,authority,timing,orderId:intent.order.id,writer:{owner:currentAccountOwner(db),fence:currentExecutionContext(db)?.fence}});
      if(!check.allowed||!book.health.bookHealthy)return {allowed:false,reason:check.reason??'STALE_EXECUTION_BOOK'};
-     if(limitPrice<Number(quote.best_ask)||limitPrice>Number(quote.best_ask)*(1+IOC_MAX_BPS/10000)||quantity*limitPrice/LEV+(position?N(position.original_quantity)*N(position.entry_price)/LEV:0)>MAX_ORDER_MARGIN_USDT+1e-9)return {allowed:false,reason:'LATEST_PRICE_OR_MARGIN_INVALID'};
+     if(limitPrice<Number(quote.best_ask))return {allowed:false,reason:'LATEST_PRICE_MOVED_ABOVE_LIMIT'};
+     if(limitPrice>Number(quote.best_ask)*(1+IOC_MAX_BPS/10000))return {allowed:false,reason:'LATEST_PRICE_CHASE_INVALID'};
+     if(quantity*limitPrice/LEV+(position?N(position.original_quantity)*N(position.entry_price)/LEV:0)>MAX_ORDER_MARGIN_USDT+1e-9)return {allowed:false,reason:'ACCOUNT_MARGIN_LIMIT'};
      timing.pre_order_validation=Date.now();return {allowed:true,deterministic:check.latest};
-    }});
+    }}),{correlationId:String(s.id)});
    if(sent.blocked){if(!position)return {entered:false,reason:sent.reason};break;}
    firstIntent??=sent.oi.id;lastAttempt=sent;
    const settled=await settleKnownEntry(db,sent.oi,sent.settledRaw,gw,{existingPosition:position,retireZeroFillSignal:false,registerTarget:false});
@@ -1101,32 +1110,34 @@ async function openBull(db,s,openPositions,manual=null,attempt={},managementFail
    if(position&&NATIVE_STOP_ENABLED){const protect=await installEntryNativeProtection(db,position,gw,pair.manual.map(x=>x.symbol));position=protect.position??position;if(protect.status!=='PROTECTED')break;}
    if(position?.state==='CLOSED'||filled>=targetQuantity-filters.quantityStep/2)break;
   }
-  if(!position){const w=await db.from('v11_long_regime_signals').update({status:'REJECTED',reject_reason:'IOC_NO_FILL',updated_at:new Date().toISOString()}).eq('id',s.id);if(w.error)throw Error('SIGNAL_FINALITY_WRITE');return {entered:false,reason:'IOC_NO_FILL'};}
+  if(!position){const w=await withAccountMutation(db,()=>db.from('v11_long_regime_signals').update({status:'REJECTED',reject_reason:'IOC_NO_FILL',updated_at:new Date().toISOString()}).eq('id',s.id));if(w.error)throw Error('SIGNAL_FINALITY_WRITE');return {entered:false,reason:'IOC_NO_FILL'};}
   const entryProtection=await protectNewLeaderPosition({enabled:NATIVE_STOP_ENABLED,position,manualSymbols:pair.manual.map(x=>x.symbol),readPortfolio:()=>gw({action:'p10_portfolio'}),installNative:(p,c)=>installEntryNativeProtection(db,p,gw,c.manualSymbols),manage:c=>manageLeader(db,c.positionSnapshot??position,{...c,gateway:gw,recoveryOnly:true})});
   return {entered:true,symbol:s.symbol,positionId:position.id,quantity:filled,entryPrice:N(position.entry_price),sizedMarginUsdt:filled*N(position.entry_price)/LEV,entryFinality:lastAttempt?.evidence,entryProtection,executionAttempts:lastAttempt?.evidence?.attemptNo,timing};
  }finally{
   // Ambiguous order exposure remains charged by the durable order, even after a reservation expires.
-  await db.from('leader20_entry_reservations').update({state:position?'FILLED':'RELEASED',updated_at:new Date().toISOString()}).eq('id',reservationId).in('state',['RESERVED','ORDER_PENDING']);
+  await withAccountMutation(db,()=>db.from('leader20_entry_reservations').update({state:position?'FILLED':attempt.dispatched?'ORDER_PENDING':'RELEASED',updated_at:new Date().toISOString()}).eq('id',reservationId).in('state',['RESERVED','ORDER_PENDING']));
  }
 }
 async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComplete=true){
  const ctl=await control(db);if(!ctl.enabled)return {entered:false,reason:'DETERMINISTIC_ENTRY_PAUSED'};
  if(!backlogComplete)return {entered:false,reason:'CLOSED_PROTECTION_BACKLOG_INCOMPLETE'};
+ await withAccountMutation(db,()=>db.rpc('deterministic_recover_claims')).then(r=>{if(r.error)throw Error('CLAIM_RECOVERY_UNAVAILABLE');});
  const rows=await db.from('v11_long_regime_signals').select('*').eq('status','NEW').eq('features->deterministic->>version',ENGINE).order('created_at',{ascending:false}).limit(30);
  if(rows.error)throw Error('CANDIDATE_QUEUE_UNAVAILABLE');let cap=admissionCapacity(capacityInputs(pair,null),[]),ledger=[],entries=[];const seen=new Set();
  for(const row of rows.data??[]){
   if(cap.capacity<1||cycleBudgets.get(db).remaining()<24000)break;if(seen.has(row.symbol)||blockedSymbols.has(row.symbol))continue;seen.add(row.symbol);
-  await currentMarket(db,row.symbol,{return24h:row.features?.deterministic?.return24h,rank:row.features?.deterministic?.rank}).catch(()=>null);
- const result=await withAccountMutation(db,async()=>{
- const claim=await db.from('v11_long_regime_signals').update({status:'CLAIMED',updated_at:new Date().toISOString()}).eq('id',row.id).eq('status','NEW').select('*').maybeSingle();if(claim.error)throw Error('SIGNAL_CLAIM_FAILED');if(!claim.data)return null;
+ const result=await (async()=>{
+ const claimContext={analysis_owner:currentExecutionContext(db)?.owner,claimed_at_ms:Date.now()};
+ const claim=await withAccountMutation(db,()=>db.from('v11_long_regime_signals').update({status:'CLAIMED',features:{...row.features,executionClaim:claimContext},updated_at:new Date().toISOString()}).eq('id',row.id).eq('status','NEW').select('*').maybeSingle());if(claim.error)throw Error('SIGNAL_CLAIM_FAILED');if(!claim.data)return null;
   const attempt={dispatched:false};let result;
   try{result=await openBull(db,claim.data,pair.positions,manual,attempt,pair.managementFailures??[]);}
-  catch(e){if(classifyFailure(e).fatal||attempt.dispatched)throw e;result={entered:false,reason:String(e.message??e),releaseScope:RELEASE_SCOPE.SYMBOL};}
+  catch(e){if(classifyFailure(e).fatal||attempt.dispatched)throw e;result={entered:false,reason:String(e.message??e),releaseScope:RELEASE_SCOPE.SYMBOL};attempt.evidence??=entryEvidence(row,{authority:e.authority,reason:result.reason});}
   if(!result.entered){
-   const retire=await db.from('v11_long_regime_signals').update({status:'REJECTED',reject_reason:result.reason.slice(0,500),updated_at:new Date().toISOString()}).eq('id',row.id).eq('status','CLAIMED');if(retire.error)throw Error('NO_ORDER_TERMINAL_WRITE');
+   const reason=result.reason??'ENTRY_CANCELLED';const evidence={...attempt.evidence,reason,category:cancellationCategory(reason,attempt.evidence?.latest),cancelled_at_ms:Date.now()};
+   const retire=await withAccountMutation(db,()=>db.from('v11_long_regime_signals').update({status:'REJECTED',reject_reason:reason.slice(0,500),features:{...row.features,entryExecution:evidence},updated_at:new Date().toISOString()}).eq('id',row.id).eq('status','CLAIMED'));if(retire.error)throw Error('NO_ORDER_TERMINAL_WRITE');
   }
   return result;
- },{correlationId:String(row.id)}).catch(e=>{if(e?.writerDeferred)return {entered:false,reason:e.message,deferred:true};throw e;});
+ })().catch(e=>{if(e?.writerDeferred)return {entered:false,reason:e.message,deferred:true};throw e;});
  if(!result)continue;entries.push(result);
  if(!result.entered){if(result.deferred||result.releaseScope===RELEASE_SCOPE.ACCOUNT)break;continue;}
   ledger.push(ledgerEntry(result,Date.now()));cap=admissionCapacity(await refreshCapacityInputs(db),ledger);
@@ -1182,7 +1193,7 @@ Deno.serve(async req=>{
  const url=env('SUPABASE_URL'),key=env('SUPABASE_SERVICE_ROLE_KEY');let db;
  db=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:async(url,init={})=>{
  const context=assertActiveExecutionRequest(db);
- if(context?.kind==='CLEANUP'&&!/\/rpc\/v17_release_(execution|analysis)_lease$/.test(new URL(String(url)).pathname))throw Error('LEASE_CLEANUP_RPC_ONLY');
+ if(context?.kind==='CLEANUP'&&!/\/rpc\/v17_release_((execution|analysis)_lease|writer)$/.test(new URL(String(url)).pathname))throw Error('LEASE_CLEANUP_RPC_ONLY');
  const headers=new Headers(init.headers),owner=leaseOwners.get(db);
  for(const [name,value]of Object.entries(executionContextHeaders(db)))headers.set(name,value);
  if(owner)headers.set('x-v18-execution-owner',owner);

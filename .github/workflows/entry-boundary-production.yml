@@ -1,0 +1,68 @@
+name: Entry boundary production repair and read-only audit
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        type: string
+        required: true
+      operation:
+        type: choice
+        required: true
+        options: [audit, deploy-gateway]
+permissions:
+  contents: read
+concurrency:
+  group: deploy-binance-order-gateway
+  cancel-in-progress: false
+jobs:
+  repair:
+    if: github.repository == 'sanbital/Trading-booooo' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check exact source
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
+      - name: Regress production boundaries
+        if: inputs.operation == 'deploy-gateway'
+        run: |
+          set -euo pipefail
+          npm ci --prefix test-support/deterministic
+          npm test --prefix test-support/deterministic
+          node gateway/stage-engine.mjs
+          node --test gateway/*.test.mjs
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        if: inputs.operation == 'deploy-gateway'
+      - name: Deploy existing Binance service preserving secrets and sizing
+        if: inputs.operation == 'deploy-gateway'
+        working-directory: gateway
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy . --remote-only --ha=false --strategy rolling -a trading-booooo --config fly.binance.toml --build-arg RELEASE_COMMIT="$GITHUB_SHA"
+      - name: Verify gateway image and required writer boundary
+        if: inputs.operation == 'deploy-gateway'
+        run: |
+          node --input-type=module - <<'JS'
+          const r=await fetch('https://trading-booooo.fly.dev/health');const h=await r.json();
+          if(!r.ok||h.deployment_commit!==process.env.GITHUB_SHA||h.build!=='2026-10-04-submission-boundary-2'||h.order_writer.required!==true||h.scheduler_enabled!==false)throw Error('PRODUCTION_GATEWAY_MISMATCH');
+          JS
+      - name: Audit exact orders and current venue evidence without orders
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: node ops/deterministic/entry-boundary-audit.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: entry-boundary-${{ github.run_id }}
+          path: infra-evidence/entry-boundary
+          retention-days: 30
+          if-no-files-found: warn

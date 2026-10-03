@@ -18,15 +18,16 @@ const order={exchange:'binance_futures',action:'create_order',engine_version:'8.
  identifier:'tb-writer-http-fixture',position_side:'LONG',position_effect:'OPEN'},wait_for_final_ms:0,
  writer:{account_key:'binance_futures:futures',owner,fence:1,execution_key:'f'.repeat(64)}};
 const json=value=>new Response(JSON.stringify(value),{status:200,headers:{'content-type':'application/json'}});
-async function fixture(t,authorize){
+async function fixture(t,authorize,{beforeVenue=()=>{}}={}){
  const calls=[],original=globalThis.fetch;
  globalThis.fetch=async(input,init={})=>{
   const u=new URL(String(input)),method=init.method??'GET';calls.push({path:u.pathname,method});
   if(u.hostname==='writer-db.invalid'){
-   assert.equal(u.pathname,'/rest/v1/rpc/v17_gateway_authorize');
+   assert.equal(u.pathname,'/rest/v1/rpc/v17_gateway_authorize_evidence');
    const body=JSON.parse(init.body);assert.equal(body.p_owner,owner);assert.equal(body.p_fence,1);assert.equal(body.p_key.length,64);
    assert.equal(body.p_command.writer,undefined);return json(await authorize(body,calls));
   }
+  beforeVenue(u.pathname,method);
   if(u.pathname==='/api/v3/time')return json({serverTime:Date.now()});
   if(u.pathname==='/fapi/v1/exchangeInfo')return json({symbols:[{symbol:'BTCUSDT',status:'TRADING',contractType:'PERPETUAL',baseAsset:'BTC',quoteAsset:'USDT',filters:[
    {filterType:'PRICE_FILTER',tickSize:'0.1'},{filterType:'LOT_SIZE',stepSize:'0.1',minQty:'0.1',maxQty:'1000'},
@@ -62,4 +63,16 @@ test('writer changing after HTTP admission refuses the final signed order with z
  let checks=0;const f=await fixture(t,()=>++checks===1);const r=await f.send(order);
  assert.equal(r.status,503);assert.equal(r.body.code,'WRITER_FENCED');assert.equal(checks,2);
  assert.equal(f.calls.filter(c=>c.method==='POST'&&c.path.startsWith('/fapi/')).length,0);
+});
+
+test('preparation latency can expire a valid proof; warmed preparation occurs before refreshed submission',async t=>{
+ let elapsed=0,published=0;
+ const f=await fixture(t,body=>body.p_command.action==='prepare_entry'||elapsed-published<3000?{allowed:true}:{allowed:false,reason:'SUBMISSION_EVIDENCE_EXPIRED'},
+  {beforeVenue:(path,method)=>{if(path==='/fapi/v1/leverage'&&method==='POST')elapsed+=3500;}});
+ const stale=await f.send(order);assert.equal(stale.status,503);assert.equal(stale.body.exchangeSubmissionAttempted,false);
+ assert.equal(stale.body.submissionPhase,'PRE_SEND');assert.equal(stale.body.writerValidation.reason,'SUBMISSION_EVIDENCE_EXPIRED');
+ assert.equal(f.calls.filter(c=>c.path==='/fapi/v1/order'&&c.method==='POST').length,0);
+ const prep=await f.send({exchange:'binance_futures',action:'prepare_entry',market:'BTCUSDT',leverage:3,writer:order.writer});assert.equal(prep.status,200);
+ published=elapsed;const fresh=await f.send(order);assert.equal(fresh.status,200);assert.equal(fresh.body.result.order.client_order_id,order.order.identifier);
+ assert.equal(f.calls.filter(c=>c.path==='/fapi/v1/order'&&c.method==='POST').length,1);
 });

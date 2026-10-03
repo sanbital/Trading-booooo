@@ -9,7 +9,7 @@ export function hasExchangeSideEffect(command) {
   // Unknown future actions fail closed when fencing is enabled.
   return !READ_ACTIONS.has(String(command?.action));
 }
-const refusal = code => Object.assign(new Error(code),{code,status:503});
+const refusal = code => Object.assign(new Error(code),{code,status:503,exchangeSubmissionAttempted:false,submissionPhase:'PRE_SEND'});
 
 /** Revalidate at each signed exchange mutation, after preparation/time sync and
  * again on timestamp retry. Read-only proofs and the venue's dry-run API remain
@@ -18,9 +18,15 @@ const refusal = code => Object.assign(new Error(code),{code,status:503});
 export async function beforeExchangeMutation({required,venue,method,path}) {
   if(venue!=='binance_futures'||['GET','HEAD'].includes(method)||
     (method==='POST'&&path==='/fapi/v1/order/test'))return;
-  const verify=mutationContext.getStore();
-  if(!verify){if(required)throw refusal('WRITER_CONTEXT_REQUIRED');return;}
-  await verify();
+  const context=mutationContext.getStore();
+  if(!context){if(required)throw refusal('WRITER_CONTEXT_REQUIRED');return;}
+  if(!context.active)throw refusal('WRITER_CONTEXT_EXPIRED');
+  await context.verify({method,path});
+}
+export function markExchangeMutationAttempt({venue,method,path}){
+ const c=mutationContext.getStore();if(!c||venue!=='binance_futures'||['GET','HEAD'].includes(method))return;
+ if(c.command.action!=='create_order'||path==='/fapi/v1/order')c.attempted=true;
+ c.timings.exchange_request_at_ms=Date.now();
 }
 
 export function createOrderWriterFence({required=false,authorize,acquireLegacy}) {
@@ -51,14 +57,22 @@ export function createOrderWriterFence({required=false,authorize,acquireLegacy})
       const tail=new Promise(resolve=>{done=resolve;});
       tails.set(envelope.account_key,tail);
       await previous;
+      const context={active:true,attempted:false,command:boundPayload,timings:{gateway_started_at_ms:Date.now()},checks:[]};
       try {
-        const verify=async()=>{
-          if (legacy?.healthy?.()===false||!(await authorize(envelope,boundPayload))) throw refusal('WRITER_FENCED');
+        const verify=async boundary=>{
+          const started=Date.now(),proof=await authorize(envelope,boundPayload);
+          context.checks.push({boundary:boundary?.path??'HTTP_ADMISSION',started_at_ms:started,completed_at_ms:Date.now(),...(typeof proof==='object'?proof:{allowed:proof===true})});
+          if (legacy?.healthy?.()===false||(typeof proof==='object'?proof?.allowed!==true:proof!==true)) throw Object.assign(refusal('WRITER_FENCED'),{writerValidation:context.checks.at(-1)});
         };
         await verify();
-        return await mutationContext.run(verify,execute);
+        context.verify=verify;
+        const result=await mutationContext.run(context,execute);
+        if(result&&typeof result==='object')result.writer_evidence={...context.timings,checks:context.checks};
+        return result;
+      } catch(error){
+        Object.assign(error,{exchangeSubmissionAttempted:context.attempted,submissionPhase:context.attempted?'EXCHANGE_REQUESTED':'PRE_SEND',writerEvidence:{...context.timings,checks:context.checks}});throw error;
       } finally {
-        done(); if (tails.get(envelope.account_key)===tail) tails.delete(envelope.account_key);
+        context.active=false;done(); if (tails.get(envelope.account_key)===tail) tails.delete(envelope.account_key);
         await legacy?.release();
       }
     },
@@ -71,7 +85,7 @@ export function createGatewayAuthorizer({url,key,fetchImpl=fetch,timeoutMs=2500}
     if (!url || !key) throw refusal('WRITER_DB_CREDENTIALS_MISSING');
     let response;
     try{
-      response=await fetchImpl(`${url}/rest/v1/rpc/v17_gateway_authorize`,{
+      response=await fetchImpl(`${url}/rest/v1/rpc/v17_gateway_authorize_evidence`,{
         method:'POST',signal:AbortSignal.timeout(timeoutMs),
         headers:{'content-type':'application/json',apikey:key,Authorization:`Bearer ${key}`},
         body:JSON.stringify({p_key:envelope.execution_key,p_account:envelope.account_key,
@@ -85,7 +99,7 @@ export function createGatewayAuthorizer({url,key,fetchImpl=fetch,timeoutMs=2500}
         'WRITER_DB_UNAVAILABLE');
     }
     if (!response.ok) throw refusal('WRITER_DB_UNAVAILABLE');
-    return (await response.json())===true;
+    const proof=await response.json();return typeof proof==='boolean'?proof:typeof proof?.allowed==='boolean'?proof:false;
   };
 }
 
