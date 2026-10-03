@@ -5,5 +5,10 @@
     "v10-lane-signal-generator": 52
   },
   "gateway_commit": "1bd5e3bf76bfb55f9df749818e325f91b5c6ab02",
+  "staged_source_commit": "e966badf791b641801dabac3ae282ac673c04819",
+  "expected_staged_versions": {
+    "v10-lane-executor": 191,
+    "v10-lane-signal-generator": 53
+  },
   "migration_sha256": "73ea63d6eac28cd0303d54b304be8cdfdd32e1bd07605e01f503ca401ae0e3c2"
 }
