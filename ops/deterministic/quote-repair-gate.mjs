@@ -10,5 +10,7 @@ for(const app of ['trading-booooo','trading-booooo-sanbital-gateway']){
  const h=await fetch(`https://${app}.fly.dev/health`,{signal:AbortSignal.timeout(5000)});if(!h.ok)throw Error('QUOTE_REPAIR_HEALTH_UNAVAILABLE');const value=await h.json(),binance=app==='trading-booooo';
  const expected=stage==='after'&&binance?process.env.GITHUB_SHA:expectedGatewayCommit(request,app);
  assertQuoteRepairHealth(value,{app,expectedCommit:expected});
+ if(stage==='after'&&binance&&process.env.REPAIR_KIND==='writer_http_boundary'&&
+   (value.capabilities?.writer_http_fencing!==true||value.build!=='2026-10-03-writer-http-boundary-1'))throw Error('WRITER_HTTP_BOUNDARY_NOT_DEPLOYED');
  const summary={stage,utc:new Date().toISOString(),app,source_commit:value.deployment_commit,writer_required:value.order_writer.required,external_scheduler:value.external_scheduler.enabled,entry_paused:s.paused,positions:s.positions,unresolved_orders:s.unresolved_orders};fs.mkdirSync('infra-evidence',{recursive:true});fs.writeFileSync(`infra-evidence/quote-repair-${app}-${stage}.json`,JSON.stringify(summary,null,2));console.log(JSON.stringify(summary));
 }

@@ -42,7 +42,7 @@ const VERSION = "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT";
  *
  * Bump this on every gateway release.
  */
-const GATEWAY_BUILD = "2026-10-02-external-clock-1";
+const GATEWAY_BUILD = "2026-10-03-writer-http-boundary-1";
 // Keep exactly one audited previous protocol revision during the rolling cutover. Both the
 // old engine/new gateway and new engine/old gateway therefore remain order-compatible;
 // arbitrary or older revisions stay rejected.
@@ -2736,7 +2736,7 @@ async function discoverEgressIp() {
   }
 }
 
-function createServer() {
+export function createServer() {
   return http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
@@ -2770,6 +2770,7 @@ function createServer() {
           build: GATEWAY_BUILD,
           deployment_commit: process.env.RELEASE_COMMIT ?? "unknown",
           capabilities: {
+            writer_http_fencing: true,
             p10_top_of_book_batch: true,
             p10_position_proof: true,
             // Advertised so a consumer can prove this gateway serves the command
@@ -2802,7 +2803,8 @@ function createServer() {
       if (!verification.ok) {
         return sendJson(res, verification.status, { error: verification.error });
       }
-      const result = await handleCommand(raw ? JSON.parse(raw) : {});
+      const command = raw ? JSON.parse(raw) : {};
+      const result = await orderWriterFence.run(command, () => handleCommand(command));
       return sendJson(res, 200, { ok: true, result, version: VERSION });
     } catch (error) {
       console.error("gateway request failed", error);

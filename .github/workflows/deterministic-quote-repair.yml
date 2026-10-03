@@ -1,4 +1,4 @@
-name: Repair Binance execution quote snapshot (entries paused)
+name: Repair Binance execution gateway (entries paused)
 on:
   workflow_dispatch:
     inputs:
@@ -8,7 +8,12 @@ on:
       release_marker:
         type: string
         required: true
-        description: QUOTE_SNAPSHOT_REPAIR_1
+        description: QUOTE_SNAPSHOT_REPAIR_1 or WRITER_HTTP_BOUNDARY_REPAIR_1
+      repair_kind:
+        type: choice
+        required: true
+        default: quote_snapshot
+        options: [quote_snapshot, writer_http_boundary]
 permissions:
   contents: read
 concurrency:
@@ -31,10 +36,14 @@ jobs:
         env:
           EXPECTED_COMMIT: ${{ inputs.expected_commit }}
           RELEASE_MARKER: ${{ inputs.release_marker }}
+          REPAIR_KIND: ${{ inputs.repair_kind }}
         run: |
           set -euo pipefail
           test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
-          test "$RELEASE_MARKER" = QUOTE_SNAPSHOT_REPAIR_1
+          case "$REPAIR_KIND:$RELEASE_MARKER" in
+            quote_snapshot:QUOTE_SNAPSHOT_REPAIR_1|writer_http_boundary:WRITER_HTTP_BOUNDARY_REPAIR_1) ;;
+            *) exit 1 ;;
+          esac
           git diff --check
           node gateway/patch-trade-history.mjs
           node gateway/stage-engine.mjs
@@ -65,6 +74,7 @@ jobs:
       - name: Verify exact build and retained writer/scheduler/account roles
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          REPAIR_KIND: ${{ inputs.repair_kind }}
         run: node ops/deterministic/quote-repair-gate.mjs after
       - uses: actions/upload-artifact@v4
         if: always()

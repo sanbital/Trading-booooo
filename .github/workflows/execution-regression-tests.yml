@@ -6,6 +6,8 @@ on:
       - 'supabase/functions/**'
       - 'tests/**'
       - 'test-support/**'
+      - 'gateway/**'
+      - 'ops/deterministic/**'
       - 'development/gpt-final-review/**'
       - '.github/workflows/execution-regression-tests.yml'
 permissions:

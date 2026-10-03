@@ -1,3 +1,46 @@
+# 2026-10-03 13:56 UTC: executor latency / writer HTTP repair pending
+
+The operator confirms they restarted the database; postmaster remains
+2026-10-03T12:16:55.400305Z. This task did not restart the DB.
+
+13:28..13:40 UTC production executor v192: 50 Edge request records,
+p50 10071ms / p95 16622ms / max 19272ms, one HTTP error. Generator v53:
+122 records, p50 1316ms / p95 2186ms / max 3406ms, one HTTP error.
+Scheduler DB ticks independently show executor admission p50 328ms;
+51 successful executions p50 9879.923ms / p95 15815.947ms.
+Single-flight prevents overlap and skips old ticks; 5s is the configured
+schedule period, not observed end-to-end executor latency.
+
+Invocation 964803f7-b32e-41a8-bc9e-5f3756e094ab lasted 10297ms and
+contained five ACCOUNT_WRITER sections totaling 3150ms. Code preserves four
+serial account-pair observations even on the flat path. Existing telemetry
+cannot apportion the remaining time exactly among DB, gateway and venue;
+REST observations are sampled and not an invocation trace. DB at 13:43 was
+ACTIVE_HEALTHY, no deadlocks or observed lock waits; this does not prove
+all DB/REST latency is absent. Trading provider ledger in this window: 0.
+
+A natural SUPERUSDT entry at 13:31 produced order
+8cd23207-67c1-47bb-95f3-3f45f51aa528. The gateway refused it with
+WRITER_CONTEXT_REQUIRED. Existing reconciliation established never placed;
+final order state REJECTED / ORDER_NEVER_PLACED, venue identity absent.
+At 13:48 the DB was flat with no unresolved order or incident and no new fill.
+
+The root cause is the gateway HTTP command handler calling handleCommand
+without orderWriterFence.run. The signed Binance mutation boundary therefore
+has no writer AsyncLocalStorage context even for a valid writer envelope.
+The repair connects the existing fence; it does not relax authorizations,
+financial parameters, IOC, native stop, strategy or scheduler authority.
+Local HTTP regression reproduces the original error using fixture-only DB
+and venue transports. No production validation trade is manufactured.
+
+Normal pause workflow 37127538769 and signed account preflight
+37127541013 succeeded. Entries are paused for this repair. The existing
+protected deterministic gateway repair workflow accepts an explicit
+writer_http_boundary / WRITER_HTTP_BOUNDARY_REPAIR_1 operation, retaining its
+paused-flat signed truth, encrypted manifest and source/role gates. The Tokyo
+clock, executor v192, generator v53 and collector 98f272c remain independent.
+Deployment, resume and real-fill verification are still pending at this timestamp.
+
 # Deterministic engine release and operator cutover
 
 Status observed 2026-10-03 13:03:45 UTC: COLLECTOR INTEGRITY REPAIR DEPLOYED,
