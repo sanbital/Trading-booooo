@@ -52,7 +52,7 @@ try{
  const balanceMatched=!!balanceCompared&&Math.abs(Number(snapshot.equity)-Number(portfolio.total_equity_quote))<=0.01&&Math.abs(Number(snapshot.available)-Number(portfolio.available_quote))<=0.01;
  if(!balanceMatched)failures.push('BALANCE_RECONCILIATION_UNPROVEN');
  ev.summary={utc:new Date().toISOString(),source_commit:ev.source_commit,production_gateway_commit:ev.health.deployment_commit,
-  status:failures.length?'BLOCKED':'ACCOUNT_PREFLIGHT_PASSED_CUTOVER_NOT_PERFORMED',mutations:0,
+  status:failures.length?'BLOCKED':'ACCOUNT_PREFLIGHT_PASSED',mutations:0,
   failures:[...new Set(failures)],holdings:ev.holdings,trades:ev.trades,balance_reconciled:balanceMatched,
   circuit_open:ev.after.runtime.circuit_open,incident_kind:ev.after.runtime.incident_kind,incident_generation:ev.after.runtime.incident_generation,
   active_strategy:ev.after.leader20.active_strategy,watch_limit:ev.after.leader20.watch_limit,top20_capture_missing:missing.length,

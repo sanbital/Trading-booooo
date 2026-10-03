@@ -11,6 +11,8 @@ on:
       - 'ops/deterministic/**'
       - 'supabase/functions/_shared/internal-token-auth.mjs'
       - 'tests/deterministic-release.test.mjs'
+      - 'tests/deterministic-platform-health.test.mjs'
+      - '.github/workflows/deterministic-platform-health.yml'
       - '.github/workflows/deterministic-cutover.yml'
       - '.github/workflows/deterministic-verification.yml'
   workflow_dispatch:
@@ -31,6 +33,7 @@ jobs:
       - name: State, hot path, SQL, isolation and dependency verification
         run: |
           npm test --prefix test-support/deterministic
+          node --test tests/deterministic-platform-health.test.mjs
           node --test ops/dynamic-flow/retired-production-suites.test.mjs \
             tests/leader20-generator.test.mjs tests/signal-generator-production-baseline.test.mjs \
             tests/leader20-multislot-continuity-hotfix.test.mjs
