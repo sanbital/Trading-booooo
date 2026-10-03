@@ -105,13 +105,58 @@ export function classifyMarket({facts,capture,profile,at,price=null,return24h=nu
   trigger_reference:breakout?previousHigh:pullback?recent[lowAt].mid:reclaim?Math.max(...prior.map(x=>x.mid)):priceNow,
   atr_normalized:v.atr_1m_14_normalized??null};
 }
+export const ENTRY_RESCUE_POLICY=Object.freeze({
+ maxAgeMs:10000,maxChaseDrift:0.008,maxExecutionCostBps:18,maxSpreadBps:5,minTaker5Hard:0.48,minAccel15_60Hard:0,minDistanceHigh15:-0.02,
+ strongMinTaker5:0.53,strongMinTaker15:0.52,strongMaxSpreadBps:2.5,strongMaxExecutionCostBps:14,strongMinScore:4,
+ overheatRsi1:78,overheatReturn5:0.02,overheatReturn15:0.04,overheatReturn60:0.06,overheatBb:1.20,overheatVol1:2,candleRangeAtr:1.5
+});
+export function evaluateEntryRescue(initial,input,latest,drift){
+ const p=ENTRY_RESCUE_POLICY,v=input?.facts?.values??{},age=input?.at-initial?.at,phase=latest?.phase,
+  num=k=>Number(v[k]),isFiniteKey=k=>finite(num(k));
+ const deny=reason=>({allowed:false,reason,age_ms:age,strength_score:0});
+ if(!Number.isFinite(age)||age<0||age>p.maxAgeMs)return deny('RESCUE_WINDOW_EXPIRED');
+ if(!finite(drift)||drift>p.maxChaseDrift)return deny('RESCUE_PRICE_CHASE');
+ const hardPhase=['REVERSAL_RISK','DISTRIBUTION','EXHAUSTION','FAILED_BREAKOUT'].includes(phase);
+ const failedBreakout=v.failed_breakout_candle===true&&(latest?.families?.FLOW?.recovering!==true||num('taker_buy_ratio_5m')<p.strongMinTaker5);
+ const hard=hardPhase||failedBreakout||v.sell_volume_expansion===true||v.volume_climax_decline===true||
+  !isFiniteKey('expected_execution_cost_bps')||num('expected_execution_cost_bps')>p.maxExecutionCostBps||
+  !isFiniteKey('spread_bps')||num('spread_bps')>p.maxSpreadBps||
+  !isFiniteKey('taker_buy_ratio_5m')||num('taker_buy_ratio_5m')<p.minTaker5Hard||
+  !isFiniteKey('accel_15m_vs_60m')||num('accel_15m_vs_60m')<p.minAccel15_60Hard||
+  !isFiniteKey('distance_high_15m')||num('distance_high_15m')<p.minDistanceHigh15;
+ if(hard)return deny('RESCUE_HARD_BLOCK');
+ const required=latest?.current_propulsion==='STRONG'&&latest?.structural_strength==='STRONG'&&
+  ['MOMENTUM_CONTINUATION','BREAKOUT_CONFIRMATION'].includes(phase)&&
+  num('ema9_slope')>0&&num('ema20_slope')>0&&num('ema9_vs_ema20')>0&&num('return_15m')>0&&num('return_60m')>0;
+ if(!required)return deny('RESCUE_STRUCTURE_WEAK');
+ const overheat=num('rsi_1m_14')>=p.overheatRsi1||num('return_5m')>=p.overheatReturn5||num('return_15m')>=p.overheatReturn15||
+  num('return_60m')>=p.overheatReturn60||num('bb_position')>=p.overheatBb&&num('volume_ratio_1m_vs_baseline')>=p.overheatVol1||
+  num('candle_range_atr')>=p.candleRangeAtr&&v.higher_high!==true;
+ if(overheat)return deny('RESCUE_OVERHEAT');
+ const strengths=[
+  num('taker_buy_ratio_5m')>=p.strongMinTaker5,
+  num('taker_buy_ratio_15m')>=p.strongMinTaker15,
+  num('accel_5m_vs_15m')>0,
+  num('accel_15m_vs_60m')>0,
+  num('spread_bps')<=p.strongMaxSpreadBps,
+  num('expected_execution_cost_bps')<=p.strongMaxExecutionCostBps
+ ],score=strengths.filter(Boolean).length;
+ if(score<p.strongMinScore)return {allowed:false,reason:'RESCUE_STRENGTH_INSUFFICIENT',age_ms:age,strength_score:score,strengths};
+ return {allowed:true,reason:'STRONG_CONTINUATION_RESCUE',age_ms:age,strength_score:score,strengths};
+}
 export function revalidateEntry(initial,input){
- const latest=classifyMarket(input),price=input.price??input.capture?.trajectory?.at(-1)?.mid,drift=price/initial.reference_price-1;
- const failure=latest.decision!=='BUY'?'CURRENT_THESIS_INVALID':!finite(drift)?'PRICE_UNKNOWN':
+ const rawLatest=classifyMarket(input),price=input.price??input.capture?.trajectory?.at(-1)?.mid,drift=price/initial.reference_price-1;
+ let failure=rawLatest.decision!=='BUY'?'CURRENT_THESIS_INVALID':!finite(drift)?'PRICE_UNKNOWN':
   drift>Math.min(input.profile.bands.entry_drift.block,initial.atr_normalized)?'LATE_EXECUTION':
   price<initial.trigger_reference&&initial.trigger==='BREAKOUT'?'FAILED_BREAKOUT':
-  latest.capture_end_ms<initial.capture_end_ms?'CAPTURE_REGRESSED':null;
- return {allowed:failure===null,action:failure?'CANCEL_ENTRY':'EXECUTE',reason:failure,decision_age_ms:input.at-initial.at,drift,latest};
+  rawLatest.capture_end_ms<initial.capture_end_ms?'CAPTURE_REGRESSED':null,rescue=null;
+ if(failure==='CURRENT_THESIS_INVALID'){
+  rescue=evaluateEntryRescue(initial,input,rawLatest,drift);
+  if(rescue.allowed)failure=null;
+ }
+ const latest=rescue?.allowed?{...rawLatest,entry_rescue:rescue}:rawLatest;
+ return {allowed:failure===null,action:failure?'CANCEL_ENTRY':rescue?.allowed?'EXECUTE_RESCUE':'EXECUTE',reason:failure,
+  decision_age_ms:input.at-initial.at,drift,latest,rescue};
 }
 export function decidePosition({position,facts,capture,profile,at,bid,previous=null}){
  const entry=Number(position.entry_price),recordedPeak=Number(position.peak_price),peak=Math.max(Number.isFinite(recordedPeak)?recordedPeak:entry,bid,entry),mfe=peak/entry-1,pnl=bid/entry-1,drawdown=bid/peak-1;
