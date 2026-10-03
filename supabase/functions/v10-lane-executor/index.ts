@@ -125,8 +125,9 @@ async function requireLeaderEntryControls(db){
 }
 async function readOpsPair(db,gw=opsGateway(db),candidateSymbol=null) {
   const candidate=candidateSymbol==null?null:String(candidateSymbol).toUpperCase();
-  const positions=await readOpsPositions(db);
-  const [manual,baseOrders,quarantines,candidateOrders]=await Promise.all([manualPositionAllowances(db),readOpsOrders(db,positions),
+  // Independent signed venue and DB reads share no snapshot cache. Orders still
+  // depend on the current position manifest; the final BUY checks remain serial.
+  const [pf,positions,manual,quarantines,candidateOrders]=await Promise.all([gw({action:"p10_portfolio"},3000),readOpsPositions(db),manualPositionAllowances(db),
     db.from("v18_ops_incidents").select("id,generation,kind,reason,symbol,status,control_scope,exposure_state,accounting_state,order_source,evidence_version,recheck_conditions,last_checked_at,evidence")
       .eq("exchange","binance_futures").eq("account_scope","futures").eq("control_scope","SYMBOL_QUARANTINE")
       .in("status",["OPEN","VERIFYING"]).order("last_checked_at",{ascending:true}).limit(101),
@@ -137,8 +138,8 @@ async function readOpsPair(db,gw=opsGateway(db),candidateSymbol=null) {
   if((quarantines.data??[]).length>100)throw Error("SYMBOL_QUARANTINE_BACKLOG_OVERFLOW");
   if(candidateOrders.error)throw Error("CANDIDATE_ORDERS_READ");
   if((candidateOrders.data??[]).length>100)throw Error("CANDIDATE_ORDER_BACKLOG_OVERFLOW");
+  const baseOrders=await readOpsOrders(db,positions);
   const orders=candidate?[...new Map([...baseOrders,...(candidateOrders.data??[])].map(o=>[o.id,o])).values()]:baseOrders;
-  const pf=await gw({action:"p10_portfolio"},3000);
   return {pf,positions,manual,orders,quarantines:quarantines.data??[],match:classifyPortfolio(positions,pf,{manual,orders})};
 }
 async function recordMismatch(db,match) {
@@ -167,7 +168,14 @@ async function recordMismatch(db,match) {
   return results;
 }
 async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
-  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>reconcileOps(db,{...pair,recoveryOnly:true},budget));
+  if(shortAccountWriter(db)&&!currentAccountOwner(db)){
+    const closed=await readClosedProtectionBacklog(db);
+    if(!pair.orders.some(o=>["PLANNED","DISPATCHED","PARTIALLY_FILLED","UNKNOWN","RECONCILIATION_PENDING","RECONCILIATION_FAILED"].includes(o.state))&&
+      !pair.match.issues.some(i=>i.positionId&&pair.positions.some(p=>p.id===i.positionId))&&!closed.rows.length)return[];
+    // Work is discovered under analysis, then reread and CAS-fenced under the
+    // writer. An incomplete backlog still blocks entries through its own gate.
+    return withAccountMutation(db,async()=>reconcileOps(db,{...await readOpsPair(db),recoveryOnly:true},budget));
+  }
   const gw=scopedGateway(db,budget),results=[];
   // Exposure-uncertain order identity gets the first reconciliation budget.
   // Closed native-stop cleanup remains bounded and runs immediately afterward.
@@ -258,8 +266,8 @@ async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
   return results;
 }
 async function attemptSymbolRecoveries(db,pair) {
-  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>attemptSymbolRecoveries(db,pair));
   if(!pair.quarantines.length)return[];
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,async()=>attemptSymbolRecoveries(db,await readOpsPair(db)));
   const live=await opsGateway(db)({action:"v18_open_orders"},5000),results=[];
   for(const active of pair.quarantines.slice(0,5)){
     const evidence=symbolRecoveryEvidence({incident:active,classification:pair.match,portfolio:pair.pf,
@@ -273,8 +281,11 @@ async function attemptSymbolRecoveries(db,pair) {
   return results;
 }
 async function attemptOpsRecovery(db,pair,protectedIds) {
-  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>attemptOpsRecovery(db,pair,protectedIds));
   const c=await opsControls(db);
+  // A healthy account has no recovery mutation. Eligible recovery rereads all
+  // controls and execution truth after acquiring its writer, exactly as before.
+  if(!c.runtime.circuit_open)return {resolved:false,reason:"EVIDENCE_INCOMPLETE"};
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,async()=>attemptOpsRecovery(db,await readOpsPair(db),protectedIds));
   let incidentResolution=null;
   if(c.runtime.incident_id){
     const ir=await db.from("v18_ops_incidents").select("id,generation,resolution_evidence").eq("id",c.runtime.incident_id).maybeSingle();
@@ -1123,7 +1134,7 @@ async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComp
  return {entered:entries.some(x=>x.entered),entryCount:entries.filter(x=>x.entered).length,entries,reason:entries.length?entries.at(-1).reason??null:'NO_DETERMINISTIC_BUY',capacity:cap};
 }
 async function run(db,{recoveryReady=true}={}){
- const started=Date.now();await verifyExecutionLease(db);let pair=await readOpsPair(db),managed=[],protectedIds=new Set();await recordMismatch(db,pair.match);
+ const started=Date.now();await verifyExecutionLease(db);let pair=await executorStage('initial_account',()=>readOpsPair(db)),managed=[],protectedIds=new Set();const initialIncidents=await recordMismatch(db,pair.match);
  const controls=await opsControls(db);
  if(controls.settings.manual_intervention_required||controls.settings.emergency_liquidation)return {ok:true,skipped:'OPERATOR_MANAGEMENT_OWNERSHIP'};
  // Position safety owns the first turn and is independent from universe/entry/capture authority.
@@ -1135,14 +1146,17 @@ async function run(db,{recoveryReady=true}={}){
  });
  managed=work.map((x,i)=>x.error?{id:pair.match.safe[i].id,symbol:pair.match.safe[i].symbol,error:String(x.error.message??x.error)}:x.value);
  for(const x of work)if(x.error&&classifyFailure(x.error).fatal)throw x.error;
- pair=await readOpsPair(db);const reconciliation=await reconcileOps(db,pair);pair=await readOpsPair(db);await recordMismatch(db,pair.match);
- const symbolRecovery=await attemptSymbolRecoveries(db,pair),recovery=await attemptOpsRecovery(db,pair,protectedIds),current=await opsControls(db);
+ if(work.length||initialIncidents.length)pair=await executorStage('post_management_account',()=>readOpsPair(db));
+ const reconciliation=await executorStage('reconciliation',()=>reconcileOps(db,pair));
+ if(reconciliation.length)pair=await executorStage('post_reconciliation_account',()=>readOpsPair(db));
+ await recordMismatch(db,pair.match);
+ const symbolRecovery=await executorStage('symbol_recovery',()=>attemptSymbolRecoveries(db,pair)),recovery=await executorStage('account_recovery',()=>attemptOpsRecovery(db,pair,protectedIds)),current=await opsControls(db);
  let entry={entered:false,reason:'ENTRY_ACCOUNT_BLOCKED'};
  if(recoveryReady&&!current.runtime.circuit_open&&operatorAllowsRecovery(current.runtime,current.control,current.settings)){
   pair.managementFailures=managed.filter(x=>x.error);const backlog=await readClosedProtectionBacklog(db,1000);
-  entry=await runEntryQueue(db,pair,pair.manual,new Set(backlog.rows.map(p=>p.symbol)),backlog.complete);
+  entry=await executorStage('entry_queue',()=>runEntryQueue(db,pair,pair.manual,new Set(backlog.rows.map(p=>p.symbol)),backlog.complete));
  }
- pair=await readOpsPair(db);
+ pair=await executorStage('final_account',()=>readOpsPair(db));
  const at=new Date().toISOString(),health=managed.some(x=>x.error)||!pair.match.ok?'DEGRADED':pair.positions.length===0?'FLAT':
   pair.positions.every(p=>p.metadata?.exitProtection?.health==='PROTECTED'&&(p.metadata.exitProtection.orders??[]).some(o=>!o.terminal&&['ACTIVE','NEW'].includes(o.status)))?'PROTECTED':'SOFTWARE_ONLY';
  const heartbeat={last_cycle_started_at:new Date(started).toISOString(),last_cycle_completed_at:at,last_entry_evaluated_at:at,
@@ -1150,6 +1164,11 @@ async function run(db,{recoveryReady=true}={}){
   ...(managed.length&&!managed.some(x=>x.error)?{last_management_success_at:at}:{}),...(health==='PROTECTED'?{last_position_protection_success_at:at}:{}),...(entry.entered?{last_entry_at:at}:{}),updated_at:at};
  await writeRuntimeTelemetry(db,heartbeat,['FLAT','PROTECTED'].includes(health),at);
  return {ok:true,patch:PATCH,authority:ENGINE,managed,reconciliation,entry,recovery,symbolRecovery,protectionHealth:health,total_runtime_ms:Date.now()-started};
+}
+async function executorStage(stage,operation){
+ const started=Date.now();let outcome='FAILED';
+ try{const result=await operation();outcome='SUCCEEDED';return result;}
+ finally{console.log(JSON.stringify({event:'DETERMINISTIC_EXECUTOR_STAGE',stage,outcome,duration_ms:Date.now()-started}));}
 }
 async function writeRuntimeTelemetry(db,heartbeat,successful,at){
  await withAccountMutation(db,async()=>{
@@ -1192,7 +1211,7 @@ Deno.serve(async req=>{
    const ready=await accountHostScopes.get(db).critical(db,()=>ensureShortWriterRecovery(db));
    return res(200,{ok:true,ready:ready===true,authority:ENGINE,entry_attempted:false});
   }
-  return res(200,shortAccountWriter(db)?await accountHostScopes.get(db).periodic(async()=>{const recovered=await withAccountMutation(db,()=>ensureShortWriterRecovery(db));return run(db,{recoveryReady:recovered});}):await runWithLease(db,async()=>{const recovered=await ensureShortWriterRecovery(db);return run(db,{recoveryReady:recovered});}));
+  return res(200,shortAccountWriter(db)?await accountHostScopes.get(db).periodic(async()=>{const recovered=await executorStage('short_writer_recovery',()=>ensureShortWriterRecovery(db));return run(db,{recoveryReady:recovered});}):await runWithLease(db,async()=>{const recovered=await ensureShortWriterRecovery(db);return run(db,{recoveryReady:recovered});}));
  }catch(e){console.error('DETERMINISTIC_EXECUTOR_ERROR',String(e.message??e));return res(503,{ok:false,patch:PATCH,error:String(e.message??e)});}
 });
 
@@ -1202,6 +1221,7 @@ async function ensureShortWriterRecovery(db){
   const readiness=await db.rpc("v17_account_recovery_state");
   if(readiness.error)throw Error("ACCOUNT_RECOVERY_READINESS_UNAVAILABLE");
   if(readiness.data?.ready===true)return true;
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>ensureShortWriterRecovery(db));
   const gw=opsGateway(db);
   // Observe the venue before touching ambiguous identities; the existing reconciler
   // queries original IDs only and never creates another BUY.
