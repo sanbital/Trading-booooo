@@ -92,6 +92,17 @@ including the unchanged hard floor, stable execution truth and postmaster recove
 It records WAIT when no fill occurs and cannot report completion at its deadline.
 Raw account/trade/stop/quote evidence is encrypted; summaries exclude balances.
 
+Signed quote observation 37094913628 at 03:57:44 UTC found AXSUSDT
+BID_TOP_MISMATCH: separate ticker and depth reads described different book tops.
+The Binance-only repair takes executable bid/ask and liquidity from the same
+depth snapshot, and does not promote absent depth through ticker fallback. Depth
+limit, strategy, leverage/mode/sizing, native stop and writer fencing remain.
+Deploy through the protected exact-main `deterministic-quote-repair.yml` with
+entries paused, signed flat reconciliation and encrypted machine manifests. It
+uses the repository's normal Fly rolling deployment, retains one 256MB/one-CPU
+Paris machine, changes no credentials/flags, and leaves Tokyo's source and
+scheduler roles intact. Pin the actually observed new Paris source before resume.
+
 Readiness requests explicitly select the observed production clock region,
 `ap-northeast-1`, and reject a different `x-sb-edge-region` response. On
 2026-10-03 at 00:48:19 UTC, an unpinned GitHub runner diagnostic reached

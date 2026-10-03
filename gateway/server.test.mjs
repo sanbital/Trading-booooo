@@ -302,6 +302,24 @@ test("P10 Futures multi-market batch uses one all-book request and filters local
   assert.deepEqual(quotes.map((row) => row.market), ["BTCUSDT", "ETCUSDT"]);
 });
 
+test("Futures executable price and depth share one snapshot without a separate drifting ticker", async (t) => {
+  const originalFetch=globalThis.fetch,calls=[];
+  globalThis.fetch=async input=>{const url=new URL(String(input));calls.push(url.pathname);
+    if(url.pathname==='/fapi/v1/depth')return new Response(JSON.stringify({bids:[["100","10"],["99.5","10"]],asks:[["100.01","10"],["100.5","10"]]}),{status:200});
+    if(url.pathname==='/fapi/v1/trades')return new Response('[]',{status:200});
+    throw Error('UNEXPECTED_SEPARATE_TICKER');
+  };t.after(()=>globalThis.fetch=originalFetch);
+  const quote=await module.quote('binance_futures','QUSDT');
+  assert.equal(quote.best_bid,quote.bids[0].price);assert.equal(quote.best_ask,quote.asks[0].price);assert.equal(quote.raw.ticker,null);
+  assert.deepEqual(calls.sort(),['/fapi/v1/depth','/fapi/v1/trades']);
+  const {normalizeEntryBook}=await import('../supabase/functions/_shared/deterministic/book.mjs');assert(normalizeEntryBook(quote,1500).health.bookHealthy);
+});
+test("Futures missing depth cannot become executable through a ticker fallback", async (t) => {
+  const originalFetch=globalThis.fetch;globalThis.fetch=async input=>new Response(new URL(String(input)).pathname==='/fapi/v1/depth'?'{"bids":[],"asks":[]}':'[]',{status:200});t.after(()=>globalThis.fetch=originalFetch);
+  const quote=await module.quote('binance_futures','QUSDT');assert.equal(quote.best_bid,0);assert.equal(quote.best_ask,0);
+  const {normalizeEntryBook}=await import('../supabase/functions/_shared/deterministic/book.mjs');assert.equal(normalizeEntryBook(quote,1500).health.bookHealthy,false);
+});
+
 test("P10 Futures position proof uses one bounded signed account request after time sync", async (t) => {
   const originalFetch = globalThis.fetch;
   const calls = [];
