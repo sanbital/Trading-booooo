@@ -83,6 +83,15 @@ Failure does not disable the position-management engine or clear the pause. A
 successful verification itself never resumes permission, calls an executor cycle
 or sends an order; use the existing conditional reconciliation/resume workflow.
 
+The protected `deterministic-runtime-proof.yml` provides signed read-only quote
+integrity observations and a bounded natural-fill watch. It cannot create an
+order or change entry permission. Fill success requires an actual new attributed
+deterministic BUY fill, matched venue quantities/trades/fees/accounting, settled
+USDT wallet (not floating mark-price equity), exact native stop acknowledgements
+including the unchanged hard floor, stable execution truth and postmaster recovery.
+It records WAIT when no fill occurs and cannot report completion at its deadline.
+Raw account/trade/stop/quote evidence is encrypted; summaries exclude balances.
+
 Readiness requests explicitly select the observed production clock region,
 `ap-northeast-1`, and reject a different `x-sb-edge-region` response. On
 2026-10-03 at 00:48:19 UTC, an unpinned GitHub runner diagnostic reached

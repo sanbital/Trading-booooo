@@ -1,0 +1,49 @@
+name: Deterministic signed runtime proof (read-only)
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        type: string
+        required: true
+      operation:
+        type: choice
+        required: true
+        options: [quote-evidence, fill-proof]
+      not_before:
+        description: Required UTC timestamp for real fill observation
+        type: string
+      observation_minutes:
+        type: string
+        default: '30'
+permissions:
+  contents: read
+jobs:
+  observe:
+    if: github.repository == 'sanbital/Trading-booooo' && github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Observe signed reads without trading or control commands
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          PROOF_OPERATION: ${{ inputs.operation }}
+          NOT_BEFORE: ${{ inputs.not_before }}
+          OBSERVATION_MINUTES: ${{ inputs.observation_minutes }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        run: node ops/deterministic/runtime-proof.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deterministic-runtime-proof-${{ inputs.operation }}-${{ github.run_id }}
+          path: infra-evidence/deterministic-runtime-proof*
+          retention-days: 7
+          if-no-files-found: error
