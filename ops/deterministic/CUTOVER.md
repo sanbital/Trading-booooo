@@ -1,18 +1,18 @@
 # Deterministic engine release and operator cutover
 
-Status observed 2026-10-03 04:18:52 UTC: NEW ENTRIES PAUSED by the normal
-trading-control workflow 37095061226 (`pause_new_entries=true`) for the Futures
-quote snapshot repair. Deterministic
+Status observed 2026-10-03 04:35:48 UTC: NEW ENTRY ADMISSION RESUMED by the normal
+trading-control workflow 37096513797 after the Futures quote snapshot repair and
+all fresh read-only resume gates (`pause_new_entries=false`). Deterministic
 management and reconciliation remain installed and running. Deterministic control
 is enabled,
 generation 2, source e966badf791b641801dabac3ae282ac673c04819 (executor v191,
 generator v53). The protected activation transaction ran at 01:06:28 UTC from
 release-runner main cd4960d9f87589a8bac15030a82a3f596c6917be. The former GPT and
 batch authorities remain OFF/disabled; one fenced five-second external clock
-drives the new generator/executor. Entry admission additionally requires the
-operator pause to be cleared; it currently is not. This is an observed authority
-switch followed by a safety pause, not a claim that an order filled or that
-strategy returns improved.
+drives the new generator/executor. Entry admission additionally requires current
+exchange truth, capacity and complete same-symbol data. No new order or fill has
+been observed in this resumed window yet; natural real-fill proof remains pending.
+Authority and data observations do not establish improved strategy returns.
 
 Fresh signed account proof passed at 03:34:15 UTC (37093625505), and all current
 read-only resume gates passed at 03:43:46 UTC (37094127813). The normal
@@ -31,7 +31,42 @@ original roles were observed after deployment. No Edge service, migration,
 credential, scheduler flag, sizing or native-stop policy changed in this repair.
 Use complete per-app reviewed gateway pins for subsequent signed reads and
 resume gates: a missing/malformed pin must fail, never borrow the other app's
-source. Fresh post-deployment gates and natural real-fill proof are still required.
+source. Subsequent signed gates must require these actually deployed sources.
+
+Post-deployment signed proof and complete resume gates passed at 04:25:15 UTC
+(37096431379), with 20 complete technical feature sets, 18 full 24-bucket trade
+trajectories and a strict 24-bucket BTC sensor. CHZ/TAKE were warming up and
+causally DATA/REJECT; their missing buckets never borrowed another symbol's data.
+Signed quote observations 37096447872 had five healthy independent REST books
+and zero ticker/depth top mismatches. CT's finite 100-level bid did not cover
+25bp; no full-depth claim was made for it. The actual Paris/Tokyo source pins
+remain d68f80678c1a29de4fc993c014a58ca54007288b and
+1bd5e3bf76bfb55f9df749818e325f91b5c6ab02, respectively.
+
+At 04:26:18 UTC, DB permission was observed resumed, generation 2, GPT OFF and
+old batch disabled. Through 04:35:48, new orders/fills/holdings and unresolved
+orders remained zero, nine new natural BUY seeds were observed, circuit was
+closed and recent executor telemetry had no error. A YGG BUY at 04:27:17 was
+followed by production WAIT/CONFIRMATION_NOT_READY at 04:27:23 before its rejection;
+do not attribute every CURRENT_THESIS_INVALID to the repaired quote defect.
+Read-only watcher 37096534089 observes actual natural fills from 04:25:53 UTC and
+can report success only after quantity, native-stop acknowledgements, canonical
+fills/fees/attribution/accounting, settled wallet and recovery proof pass. It
+never creates a validation order. A no-fill deadline is incomplete fill proof,
+not deployment failure or permission to change strategy thresholds.
+
+Source closure remains the unchanged 33 service files at e966badf, with no
+OpenAI/DeepSeek or GPT wait/budget/timeout dependency. In the bounded runtime log
+window 03:44:11-04:21:30 UTC, executor/generator had 2021/794 function log rows and
+zero provider or GPT dependency events; trading provider ledger calls since
+staging were zero. Full regression for #331/#332 passed 1516/1517 active tests.
+In that pre-repair/resume log window executor v191 had 140 requests, one error,
+p50 8930ms/p95 43796ms/max 53734ms; generator v53 had 396 requests, no errors,
+p50 1284ms/p95 2307ms. These are measured latencies, not a five-second cycle SLA.
+The current postmaster remains 03:20:19 UTC with completed recovery. Its earlier
+abnormal interruption cause remains unproven; no platform restart/resource or
+credential change was performed. Keep that risk and new-position runtime proof
+explicit until fresh evidence resolves them.
 
 Release evidence:
 - Stage/migration/source parity: workflow 37079937802.
