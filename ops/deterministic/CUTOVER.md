@@ -1,5 +1,41 @@
 # Deterministic engine release and operator cutover
 
+Status observed 2026-10-03 12:27 UTC: DB/REST RECOVERED, ENTRIES PAUSED,
+BTC SENSOR RESUME GATE FAILED. PostgreSQL's current postmaster started at
+12:16:55.400305; this task did not restart it. Tokyo leadership and current
+postmaster recovery are healthy. Normal pause 37122694754 succeeded with
+pause_new_entries=true. Signed preflight 37122697007 and verify-resume account
+proof 37122749433 found zero venue/DB holdings, ordinary/protective orders,
+unresolved orders and incident failures; balance matched. The 24h DB-known
+symbol history has zero canonical/exchange fills, so this proves no new fill.
+
+Verify-resume 37122749433 failed BTC_MARKET_SENSOR_NOT_READY. All 20 technical
+feature sets were ready; 17 trade symbols had 24 valid buckets and three
+incomplete symbols remained DATA/REJECT. BTC's latest 25 buckets all had
+book_complete=false. The latest payload reports CROSSED_OR_EMPTY even though
+the worker reports SYNCED; its last BTC snapshot is still the initial snapshot
+from 2026-10-02 23:47. This is a separate collector book-integrity recovery
+failure after DB recovery, not evidence that the database outage was fixed by
+the collector repair.
+
+The reviewed repair invalidates only a crossed/empty book and uses existing
+bounded symbol single-flight snapshot/sequence recovery. It preserves market
+flow, other symbols and bucket clocks; a broken/recovery interval stays invalid.
+No capture/depth/freshness/strategy thresholds change. The new exact-main
+production workflow replaces only the existing collector image under its
+machine lease/current_version guard, preserving opaque configuration and
+requiring paused flat reconciliation/current-postmaster recovery. It requires
+three consecutive strict BTC 24-bucket sensor proofs after replacement. This
+section describes prepared code; production replacement has not yet happened.
+
+If the collector repair fails, keep entries paused and retain its artifact's
+exact before/after image and machine identity. Restore only its recorded prior
+image through the normal Fly administrative deployment path, preserving config;
+the old image retains the known integrity defect and is not a resume gate pass.
+Re-run signed account proof, service parity and verify-resume before admitting
+entries. Never replay outage ticks, fabricate buckets/orders, reset circuits or
+restore AI authority. DB restart actor/root cause remains unproven.
+
 Status observed 2026-10-03 11:01:54 UTC: PRODUCTION DATABASE/REST UNAVAILABLE.
 Independent platform workflow 37118244156 observed db/db_postgres_user/rest
 UNHEALTHY, metrics HTTP 500 and a 15002ms SQL timeout. Two management SQL reads,

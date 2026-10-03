@@ -1,6 +1,6 @@
 import {captureDisposition} from './clock.mjs';
 import {exchangeMinuteWeight,restWeightLimit,recoveryOrder} from './bootstrap.mjs';
-import {Book,Flow,WeightBudget,VERSION,BOOK_STATE,symbolSingleFlight,boundedSnapshotResync,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue,initialBucketBoundary,controlBackoffMs,controlDisposition} from './core.mjs';
+import {Book,Flow,WeightBudget,VERSION,BOOK_STATE,symbolSingleFlight,boundedSnapshotResync,iso,inWindow,streamURLs,normalizeSymbol,transportFresh,closedCandle,btcCandleFields,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue,invalidateUnusableBook,initialBucketBoundary,controlBackoffMs,controlDisposition} from './core.mjs';
 import {randomUUID} from 'node:crypto';
 import {summarizeCapture} from './context.mjs';
 const endpoint=process.env.CAPTURE_ENDPOINT;
@@ -214,6 +214,8 @@ function bucket(now){
   for(const s of states.values()){
     if(!captureBucketDue(s.lastBucket,now))continue;
     const m=s.book.metrics(now),flow=s.flow.metrics(now);
+    const invalid=invalidateUnusableBook(s.book,m,now);
+    if(invalid){log('BOOK_INTEGRITY_RESYNC',{symbol:s.symbol,reason:m.reason});noteBookOutcome(s,invalid);void resyncSymbol(s);}
     const full=completeCaptureInterval(s,now,s.marketSocket?.readyState===WebSocket.OPEN);
     const row={kind:'micro',symbol:s.symbol,at:iso(Math.floor(now/5000)*5000),payload:{...m,...flow,available_at:iso(now),interval_start:iso(s.lastBucket),interval_end:iso(now),interval_ms:now-s.lastBucket,
       bucket_complete:full && m.book_complete && flow.trade_sequence_complete && flow.flow_causal,
