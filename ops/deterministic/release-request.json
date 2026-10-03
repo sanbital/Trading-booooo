@@ -10,5 +10,10 @@
     "v10-lane-executor": 191,
     "v10-lane-signal-generator": 53
   },
-  "migration_sha256": "73ea63d6eac28cd0303d54b304be8cdfdd32e1bd07605e01f503ca401ae0e3c2"
+  "migration_sha256": "73ea63d6eac28cd0303d54b304be8cdfdd32e1bd07605e01f503ca401ae0e3c2",
+  "capture_repair": {
+    "expected_rpc_md5": "f5a85f791423302f4b82bce5cfeeca4c",
+    "expected_repaired_rpc_md5": "fd82de658e4df104e49416fc5eee09a7",
+    "migration_sha256": "3b974c18615ede73ea328170799f17a3b80eab7a74788f6e2a0125850dd0fab9"
+  }
 }
