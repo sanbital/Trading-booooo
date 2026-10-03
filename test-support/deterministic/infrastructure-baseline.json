@@ -53,5 +53,6 @@
     "settleNeverPlacedEntry",
     "reconcileDbOnlyPosition",
     "settleNeverPlacedPartialRetry"
-  ]
+  ],
+  "latency_read_pair_sha256": "603d6c5703defda10dda86e65d44a1f00874eb583bfddc35fb615e3995ff1bcf"
 }

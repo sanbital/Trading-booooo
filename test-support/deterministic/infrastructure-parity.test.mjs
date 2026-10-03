@@ -5,5 +5,8 @@ test('40 audited lease/transport/ownership/capacity/receipt/reconciliation funct
  // auth is the explicit production repair: dependency errors now return 503.
  // Its original fingerprint remains in the baseline; auth-recovery tests exercise
  // the new handler semantics. No execution/settlement fingerprint is relaxed.
- for(const [name,hash] of Object.entries(baseline.functions))if(name!=='auth')assert.equal(createHash('sha256').update(functions.get(name)??'MISSING').digest('hex'),hash,name);
+ // readOpsPair's reviewed latency repair overlaps independent reads. Its new
+ // fingerprint is separately pinned; behavioral latency tests preserve fail-closed
+ // reads and position-dependent order ownership. All other fingerprints stay.
+ for(const [name,hash] of Object.entries(baseline.functions))if(name!=='auth')assert.equal(createHash('sha256').update(functions.get(name)??'MISSING').digest('hex'),name==='readOpsPair'?baseline.latency_read_pair_sha256:hash,name);
 });

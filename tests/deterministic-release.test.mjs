@@ -6,9 +6,35 @@ import {scenario} from '../test-support/deterministic/fixtures.mjs';
 import {readReadiness} from '../ops/deterministic/readiness-read.mjs';
 import {expectedGatewayCommit} from '../ops/deterministic/gateway-source.mjs';
 import {serviceSourceRoot} from '../ops/deterministic/service-source.mjs';
+import {serviceIdentity,assertLatencySource} from '../ops/deterministic/service-identity.mjs';
 import os from 'node:os';import path from 'node:path';
 const root=new URL('../',import.meta.url);
 const readinessRequest={project:'etaajwpernzrcdrifdnw',slug:'v10-lane-signal-generator',token:'fixture-only',body:{mode:'diagnostic'},region:'ap-northeast-1'};
+test('latency deployment pins executor separately and refuses unrelated service identities',()=>{
+ const request=JSON.parse(fs.readFileSync(new URL('../ops/deterministic/release-request.json',import.meta.url))),r=request.executor_latency_repair;
+ const baseline=serviceIdentity(request),after=serviceIdentity(request,r.source_commit);
+ assert.equal(baseline.versions['v10-lane-executor'],192);assert.equal(after.versions['v10-lane-executor'],193);
+ assert.equal(after.sources['v10-lane-signal-generator'],request.staged_source_commit);
+ assert.throws(()=>serviceIdentity(request,'f'.repeat(40)),/UNREVIEWED_SERVICE_IDENTITY/);
+ assert.throws(()=>serviceIdentity({...request,executor_latency_repair:{...r,expected_versions:{'v10-lane-executor':194}}},r.source_commit),/UNREVIEWED_SERVICE_IDENTITY/);
+});
+test('latency source proof refuses any strategy dependency change or different runner bytes',()=>{
+ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'latency-source-test-')),file='supabase/functions/v10-lane-executor/index.ts';
+ const git=args=>{const r=spawnSync('git',args,{cwd:temp,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout.trim();};
+ try{
+  git(['init']);git(['config','user.email','fixture@example.invalid']);git(['config','user.name','Fixture']);fs.mkdirSync(path.dirname(path.join(temp,file)),{recursive:true});fs.writeFileSync(path.join(temp,file),'old');git(['add','.']);git(['commit','-m','baseline']);const baseline=git(['rev-parse','HEAD']);
+  fs.writeFileSync(path.join(temp,file),'repair');git(['add','.']);git(['commit','-m','repair']);const source=git(['rev-parse','HEAD']);
+  const request={staged_source_commit:baseline,expected_versions:{'v10-lane-executor':190,'v10-lane-signal-generator':52},expected_staged_versions:{'v10-lane-executor':192,'v10-lane-signal-generator':53},executor_latency_repair:{baseline_source_commit:baseline,source_commit:source,baseline_versions:{'v10-lane-executor':192,'v10-lane-signal-generator':53},expected_versions:{'v10-lane-executor':193,'v10-lane-signal-generator':53}}};
+  const root=serviceSourceRoot(source,{cwd:temp,temp});assert.doesNotThrow(()=>assertLatencySource(request,root,{cwd:temp}));
+  fs.writeFileSync(path.join(temp,file),'unreviewed');assert.throws(()=>assertLatencySource(request,root,{cwd:temp}),/RUNNER_SOURCE_MISMATCH/);
+  git(['reset','--hard',baseline]);fs.writeFileSync(path.join(temp,file),'repair');fs.writeFileSync(path.join(temp,'supabase/functions/strategy.mjs'),'changed');git(['add','.']);git(['commit','-m','unrelated strategy']);request.executor_latency_repair.source_commit=git(['rev-parse','HEAD']);
+  assert.throws(()=>assertLatencySource(request,root,{cwd:temp}),/CHANGED_STRATEGY_OR_DEPENDENCY/);
+ }finally{fs.rmSync(temp,{recursive:true,force:true});}
+});
+test('latency repair requires its explicit reviewed marker before production access',()=>{
+ const r=spawnSync(process.execPath,['ops/deterministic/release.mjs'],{cwd:root,encoding:'utf8',env:{PATH:process.env.PATH,GITHUB_REPOSITORY:'sanbital/Trading-booooo',GITHUB_REF:'refs/heads/main',GITHUB_SHA:'a'.repeat(40),EXPECTED_COMMIT:'a'.repeat(40),CUTOVER_OPERATION:'repair-latency'}});
+ assert.notEqual(r.status,0);assert.match(r.stderr,/LATENCY_REPAIR_EXACT_BASELINE_REQUIRED/);assert.doesNotMatch(r.stdout,/DEPLOYED|SOURCE_RECORDED/);
+});
 test('deployed source parity uses the pinned commit even when the runner has repaired service bytes',()=>{
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'source-pin-test-'));
  const git=args=>{const r=spawnSync('git',args,{cwd:temp,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout.trim();};
