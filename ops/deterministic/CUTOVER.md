@@ -14,7 +14,7 @@ at five seconds while deterministic admission remains disabled. The operator
 permission can then return to its previous value for unchanged V18 incident
 recovery; it cannot grant BUY while deterministic control is disabled. `verify`
 checks fresh signed account/fill/balance proof, source parity, all Top20 trade
-trajectories, the existing BTC market sensor contract and candle features,
+context statuses and candle features, the existing BTC market sensor contract,
 recovered scheduler and zero new provider calls. BTC's finite 1000-level snapshot
 can cover less than 25bp. Its sensor requires 24 complete causal buckets and
 reports only observed depth; it cannot substitute for a traded symbol's full
@@ -22,6 +22,15 @@ reports only observed depth; it cannot substitute for a traded symbol's full
 staged service SHA and versions separately from an ops-only release-runner SHA.
 `activate` repeats those gates before one generation/CAS authority transaction.
 Failure pauses new admission; no AI rollback or direct circuit reset is performed.
+
+Top20 membership refreshes every minute while each trade trajectory requires
+120 seconds. All 20 symbols must be observed with fresh complete candle features;
+an unavailable or stale trajectory must produce SETUP=REJECT, decision=REJECT and
+DATA in that same symbol's diagnostic. A missing status/reason, BUY/WAIT on invalid
+data or a fully blind universe blocks activation. At least one genuine complete
+trade trajectory must be observed. Healthy symbols never supply another symbol's
+data. Every production BUY retains all 24 causal buckets, full 25bp trade depth
+and immediate pre-order revalidation; no strategy threshold is changed here.
 
 `repair-capture` installs only additive migration 20261003001800 while entry
 authority remains disabled. The original ingest regex rejected QUSDT and Unicode
