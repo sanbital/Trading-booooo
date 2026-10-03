@@ -1,6 +1,8 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {ENGINE,assertAccountProof,assertActivation} from '../ops/deterministic/release-policy.mjs';
+import {classifyMarket} from '../supabase/functions/_shared/deterministic/market-state.mjs';
+import {scenario} from '../test-support/deterministic/fixtures.mjs';
 const root=new URL('../',import.meta.url);
 function sensor(asOf){
  const end=asOf-5000,points=Array.from({length:24},(_,i)=>{const t=end-(23-i)*5000,candle=Math.floor((t-1000)/60000)*60000;
@@ -14,7 +16,7 @@ function sensor(asOf){
 function valid(){const now=Date.now(),at=new Date(now).toISOString(),symbols=Array.from({length:20},(_,i)=>'S'+i+'USDT'),postmaster=at;
  return {sourceCommit:'a'.repeat(40),control:{version:ENGINE,source_commit:'a'.repeat(40),enabled:false},leader20:{active_strategy:'PAUSED',watch_limit:20},batch:{enabled:false},gpt:{mode:'OFF'},runtime:{circuit_open:false,protection_health:'FLAT',last_cycle_completed_at:at},operator:{entry_enabled:true,legacy_entries_retired:true},settings:{pause_new_entries:false},scheduler:{enabled:true,recovery_complete:true,recovered_postmaster_at:postmaster,heartbeat_at:at,expires_at:new Date(Date.now()+15000).toISOString()},postmaster,
  jobs:[['v11-long-regime-executor','v10-lane-executor'],['leader20-observer-tick','v10-lane-signal-generator']].map(([job_key,endpoint])=>({job_key,enabled:true,period_ms:5000,target:{endpoint,body:{mode:'run'}},last_success:at})),
- captures:symbols.map(symbol=>({symbol,status:'AVAILABLE',buckets:24})),marketSensorAsOf:now,marketSensor:sensor(now),unresolvedIncidents:0,diagnostic:{version:ENGINE,members:20,results:symbols.map(symbol=>({symbol,technical:true,capture_end_ms:now}))},readiness:{authority:ENGINE,entry_enabled:false,native_stop_enabled:true,hard_stop_pct:.025,maxSlots:10,sizingContract:{targetMarginUsdt:150,leverage:3},position_mode:{supported:true,mode:'ONE_WAY'}},providerCalls:0};
+ captures:symbols.map(symbol=>({symbol,status:'AVAILABLE',buckets:24})),marketSensorAsOf:now,marketSensor:sensor(now),unresolvedIncidents:0,diagnostic:{version:ENGINE,members:20,observed_at:at,results:symbols.map(symbol=>({symbol,technical:true,capture_end_ms:now,decision:'WAIT',setup:'PASS',reasons:['TRIGGER_NOT_READY'],timing:{decision:now}}))},readiness:{authority:ENGINE,entry_enabled:false,native_stop_enabled:true,hard_stop_pct:.025,maxSlots:10,sizingContract:{targetMarginUsdt:150,leverage:3},position_mode:{supported:true,mode:'ONE_WAY'}},providerCalls:0};
 }
 test('activation refuses real production failure modes and duplicate authority',()=>{
  assert.doesNotThrow(()=>assertActivation(valid()));
@@ -30,7 +32,20 @@ test('BTC context accepts finite observed depth, rejects causal gaps, and never 
   const v=valid();mutate(v);assert.throws(()=>assertActivation(v),/BTC_MARKET_SENSOR_NOT_READY/);
  }
  const v=valid();v.diagnostic.results[0].symbol='BTCUSDT';v.captures[0]={symbol:'BTCUSDT',status:'UNAVAILABLE',reason:'INVALID_OR_NONCAUSAL_BUCKET'};
- assert.throws(()=>assertActivation(v),/TOP20_CONTINUOUS_CAPTURE_NOT_READY/);
+ assert.throws(()=>assertActivation(v),/INCOMPLETE_SYMBOL_NOT_FAIL_CLOSED/);
+});
+test('incomplete symbols must be causally REJECTED while healthy symbol authority remains verifiable',()=>{
+ const v=valid(),r=v.diagnostic.results[0],input=scenario({at:Date.now()});
+ const rejected=classifyMarket({...input,capture:{status:'UNAVAILABLE',reason:'INCOMPLETE_TRAJECTORY'}});
+ v.captures[0]={symbol:r.symbol,status:'UNAVAILABLE',reason:'INCOMPLETE_TRAJECTORY'};
+ Object.assign(r,{capture_end_ms:rejected.capture_end_ms,decision:rejected.decision,setup:rejected.setup,reasons:rejected.reasons});
+ assert.doesNotThrow(()=>assertActivation(v));
+ for(const mutate of [x=>x.diagnostic.results[0].decision='BUY',x=>x.diagnostic.results[0].decision='WAIT',x=>x.diagnostic.results[0].setup='PASS',x=>x.diagnostic.results[0].reasons=['STRUCTURE'],x=>x.captures[0].reason=null]){
+  const copy=structuredClone(v);mutate(copy);assert.throws(()=>assertActivation(copy));
+ }
+ const blind=structuredClone(v);for(const c of blind.captures){c.status='UNAVAILABLE';c.reason='INCOMPLETE_TRAJECTORY';}
+ assert.throws(()=>assertActivation(blind),/TOP20_CONTINUOUS_CAPTURE_NOT_READY/);
+ const stale=valid();stale.diagnostic.results[0].capture_end_ms-=30000;assert.throws(()=>assertActivation(stale),/INCOMPLETE_SYMBOL_NOT_FAIL_CLOSED/);
 });
 test('signed proof gate cannot ignore unknown orders, mismatched fills, balance or a changed holding',()=>{
  const holdings={failures:[],exchange_positions:0,db_positions:0,ordinary_orders:0,protective_orders:0},trades={failures:[]};

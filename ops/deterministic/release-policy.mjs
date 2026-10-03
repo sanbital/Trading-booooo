@@ -28,8 +28,18 @@ export function assertActivation({control,leader20,batch,gpt,runtime,settings,op
  // independent context role uses its existing strict 24-bucket sensor contract;
  // finite observed BTC depth must never be promoted to full trade liquidity.
  const expected=new Set(diagnostic.results.map(r=>r.symbol));
- if(expected.size!==20||captures.length!==20||captures.some(c=>!expected.has(c.symbol)||c.status!=='AVAILABLE'||c.buckets!==24)||new Set(captures.map(c=>c.symbol)).size!==20)throw Error('TOP20_CONTINUOUS_CAPTURE_NOT_READY');
- if(diagnostic.version!==ENGINE||diagnostic.members!==20||diagnostic.results.length!==20||diagnostic.results.some(r=>!r.technical||!r.capture_end_ms||Date.now()-r.capture_end_ms>25000))throw Error('TOP20_FEATURES_NOT_READY');
+ if(expected.size!==20||captures.length!==20||new Set(captures.map(c=>c.symbol)).size!==20||captures.some(c=>!expected.has(c.symbol)||!['AVAILABLE','UNAVAILABLE'].includes(c.status)||c.status==='AVAILABLE'&&c.buckets!==24||c.status==='UNAVAILABLE'&&!c.reason))throw Error('TOP20_CAPTURE_EVIDENCE_INCOMPLETE');
+ if(!captures.some(c=>c.status==='AVAILABLE'))throw Error('TOP20_CONTINUOUS_CAPTURE_NOT_READY');
+ const now=Date.now();
+ if(diagnostic.version!==ENGINE||diagnostic.members!==20||diagnostic.results.length!==20||!Number.isFinite(Date.parse(diagnostic.observed_at))||now-Date.parse(diagnostic.observed_at)>25000||Date.parse(diagnostic.observed_at)>now+1000||diagnostic.results.some(r=>!r.technical||!Number.isSafeInteger(r.timing?.decision)||now-r.timing.decision>25000||r.timing.decision>now+1000))throw Error('TOP20_FEATURES_NOT_READY');
+ for(const r of diagnostic.results){
+  const capture=captures.find(c=>c.symbol===r.symbol),blocked=capture.status!=='AVAILABLE'||!Number.isSafeInteger(r.capture_end_ms)||now-r.capture_end_ms>=10000||r.capture_end_ms>now;
+  // Minute-by-minute membership changes legitimately start a new 120s warmup.
+  // Every BUY still requires full trade liquidity and all 24 causal buckets.
+  // An unavailable symbol must have current DATA/REJECT evidence; availability
+  // of another symbol never supplies the missing symbol's trading evidence.
+  if(blocked&&(r.decision!=='REJECT'||r.setup!=='REJECT'||!r.reasons?.includes('DATA')))throw Error('INCOMPLETE_SYMBOL_NOT_FAIL_CLOSED');
+ }
  if(!Number.isSafeInteger(marketSensorAsOf)||Date.now()-marketSensorAsOf>25000||marketSensorAsOf>Date.now()+1000||validateMarketSensor(marketSensor,marketSensorAsOf).status!=='AVAILABLE')throw Error('BTC_MARKET_SENSOR_NOT_READY');
  if(providerCalls!==0)throw Error('POST_DEPLOY_PROVIDER_CALLS');
 }
