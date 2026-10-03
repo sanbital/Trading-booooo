@@ -1,5 +1,80 @@
 # Deterministic engine release and operator cutover
 
+Status observed 2026-10-03 13:03:45 UTC: COLLECTOR INTEGRITY REPAIR DEPLOYED,
+DETERMINISTIC ENTRY ADMISSION RESUMED, NEW REAL FILL UNVERIFIED.
+PR #340 head 1c86763f808432ad082142788fcb7c33b991d824 passed all CI, including
+1535/1535 active complete regressions and workflow lint. Merge/source
+98f272cc6583ffba82ee7db58a8ed39e3d38f38b is the actual collector image source.
+Protected normal workflow 37123681911 replaced only existing collector machine
+185030da006d48, preserving its shared-4/1024MB guest, restart policy, opaque
+configuration and protocol. No migration, gateway/executor deployment, order or
+authority mutation occurred in that repair. It observed three consecutive
+strict BTC 24-bucket sensor proofs and finished at 12:46:02 with entries paused.
+
+Full normal verify-resume 37123972941 passed at 12:47:39: signed venue/DB holdings
+and ordinary/protective orders zero, wallet matched, no unresolved orders or
+incidents, current-postmaster recovery and single five-second scheduler authority
+ready. All 20 technical feature sets were ready; every unavailable symbol stayed
+DATA/REJECT. Actual downloaded executor v192/generator v53 bundles matched source
+5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4. Their previously verified digests remain
+3e36217d18437e9cc752e616af5890cfa0acb5866a3a5417b68899f2339c9a7d and
+3434c05e38911b7b8425a2a50faee19d70f2c542a4d25d4d714400931c898a66 respectively.
+Normal control 37124119949 applied pause_new_entries=false at 12:49:37.285.
+Deterministic generation remains 2/enabled, GPT OFF and old batch authority OFF.
+Leverage 3, margin 150 USDT, ten slots, IOC policy and 2.5% native stop are preserved.
+
+The five-minute natural-fill observer 37124121817 completed at 12:55:00 with
+REAL_FILL_NOT_VERIFIED_WITHIN_WINDOW (exit 3), not successful fill proof. At
+13:00:21, 16 real deterministic BUY candidates had been created after resume:
+15 were REJECTED/CURRENT_THESIS_INVALID and one was rejected by ownership/universe
+validation. Exactly one durable ZRO intent (3ec0c40c-d9d5-4aed-ba72-55d0d27fea4a)
+reached final dispatch authority and was REJECTED at 12:52:46 with
+notDispatched=true and no exchange order ID. Active reservations, unresolved
+orders/incidents and new fills were zero. Its seed-decision to final refusal
+elapsed 11657ms; this is refusal latency, not send/ack/fill latency.
+
+Read-only comparison 37124506136 observed five new BUY seeds with same-minute
+saved candle facts, actual current capture and signed book. Each current capture
+and data/technical/execution gate passed, while current trigger/confirmation was
+WAIT; all comparisons refused CURRENT_THESIS_INVALID. Candidate ages were
+4625..13250ms. These independent comparisons are explicitly NOT executor traces
+and do not prove each earlier refusal's exact subgate or a causal latency fix.
+Do not weaken strategy/confirmation or manufacture an order to obtain a fill.
+
+Final signed account preflight 37124574474 passed at 12:57:58: zero venue/DB
+holdings and ordinary/protective orders, matched wallet, no failures. Its 24h
+DB-known symbol/current-holding scope had zero canonical/exchange fills. Historical
+closed float dust remains preserved; other-symbol manual closed history is not
+proven. New-position HOLD/PROTECT/EXIT, native stop acknowledgement and new-fill
+attribution/accounting still require a natural new fill and are unverified.
+
+At 13:03:45 the collector reported version DOA-CAPTURE-10-BOOK-INTEGRITY/source
+98f272cc, 21 watched/synced/trade streams, 19 observed candle streams, queue
+21/1200, RSS 122802176 bytes, REST weight 44/100, no archive degradation and
+zero rejected rows in the last ingest batch. BTC's strict sensor was AVAILABLE/24.
+Top20 had 16 AVAILABLE/24 contexts; JST/AR/Q/STX were INCOMPLETE_TRAJECTORY and
+remain ineligible. Per-batch ingest rejection counts do not prove bucket validity.
+The latest Top20 epoch was observed at 13:03:16, next refresh 13:04:16. Legacy
+clock_capture_enabled=false coexists with the deterministic continuous collector;
+it does not disable continuous capture or authorize a legacy entry loop.
+
+Live logs 12:49:37..12:57:00 include both function_logs and function_edge_logs:
+executor v192 414 events and generator v53 232, total 646, with zero provider,
+GPT wait/budget/timeout, writer-context or analysis-release errors. Request metrics:
+executor 27/0 HTTP errors, p50 11781ms, p95 31699ms, max 43977ms; generator 80/0,
+p50 1368ms, p95 2105ms, max 2836ms. The provider dependency search across 34 actual
+service source files found zero invocation/dependency hits; the ENTRY/EXIT ledger
+since 2026-10-02 23:58:25 also remained zero through 13:00:21. Five-second schedule
+cadence is not end-to-end latency. Latency remains a risk, not a proven sole cause
+of the market thesis refusals or evidence of improved returns.
+
+Platform health 37124576024 at 12:58 confirmed all four services healthy, SQL
+1716ms, load1 1.01, available memory 839626752/2025488384 bytes and OOM counter 0.
+Postmaster remains 12:16:55.400305; restart actor/root cause is unproven and this
+task did not restart or resize PostgreSQL. Preserve normal pause, native protection
+and reconciliation if execution truth degrades; rerun fresh signed/current-postmaster
+and per-symbol data gates before resuming. Prior sections below are historical.
+
 Status observed 2026-10-03 12:27 UTC: DB/REST RECOVERED, ENTRIES PAUSED,
 BTC SENSOR RESUME GATE FAILED. PostgreSQL's current postmaster started at
 12:16:55.400305; this task did not restart it. Tokyo leadership and current
