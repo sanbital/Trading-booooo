@@ -10,7 +10,7 @@ async function fixture(){
  await pg.exec(fs.readFileSync(new URL('capacity-baseline.sql',import.meta.url),'utf8'));
  await pg.exec(fs.readFileSync(new URL('../../supabase/migrations/20261002102500_deterministic_dynamic_state.sql',import.meta.url),'utf8'));
  await pg.exec('alter table v11_long_regime_positions add column signal_id uuid;alter table v11_long_regime_signals add column reject_reason text');
- await pg.exec('create table v17_analysis_lease(singleton boolean,owner uuid,expires_at timestamptz,postmaster_started_at timestamptz)');await pg.exec(sql);
+ await pg.exec('create table v17_analysis_lease(singleton boolean,owner uuid,expires_at timestamptz,postmaster_started_at timestamptz)');await pg.exec(sql);await pg.exec(fs.readFileSync(new URL('../../supabase/migrations/20261003235512_deterministic_terminal_claim_cleanup.sql',import.meta.url),'utf8'));
  await pg.exec('update deterministic_control set enabled=true');
  const publish=async(symbol='TESTUSDT')=>{const t=Date.now(),members=Array.from({length:20},(_,i)=>({symbol:i===0?symbol:'S'+i+'USDT',rank:i+1,price_change_percent:20-i,quote_volume:1e8}));return (await pg.query('select deterministic_publish_universe($1,$2) r',[{members,requested_at:new Date(t).toISOString(),observed_at:new Date(t).toISOString(),next_refresh_at:new Date(t+60000).toISOString()},'a'.repeat(64)])).rows[0].r;};
  await publish();const t=Date.now(),state={version:'DETERMINISTIC_DYNAMIC_STATE_1',decision:'BUY',setup:'PASS',confirmation:'PASS',trigger:'BREAKOUT',at:t,capture_end_ms:t};
@@ -68,4 +68,15 @@ test('unchanged operational model cancels weakening and incomplete data with dis
  const cancelled=revalidateEntry(initial,weak);assert.equal(cancelled.reason,'CURRENT_MARKET_THESIS_CANCELLED');
  const signal={id:'s',symbol:'TESTUSDT',features:{deterministic:{decision:initial}}};
  const e=entryEvidence(signal,{check:{...invalid,input:absent},reason:invalid.reason,orderId:'o'});assert.equal(e.category,'DATA_UNAVAILABLE');assert.equal(e.order_id,'o');assert.equal(e.latest.gates.data,false);assert.equal(e.trajectory,undefined);
+});
+
+test('terminal no-fill claim is recovered only with final venue exposure proof',async()=>{
+ const f=await fixture();try{
+  await f.pg.query("update v11_long_regime_signals set status='CLAIMED',updated_at=clock_timestamp()-interval '10 minutes' where id=$1",[f.sig]);
+  await f.pg.query("update v11_long_regime_orders set state='EXPIRED',response_payload='{}' where id=$1",[f.order]);
+  assert.deepEqual((await f.pg.query('select deterministic_recover_claims() r')).rows[0].r.recovered,[]);
+  await f.pg.query("update v11_long_regime_orders set response_payload=$2 where id=$1",[f.order,{v18ExposureFinal:true,orderStateEvidence:{executedQty:0},positionReconciliation:{actualPositionQty:0,positionsComplete:true}}]);
+  assert.deepEqual((await f.pg.query('select deterministic_recover_claims() r')).rows[0].r.recovered,[f.sig]);
+  assert.equal((await f.pg.query('select state from leader20_entry_reservations')).rows[0].state,'RELEASED');
+ }finally{await f.pg.close();}
 });

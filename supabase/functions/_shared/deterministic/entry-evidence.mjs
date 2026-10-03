@@ -1,9 +1,10 @@
 export function cancellationCategory(reason,latest=null){
- if(latest?.gates?.data===false||latest?.gates?.technical===false||/DATA|STALE|INCOMPLETE|CAPTURE|CONTEXT_UNAVAILABLE|UNIVERSE_REFRESH/.test(reason??''))return 'DATA_UNAVAILABLE';
+ if(latest?.gates?.data===false||latest?.gates?.technical===false||/DATA|STALE|INCOMPLETE|CAPTURE|CONTEXT_UNAVAILABLE|UNIVERSE_REFRESH|TOP20_REFRESH|TOP20_SNAPSHOT/.test(reason??''))return 'DATA_UNAVAILABLE';
  if(latest?.gates?.execution===false||/BOOK|LIQUIDITY|COST|SPREAD/.test(reason??''))return 'EXECUTION_COST';
  if(/MARGIN|CAPACITY|ACCOUNT_FEE|POSITION_MODE|ACCOUNT_ENTRY_HOLD/.test(reason??''))return 'ACCOUNT_CONSTRAINT';
- if(/LATE_EXECUTION|FAILED_BREAKOUT|LATEST_PRICE/.test(reason??''))return 'PRICE_OR_BREAKOUT';
- if(/WRITER|LEASE|FENCE|GENERATION|AUTHORITY|SIGNAL_STATE|OWNERSHIP|ORDER_IDENTITY|SUBMIT/.test(reason??''))return 'AUTHORITY_OR_STATE';
+ if(/LATE_EXECUTION|FAILED_BREAKOUT|BREAKOUT_FAILED|LATEST_PRICE/.test(reason??''))return 'PRICE_OR_BREAKOUT';
+ if(/WRITER|LEASE|FENCE|GENERATION|AUTHORITY|SIGNAL_STATE|OWNERSHIP|ORDER_IDENTITY|SUBMIT|CONTRACT_CHANGED|RETIRED/.test(reason??''))return 'AUTHORITY_OR_STATE';
+ if(/TOP20_LEFT/.test(reason??''))return 'UNIVERSE_CANCEL';
  return 'MARKET_CANCEL';
 }
 const decision=d=>d?{at:d.at,capture_end_ms:d.capture_end_ms,decision:d.decision,phase:d.phase,setup:d.setup,trigger:d.trigger,confirmation:d.confirmation,gates:d.gates,reasons:d.reasons,reference_price:d.reference_price}:null;

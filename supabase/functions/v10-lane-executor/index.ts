@@ -1105,6 +1105,7 @@ async function openBull(db,s,openPositions,manual=null,attempt={},managementFail
    if(sent.blocked){if(!position)return {entered:false,reason:sent.reason};break;}
    firstIntent??=sent.oi.id;lastAttempt=sent;
    const settled=await settleKnownEntry(db,sent.oi,sent.settledRaw,gw,{existingPosition:position,retireZeroFillSignal:false,registerTarget:false});
+   attempt.dispatched=false; // Same-order receipt AND venue exposure were settled; no uncertain remainder.
    position=settled??position;
    filled=position?N(position.original_quantity):0;
    if(position&&NATIVE_STOP_ENABLED){const protect=await installEntryNativeProtection(db,position,gw,pair.manual.map(x=>x.symbol));position=protect.position??position;if(protect.status!=='PROTECTED')break;}
