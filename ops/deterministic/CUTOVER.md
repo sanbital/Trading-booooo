@@ -1,3 +1,47 @@
+# 2026-10-03 23:34 UTC: latency PR345 merged, submission proof defect reproduced, entries paused
+
+PR345 merged a8e8a7a434c6f3fa034466f12ce00c8f92841477 with seven required CI
+checks successful and local1556/1556 regression. Its executor source017c7f0012cd867a01658eee6192475d6cea64a1 is prepared but NOT deployed: production remains192/53,
+control generation2 / source5ccc46fa. Normal pause run37161800932 succeeded.
+The CLI briefly returned401 then normal workflow invocation recovered; this is
+not evidence that the production deployment completed.
+
+Natural OPUSDT intentad65e821-1ce1-482e-b8fc-615ebb3d8c7f at23:25:42 was refused
+GW_503:WRITER_FENCED. The existing reconciler proved the same identity absent
+(-2013), signed symbol quantity0, recent trades0 at23:26:17 and settled REJECTED,
+exchange idnull, exposure-finaltrue. Incidentb28c890b-0191-49d9-a2aa-fe826cf6f708
+generation190 remains held pending independent recovery. Do not unpause to clear it.
+
+Actual production response_payload is nullable with NO default. The deployed
+submission RPC used NULL||proof, acknowledged updated=true while storing NULL,
+and gateway authorization returned NULL/false. The test schema had an incorrect
+{} default and hid this defect. The production-shaped SQL regression reproduces
+NULL!=true before the additive repair, then proves stored submission/gateway
+approval afterward; every stale-state/capacity/generation/fence refusal remains.
+
+Prepared migration20261003233500 changes only the exact submission function's
+JSON concatenation to coalesce(response_payload,'{}'::jsonb)||proof; existing
+proof/audit fields, grants and deadlines remain. It adds a restricted, fenced
+paused-never-placed recovery RPC. That RPC admits only the same known incident,
+terminal rejected original identity, no live/uncertain orders or holdings, no
+pending closed protection, fresh complete signed zero-position/order/algo truth,
+and current never-placed read. The existing50s independent interval, three
+observations and110s elapsed gate remain. It never changes entry permission,
+financial rows, native orders or AI authority. Other recovery protocols remain.
+
+Normal protected repair-submit-proof / markerSUBMIT_NULL_PROOF_REPAIR_1 applies
+the exact hashed migration and collects actual signed observations while entries
+stay paused. A verified partially applied migration can resume observation after
+a fresh gate; it cannot be reapplied or replaced by a guessed function. Failure
+keeps management authority and paused entries. After incident resolution, use
+normal repair-latency / EXECUTOR_LATENCY_REPAIR_1, full verify-resume, and separate
+normal resume. Compare runtime latency and observe only natural fills.
+
+23:26 capture: BTC strict24 available; Top20 17/20 strict24 available. COLLECTUSDT,
+IOUSDT and MEGAUSDT incomplete trajectories fail closed. Collector98f272cc,
+DOA-CAPTURE-10-BOOK-INTEGRITY: watched/synced/queue21, heartbeat fresh. No new fill
+or post-repair protection/accounting/latency proof has yet been established.
+
 # 2026-10-03 23:08 UTC: executor latency repair prepared, not yet deployed
 
 Fresh read-only preflight run37160771205 / job111313557566 passed at23:08:26Z:

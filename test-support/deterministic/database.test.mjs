@@ -85,6 +85,20 @@ test('deterministic submit and gateway fences require current BUY, capacity, sam
  assert.equal((await submit({...state,decision:'WAIT'})).updated,false);
  assert.equal((await submit({...state,at:Date.now()-3100})).reason,'CURRENT_STATE_STALE');
  assert.equal((await submit({...state,at:Date.now(),capture_end_ms:Date.now()})).updated,true);
+ // Production response_payload is nullable with no default. The original RPC
+ // acknowledged submission while NULL || proof remained NULL, masking the stamp.
+ assert.equal(await auth(command),null,'reproduce the production NULL stamp');
+ const before=(await pg.query("select pg_get_functiondef('deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure) definition,proacl from pg_proc where oid='deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure")).rows[0];
+ assert.equal((await pg.query("select md5(pg_get_functiondef(to_regprocedure('public.deterministic_paused_never_placed_recovery(uuid,uuid,bigint,uuid,jsonb)'))) probe")).rows[0].probe,null);
+ await pg.exec(fs.readFileSync(new URL('../../supabase/migrations/20261003233500_deterministic_submission_null_proof.sql',import.meta.url),'utf8'));
+ const after=(await pg.query("select pg_get_functiondef('deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure) definition,proacl from pg_proc where oid='deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure")).rows[0];
+ assert.equal(after.definition,before.definition.replace('response_payload=response_payload||jsonb_build_object',"response_payload=coalesce(response_payload,'{}'::jsonb)||jsonb_build_object"));assert.deepEqual(after.proacl,before.proacl);
+ assert.equal((await submit({...state,at:Date.now(),capture_end_ms:Date.now()})).updated,true);
+ assert.equal((await pg.query('select response_payload is not null stored from v11_long_regime_orders where id=$1',[intent])).rows[0].stored,true);
+ await pg.query("update v11_long_regime_orders set response_payload=response_payload||'{\"preservedAudit\":\"historical\"}'::jsonb where id=$1",[intent]);
+ assert.equal((await submit({...state,at:Date.now(),capture_end_ms:Date.now()})).updated,true);
+ assert.equal((await pg.query('select response_payload->>\'preservedAudit\' audit from v11_long_regime_orders where id=$1',[intent])).rows[0].audit,'historical');
+ await assert.rejects(pg.exec(fs.readFileSync(new URL('../../supabase/migrations/20261003233500_deterministic_submission_null_proof.sql',import.meta.url),'utf8')),/EXACT_SUBMIT_NULL_BASELINE_REQUIRED/);
  assert.equal(await auth(command),true);assert.equal(await auth({...command,order:{...order,quantity:4}}),false);
  await pg.exec('update deterministic_control set generation=2');assert.equal(await auth(command),false);
  await pg.exec("update deterministic_control set generation=1;update v17_execution_lease set postmaster_started_at=postmaster_started_at-interval '1 minute'");

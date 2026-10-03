@@ -35,6 +35,10 @@ test('latency repair requires its explicit reviewed marker before production acc
  const r=spawnSync(process.execPath,['ops/deterministic/release.mjs'],{cwd:root,encoding:'utf8',env:{PATH:process.env.PATH,GITHUB_REPOSITORY:'sanbital/Trading-booooo',GITHUB_REF:'refs/heads/main',GITHUB_SHA:'a'.repeat(40),EXPECTED_COMMIT:'a'.repeat(40),CUTOVER_OPERATION:'repair-latency'}});
  assert.notEqual(r.status,0);assert.match(r.stderr,/LATENCY_REPAIR_EXACT_BASELINE_REQUIRED/);assert.doesNotMatch(r.stdout,/DEPLOYED|SOURCE_RECORDED/);
 });
+test('submit proof repair refuses missing exact marker before credentials, migration or recovery',()=>{
+ const r=spawnSync(process.execPath,['ops/deterministic/release.mjs'],{cwd:root,encoding:'utf8',env:{PATH:process.env.PATH,GITHUB_REPOSITORY:'sanbital/Trading-booooo',GITHUB_REF:'refs/heads/main',GITHUB_SHA:'a'.repeat(40),EXPECTED_COMMIT:'a'.repeat(40),CUTOVER_OPERATION:'repair-submit-proof'}});
+ assert.notEqual(r.status,0);assert.match(r.stderr,/SUBMIT_PROOF_REPAIR_EXACT_BASELINE_REQUIRED/);assert.doesNotMatch(r.stdout,/APPLIED|OBSERVATION|COMPLETED/);
+});
 test('deployed source parity uses the pinned commit even when the runner has repaired service bytes',()=>{
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'source-pin-test-'));
  const git=args=>{const r=spawnSync('git',args,{cwd:temp,encoding:'utf8'});assert.equal(r.status,0,r.stderr);return r.stdout.trim();};

@@ -17,14 +17,29 @@
   },
   "executor_latency_repair": {
     "baseline_source_commit": "5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4",
-    "baseline_versions": {"v10-lane-executor": 192, "v10-lane-signal-generator": 53},
+    "baseline_versions": {
+      "v10-lane-executor": 192,
+      "v10-lane-signal-generator": 53
+    },
     "source_commit": "017c7f0012cd867a01658eee6192475d6cea64a1",
-    "expected_versions": {"v10-lane-executor": 193, "v10-lane-signal-generator": 53}
+    "expected_versions": {
+      "v10-lane-executor": 193,
+      "v10-lane-signal-generator": 53
+    }
   },
   "migration_sha256": "73ea63d6eac28cd0303d54b304be8cdfdd32e1bd07605e01f503ca401ae0e3c2",
   "capture_repair": {
     "expected_rpc_md5": "f5a85f791423302f4b82bce5cfeeca4c",
     "expected_repaired_rpc_md5": "fd82de658e4df104e49416fc5eee09a7",
     "migration_sha256": "3b974c18615ede73ea328170799f17a3b80eab7a74788f6e2a0125850dd0fab9"
+  },
+  "submit_proof_repair": {
+    "expected_submit_md5": "83b00387f9bb1a711fdfde5a51c73566",
+    "expected_repaired_submit_md5": "8cadbd1b66ecc3d99041ab8725f9e86d",
+    "migration_sha256": "14425df3fcb1e7a4ce89676cd011db6f9d60c67c7048131ba7f4b1960f2d0ab3",
+    "incident_id": "b28c890b-0191-49d9-a2aa-fe826cf6f708",
+    "generation": 190,
+    "order_id": "ad65e821-1ce1-482e-b8fc-615ebb3d8c7f",
+    "expected_paused_recovery_md5": "46324d009443a01ebfa5af751745de69"
   }
 }
