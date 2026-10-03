@@ -8,7 +8,7 @@ on:
       operation:
         type: choice
         required: true
-        options: [quote-evidence, fill-proof]
+        options: [quote-evidence, revalidation-evidence, fill-proof]
       not_before:
         description: Required UTC timestamp for real fill observation
         type: string
