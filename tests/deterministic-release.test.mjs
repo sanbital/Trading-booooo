@@ -4,8 +4,16 @@ import {ENGINE,assertAccountProof,assertActivation,assertResume} from '../ops/de
 import {classifyMarket} from '../supabase/functions/_shared/deterministic/market-state.mjs';
 import {scenario} from '../test-support/deterministic/fixtures.mjs';
 import {readReadiness} from '../ops/deterministic/readiness-read.mjs';
+import {expectedGatewayCommit} from '../ops/deterministic/gateway-source.mjs';
 const root=new URL('../',import.meta.url);
 const readinessRequest={project:'etaajwpernzrcdrifdnw',slug:'v10-lane-signal-generator',token:'fixture-only',body:{mode:'diagnostic'},region:'ap-northeast-1'};
+test('independent gateway builds require complete exact reviewed pins without clock redeployment',()=>{
+ const paris='a'.repeat(40),tokyo='b'.repeat(40),request={gateway_commit:'c'.repeat(40),gateway_commits:{'trading-booooo':paris,'trading-booooo-sanbital-gateway':tokyo}};
+ assert.equal(expectedGatewayCommit(request,'trading-booooo'),paris);assert.equal(expectedGatewayCommit(request,'trading-booooo-sanbital-gateway'),tokyo);
+ assert.equal(expectedGatewayCommit({gateway_commit:tokyo},'trading-booooo'),tokyo);
+ for(const pins of [null,{}, {'trading-booooo':paris}, {...request.gateway_commits,'trading-booooo':'unknown'}, {...request.gateway_commits,unreviewed:paris}])assert.throws(()=>expectedGatewayCommit({...request,gateway_commits:pins},'trading-booooo'));
+ assert.throws(()=>expectedGatewayCommit(request,'other'));assert.throws(()=>expectedGatewayCommit({gateway_commit:'unknown'},'trading-booooo'));
+});
 test('readiness observes the production region and preserves endpoint authentication',async()=>{
  let requests=0;
  const result=await readReadiness({...readinessRequest,fetchImpl:async(url,init)=>{

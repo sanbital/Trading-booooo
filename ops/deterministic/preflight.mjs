@@ -3,6 +3,7 @@
 import {readFileSync,mkdirSync,writeFileSync} from 'node:fs';
 import {createCipheriv,publicEncrypt,randomBytes} from 'node:crypto';
 import {readVenue,reconcileHoldings,reconcileTrades} from './preflight-read.mjs';
+import {expectedGatewayCommit} from './gateway-source.mjs';
 const project='etaajwpernzrcdrifdnw';
 if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.EXPECTED_COMMIT!==process.env.GITHUB_SHA||!/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA??''))throw Error('PREFLIGHT_EXACT_COMMIT_REQUIRED');
 const ev={version:'DETERMINISTIC_READ_ONLY_PREFLIGHT_1',source_commit:process.env.GITHUB_SHA,started_at:new Date().toISOString(),mutations:0,timing:{}};
@@ -30,7 +31,8 @@ try{
  if(!['trading-booooo','trading-booooo-sanbital-gateway'].includes(app))throw Error('PREFLIGHT_APP_CONFIG');
  const health=await fetch(`https://${app}.fly.dev/health`,{signal:AbortSignal.timeout(5000)});
  if(!health.ok)throw Error('PREFLIGHT_VENUE_HEALTH_UNAVAILABLE');ev.health=await health.json();
- const config={app,token:process.env.LEARNING_ACCESS_TOKEN,commit:ev.health.deployment_commit};
+ const request=JSON.parse(readFileSync('ops/deterministic/release-request.json','utf8'));
+ const config={app,token:process.env.LEARNING_ACCESS_TOKEN,commit:expectedGatewayCommit(request,app)};
  const started=Date.now();
  const [portfolio,openOrders,mode]=await Promise.all(['p10_portfolio','v18_open_orders','futures_position_mode'].map(action=>readVenue({...config,command:{action}})));
  ev.timing.signed_account_orders_mode_roundtrip_ms=Date.now()-started;ev.venue={portfolio,openOrders,mode};

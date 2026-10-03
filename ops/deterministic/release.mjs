@@ -2,6 +2,7 @@ import fs from 'node:fs';import {spawnSync} from 'node:child_process';
 import {createHash,createCipheriv,publicEncrypt,randomBytes} from 'node:crypto';
 import {readVenue,reconcileHoldings,reconcileTrades} from './preflight-read.mjs';
 import {readReadiness} from './readiness-read.mjs';
+import {GATEWAY_APPS,expectedGatewayCommit} from './gateway-source.mjs';
 import {ENGINE,assertAccountProof,assertActivation,assertResume,protectedSettings} from './release-policy.mjs';
 const project='etaajwpernzrcdrifdnw',sha=process.env.GITHUB_SHA,operation=process.env.CUTOVER_OPERATION;
 if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.GITHUB_REF!=='refs/heads/main'||sha!==process.env.EXPECTED_COMMIT||!/^[a-f0-9]{40}$/.test(sha??'')||!['stage','repair-capture','verify','verify-resume','activate'].includes(operation))throw Error('EXACT_MAIN_RELEASE_REQUIRED');
@@ -33,11 +34,11 @@ const stateSQL=`select jsonb_build_object('utc',clock_timestamp(),'postmaster',p
  'strategy_ticks',(select count(*) from trading_scheduler_ticks t join trading_scheduler_jobs j using(scheduler_key,job_key) where j.target->>'endpoint' in ('v10-lane-executor','v10-lane-signal-generator') and t.finished_at is null and t.started_at>now()-interval '110 seconds')),
  'installed',to_regclass('public.deterministic_control') is not null) evidence`;
 async function venueConfig(){const app=process.env.FLY_BINANCE_APP_NAME;if(!['trading-booooo','trading-booooo-sanbital-gateway'].includes(app))throw Error('RELEASE_VENUE_APP');
- for(const appName of ['trading-booooo','trading-booooo-sanbital-gateway']){const r=await fetch(`https://${appName}.fly.dev/health`,{signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error('GATEWAY_HEALTH_UNAVAILABLE');const h=await r.json();
-  if(h.deployment_commit!==request.gateway_commit||h.order_writer?.required!==true)throw Error('GATEWAY_SOURCE_OR_FENCE_CHANGED');
+ for(const appName of GATEWAY_APPS){const r=await fetch(`https://${appName}.fly.dev/health`,{signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error('GATEWAY_HEALTH_UNAVAILABLE');const h=await r.json();
+  if(h.deployment_commit!==expectedGatewayCommit(request,appName)||h.order_writer?.required!==true)throw Error('GATEWAY_SOURCE_OR_FENCE_CHANGED');
   evidence['gateway_'+appName]=h;
  }
- return {app,commit:request.gateway_commit,token:process.env.LEARNING_ACCESS_TOKEN};
+ return {app,commit:expectedGatewayCommit(request,app),token:process.env.LEARNING_ACCESS_TOKEN};
 }
 async function signedProof(s){const config=await venueConfig(),[portfolio,openOrders,mode]=await Promise.all(['p10_portfolio','v18_open_orders','futures_position_mode'].map(action=>readVenue({...config,command:{action}})));
  const holdings=reconcileHoldings({db:s,portfolio,openOrders,mode}),symbols=[...new Set([...s.fills.map(f=>f.market),...s.positions.map(p=>p.symbol),...portfolio.positions.map(p=>p.market)])];if(symbols.length>30)throw Error('HISTORY_SCOPE_TOO_LARGE');
@@ -75,7 +76,7 @@ async function stage(){
  const recovered=await endpoint('v10-lane-executor',{mode:'account-recovery'});if(recovered.ready!==true)throw Error('RECOVERY_PREREQUISITE_INCOMPLETE');
  await query(`update public.deterministic_control set source_commit='${sha}',updated_at=clock_timestamp() where singleton and not enabled;`);
  await query(fs.readFileSync('ops/deterministic/bind-paused.sql','utf8'));note('SINGLE_CLOCK_BOUND_ENTRIES_DISABLED');
- const manifest={source_commit:sha,staged_at:new Date().toISOString(),functions:await functionList(),migration_sha256:request.migration_sha256,gateway_commit:request.gateway_commit,protected_settings_sha256:createHash('sha256').update(JSON.stringify(protectedSettings(before))).digest('hex')};
+ const manifest={source_commit:sha,staged_at:new Date().toISOString(),functions:await functionList(),migration_sha256:request.migration_sha256,gateway_commits:Object.fromEntries(GATEWAY_APPS.map(app=>[app,expectedGatewayCommit(request,app)])),protected_settings_sha256:createHash('sha256').update(JSON.stringify(protectedSettings(before))).digest('hex')};
  evidence.manifest=manifest;fs.writeFileSync('infra-evidence/deterministic-stage-manifest.json',JSON.stringify(manifest,null,2));save();
 }
 async function verify(){
