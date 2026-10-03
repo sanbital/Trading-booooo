@@ -15,6 +15,12 @@
     "v10-lane-executor": 192,
     "v10-lane-signal-generator": 53
   },
+  "executor_latency_repair": {
+    "baseline_source_commit": "5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4",
+    "baseline_versions": {"v10-lane-executor": 192, "v10-lane-signal-generator": 53},
+    "source_commit": "384ed629c952b243af70d17eb2d26c608fa3b623",
+    "expected_versions": {"v10-lane-executor": 193, "v10-lane-signal-generator": 53}
+  },
   "migration_sha256": "73ea63d6eac28cd0303d54b304be8cdfdd32e1bd07605e01f503ca401ae0e3c2",
   "capture_repair": {
     "expected_rpc_md5": "f5a85f791423302f4b82bce5cfeeca4c",

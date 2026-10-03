@@ -1,3 +1,36 @@
+# 2026-10-03 23:08 UTC: executor latency repair prepared, not yet deployed
+
+Fresh read-only preflight run37160771205 / job111313557566 passed at23:08:26Z:
+Binance and DB positions0, ordinary/protective orders0, wallet reconciled,
+unresolved DB orders/incidents0, new fills since14:22:46 zero. The observed
+postmaster is now20:35:31.660523Z; the earlier12:16 restart observation is historical.
+Authority is still deterministic generation2 / source5ccc46fa, entries unpaused.
+22:55..23:08 executorv192 n73 p50 7933ms / p95 12928ms / max15180ms,
+HTTPerrors1; generatorv53 n137 p50 1167ms / p95 1870ms / max3071ms, errors0.
+
+The reviewed latency repair removes idle recovery writers, overlaps independent
+signed-account/DB reads without caching, and skips intermediate account reads
+only when no management/reconciliation work ran. Position management stays
+first; final signed account evidence, final BUY revalidation, capacity, writer
+fencing, receipts, accounting and native protection remain required. Stage
+telemetry records durations without credentials or account payloads.
+
+Immutable service source384ed629c952b243af70d17eb2d26c608fa3b623 has exactly
+one changed file relative to5ccc46fa: executor/index.ts. Production deployment
+must archive this source, not current main dependencies. No entry-rescue strategy
+change, generator, gateway, collector, scheduler or migration belongs to this
+repair. The release checks its parent, exact file diff and matching runner bytes.
+
+Normal protected cutover operation: repair-latency with marker
+EXECUTOR_LATENCY_REPAIR_1. Only baseline executor192/generator53 is admitted.
+Pause entries, pass full signed/market/source gates, drain holders, deploy only
+the immutable executor, prove actual downloaded bundle parity at193/53,
+reconcile again, CAS only source metadata at generation2, and run full gates
+again. Each service keeps its own exact immutable source. Any failure leaves
+entries paused and preserves position management. Normal resume is separate.
+A changed holding stops this flat repair; do not close it or replace its stops.
+After success, compare bounded runtime/stage logs and observe only natural fills.
+
 # 2026-10-03 14:32 UTC: resumed, executor latency remains, no real fill proof
 
 Operator-confirmed database restart: postmaster 12:16:55.400305Z. This task

@@ -5,6 +5,7 @@ import {quoteIntegrity,settledBalanceProof,executionIdentity,nativeAckMatches} f
 import {expectedGatewayCommit} from './gateway-source.mjs';
 import {reusableSeed,quoteRevalidationEvidence} from './quote-revalidation-read.mjs';
 import {observeVenue} from './venue-read.mjs';
+import {serviceIdentity} from './service-identity.mjs';
 const project='etaajwpernzrcdrifdnw',sha=process.env.GITHUB_SHA,operation=process.env.PROOF_OPERATION,notBefore=Date.parse(process.env.NOT_BEFORE??''),minutes=Number(process.env.OBSERVATION_MINUTES??30);
 if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.GITHUB_REF!=='refs/heads/main'||sha!==process.env.EXPECTED_COMMIT||!/^[a-f0-9]{40}$/.test(sha??'')||!['quote-evidence','revalidation-evidence','venue-evidence','fill-proof'].includes(operation))throw Error('RUNTIME_PROOF_EXACT_MAIN_REQUIRED');
 if(operation==='fill-proof'&&(!Number.isFinite(notBefore)||notBefore>Date.now()+60000||Date.now()-notBefore>86400000||!Number.isInteger(minutes)||minutes<1||minutes>60))throw Error('FILL_OBSERVATION_WINDOW_INVALID');
@@ -27,7 +28,7 @@ const stateSQL=`select jsonb_build_object('utc',clock_timestamp(),'postmaster',p
  'gpt_off',(select mode='OFF' from gpt_final_review_control where singleton),'batch_off',(select not enabled from leader20_batch_control where singleton),
  'provider_calls',(select count(*) from ai_call_ledger where created_at>='2026-10-02T23:58:25Z' and purpose in ('ENTRY','EXIT'))) evidence`;
 const state=async()=>(await query(stateSQL))[0].evidence;
-function authority(s){if(!s.control.enabled||s.control.generation!==2||s.control.source_commit!==request.staged_source_commit||!s.gpt_off||!s.batch_off||s.provider_calls!==0)throw Error('LIVE_DETERMINISTIC_IDENTITY_CHANGED');}
+function authority(s){const identity=serviceIdentity(request,s.control.source_commit);if(!s.control.enabled||s.control.generation!==2||!s.gpt_off||!s.batch_off||s.provider_calls!==0)throw Error('LIVE_DETERMINISTIC_IDENTITY_CHANGED');ev.service_source_commit=identity.sourceCommit;ev.service_sources=identity.sources;}
 function note(summary){ev.observations.push(summary);seal();console.log(JSON.stringify(summary));fs.writeFileSync('infra-evidence/deterministic-runtime-proof-summary.json',JSON.stringify(summary,null,2));}
 async function quoteEvidence(){const s=await state();authority(s);const symbols=await query("select symbol,max(created_at) latest_buy from v11_long_regime_signals where features#>>'{deterministic,version}'='DETERMINISTIC_DYNAMIC_STATE_1' and created_at>now()-interval '15 minutes' group by symbol order by latest_buy desc limit 6");
  for(const {symbol}of symbols){const quote=await readVenue({...config,command:{action:'quote',market:symbol}});ev['quote_'+symbol]=quote;note({utc:new Date().toISOString(),status:'SIGNED_QUOTE_OBSERVED',symbol,...quoteIntegrity(quote),order_commands:0});}
