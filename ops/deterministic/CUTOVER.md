@@ -1,9 +1,10 @@
 # Deterministic engine release and operator cutover
 
-Status: review branch. The follow-up repair applied the normal operator entry
-pause before staging. Migration, Edge deployment, deterministic authority and
-real orders still require actual workflow/runtime evidence. This document is an
-operator procedure, not evidence of a completed release.
+Status: staged with deterministic admission disabled. Workflow 37079937802 applied
+the exact migration and deployed source e966badf791b641801dabac3ae282ac673c04819
+(executor v191, generator v53). Runtime resolved incident 148 by three normal
+independent observations. Activation still requires fresh workflow/runtime gates;
+this procedure does not claim real trades or completed activation.
 
 The follow-up repair uses `deterministic-cutover.yml` on exact main with the normal
 production environment. `stage` requires the observed flat signed baseline,
@@ -12,8 +13,13 @@ deploys and verifies both complete bundles, and binds the existing two clock job
 at five seconds while deterministic admission remains disabled. The operator
 permission can then return to its previous value for unchanged V18 incident
 recovery; it cannot grant BUY while deterministic control is disabled. `verify`
-checks fresh signed account/fill/balance proof, source parity, all Top20/BTC
-trajectories and candle features, recovered scheduler and zero new provider calls.
+checks fresh signed account/fill/balance proof, source parity, all Top20 trade
+trajectories, the existing BTC market sensor contract and candle features,
+recovered scheduler and zero new provider calls. BTC's finite 1000-level snapshot
+can cover less than 25bp. Its sensor requires 24 complete causal buckets and
+reports only observed depth; it cannot substitute for a traded symbol's full
+25bp context, including BTC if BTC enters Top20. The verifier pins the already
+staged service SHA and versions separately from an ops-only release-runner SHA.
 `activate` repeats those gates before one generation/CAS authority transaction.
 Failure pauses new admission; no AI rollback or direct circuit reset is performed.
 

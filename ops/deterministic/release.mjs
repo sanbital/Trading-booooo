@@ -5,6 +5,7 @@ import {ENGINE,assertAccountProof,assertActivation,protectedSettings} from './re
 const project='etaajwpernzrcdrifdnw',sha=process.env.GITHUB_SHA,operation=process.env.CUTOVER_OPERATION;
 if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.GITHUB_REF!=='refs/heads/main'||sha!==process.env.EXPECTED_COMMIT||!/^[a-f0-9]{40}$/.test(sha??'')||!['stage','verify','activate'].includes(operation))throw Error('EXACT_MAIN_RELEASE_REQUIRED');
 const request=JSON.parse(fs.readFileSync('ops/deterministic/release-request.json','utf8'));
+const sourceSha=request.staged_source_commit??sha;
 fs.mkdirSync('infra-evidence',{recursive:true});const evidence={source_commit:sha,operation,started_at:new Date().toISOString(),stages:[],order_commands:0};
 function save(){const key=randomBytes(32),iv=randomBytes(12),c=createCipheriv('aes-256-gcm',key,iv),data=Buffer.concat([c.update(JSON.stringify(evidence)),c.final()]);
  fs.writeFileSync('infra-evidence/deterministic-release.encrypted.json',JSON.stringify({version:1,key:publicEncrypt({key:fs.readFileSync('ops/execution-infra/evidence-public.pem'),oaepHash:'sha256'},key).toString('base64'),iv:iv.toString('base64'),tag:c.getAuthTag().toString('base64'),data:data.toString('base64')}));}
@@ -78,11 +79,13 @@ async function stage(){
 }
 async function verify(){
  const s=await value(stateSQL);evidence.current=s;if(!s.installed)throw Error('DETERMINISTIC_NOT_INSTALLED');await signedProof(s);
+ const listed=await functionList(),rows=listed.functions??listed;
+ for(const [slug,version] of Object.entries(request.expected_staged_versions??{})){const f=rows.find(x=>x.slug===slug);if(f?.version!==version||f.verify_jwt!==false||f.status!=='ACTIVE')throw Error('STAGED_FUNCTION_CHANGED');}
  for(const slug of Object.keys(request.expected_versions)){const out=process.env.RUNNER_TEMP+'/verify-'+slug;fs.mkdirSync(out,{recursive:true});run('supabase',['functions','download',slug,'--project-ref',project,'--use-api','--workdir',out]);evidence[slug]=JSON.parse(run('node',['ops/gpt-final-review/verify-bundle-parity.mjs',out,'.',slug]));}
  const diagnostic=await endpoint('v10-lane-signal-generator',{mode:'diagnostic'}),readiness=await endpoint('v10-lane-executor',{mode:'ops-readiness'});evidence.diagnostic=diagnostic;evidence.readiness=readiness;save();
- const detail=await value(`select jsonb_build_object('control',(select to_jsonb(c) from deterministic_control c where singleton),'captures',(select jsonb_agg(jsonb_build_object('symbol',symbol,'status',capture->>'status','buckets',(capture->>'buckets')::int,'reason',capture->>'reason')) from (select symbol,deterministic_capture_raw(symbol,clock_timestamp(),null,clock_timestamp()) capture from (select m.symbol from leader20_members m join leader20_control c on m.epoch_id=c.epoch_id where c.singleton union select 'BTCUSDT') symbols) contexts),'providerCalls',(select count(*)::int from ai_call_ledger where created_at>=(select updated_at from deterministic_control where singleton) and purpose in ('ENTRY','EXIT'))) evidence`);
+ const detail=await value(`with cutoff as materialized(select clock_timestamp() at) select jsonb_build_object('control',(select to_jsonb(c) from deterministic_control c where singleton),'captures',(select jsonb_agg(jsonb_build_object('symbol',symbol,'status',capture->>'status','buckets',(capture->>'buckets')::int,'reason',capture->>'reason')) from (select m.symbol,deterministic_capture_raw(m.symbol,cutoff.at,null,cutoff.at) capture from leader20_members m join leader20_control c on m.epoch_id=c.epoch_id where c.singleton) contexts),'marketSensor',doa_market_sensor_context_v1('BTCUSDT',cutoff.at),'marketSensorAsOf',floor(extract(epoch from cutoff.at)*1000)::bigint,'unresolvedIncidents',(select count(*)::int from v18_ops_incidents where exchange='binance_futures' and account_scope='futures' and resolved_at is null and status in ('OPEN','VERIFYING')),'providerCalls',(select count(*)::int from ai_call_ledger where created_at>=(select updated_at from deterministic_control where singleton) and purpose in ('ENTRY','EXIT'))) evidence from cutoff`);
  const after=await value(stateSQL);if(after.postmaster!==s.postmaster||JSON.stringify(s.positions)!==JSON.stringify(after.positions)||JSON.stringify(s.orders)!==JSON.stringify(after.orders))throw Error('EXECUTION_TRUTH_CHANGED_DURING_VERIFY');
- const validation={...after,...detail,diagnostic,readiness,sourceCommit:sha};evidence.validation=validation;save();assertActivation(validation);note('PRE_ACTIVATION_GATES_PASSED',{captures:detail.captures,provider_calls:detail.providerCalls,phases:diagnostic.results.map(r=>({symbol:r.symbol,phase:r.phase,decision:r.decision,technical:r.technical,reasons:r.reasons})),runtime_cycle:after.runtime.last_cycle_completed_at});return validation;
+ const validation={...after,...detail,diagnostic,readiness,sourceCommit:sourceSha};evidence.validation=validation;save();assertActivation(validation);note('PRE_ACTIVATION_GATES_PASSED',{source_commit:sourceSha,release_runner_commit:sha,captures:detail.captures,btc_sensor:{status:detail.marketSensor.status,buckets:detail.marketSensor.buckets,contract:detail.marketSensor.contract,depth_semantics:detail.marketSensor.depth_semantics},provider_calls:detail.providerCalls,phases:diagnostic.results.map(r=>({symbol:r.symbol,phase:r.phase,decision:r.decision,technical:r.technical,reasons:r.reasons})),runtime_cycle:after.runtime.last_cycle_completed_at});return validation;
 }
 async function activate(v){
  // The normal runtime, not an operator SQL reset, has resolved the exact account
@@ -90,19 +93,20 @@ async function activate(v){
  const sql=`begin;set local lock_timeout='750ms';set local statement_timeout='5000ms';
  lock table public.deterministic_control,public.leader20_control,public.leader20_batch_control,public.gpt_final_review_control,public.v11_long_regime_runtime,public.trading_settings,public.trading_scheduler_jobs,public.trading_scheduler_control in share row exclusive mode;
  do $$ begin
- if not exists(select 1 from deterministic_control where singleton and not enabled and source_commit='${sha}' and generation=${v.control.generation})
+ if not exists(select 1 from deterministic_control where singleton and not enabled and source_commit='${sourceSha}' and generation=${v.control.generation})
  or not exists(select 1 from v11_long_regime_runtime where singleton and not circuit_open and incident_generation=148 and protection_health='FLAT')
  or not exists(select 1 from leader20_control where singleton and active_strategy='PAUSED' and watch_limit=20)
  or exists(select 1 from leader20_batch_control where singleton and enabled)
  or exists(select 1 from gpt_final_review_control where singleton and mode<>'OFF')
+ or exists(select 1 from v18_ops_incidents where exchange='binance_futures' and account_scope='futures' and resolved_at is null and status in ('OPEN','VERIFYING'))
  or pg_postmaster_start_time()<>'${v.postmaster}'::timestamptz
  or exists(select 1 from trading_settings where id=1 and (pause_new_entries or manual_intervention_required or emergency_liquidation))
  then raise exception 'AUTHORITY_ACTIVATION_CAS_FAILED';end if;
  end $$;
  update leader20_control set active_strategy='${ENGINE}',generation=generation+1,updated_at=clock_timestamp() where singleton;
- update deterministic_control set enabled=true,generation=generation+1,source_commit='${sha}',updated_at=clock_timestamp() where singleton;
+ update deterministic_control set enabled=true,generation=generation+1,source_commit='${sourceSha}',updated_at=clock_timestamp() where singleton;
  commit;`;
- await query(sql);note('DETERMINISTIC_AUTHORITY_ENABLED',{source_commit:sha});
+ await query(sql);note('DETERMINISTIC_AUTHORITY_ENABLED',{source_commit:sourceSha,release_runner_commit:sha});
 }
 try{save();if(operation==='stage')await stage();else{const v=await verify();if(operation==='activate')await activate(v);}note('OPERATION_COMPLETED',{operation});}
 catch(e){evidence.error=/^[A-Z0-9_]+$/.test(e.message)?e.message:'RELEASE_FAILED';save();
