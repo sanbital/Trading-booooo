@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
 import {spawnSync} from 'node:child_process';
-import {ENGINE,assertAccountProof,assertActivation} from '../ops/deterministic/release-policy.mjs';
+import {ENGINE,assertAccountProof,assertActivation,assertResume} from '../ops/deterministic/release-policy.mjs';
 import {classifyMarket} from '../supabase/functions/_shared/deterministic/market-state.mjs';
 import {scenario} from '../test-support/deterministic/fixtures.mjs';
 import {readReadiness} from '../ops/deterministic/readiness-read.mjs';
@@ -44,6 +44,13 @@ test('activation refuses real production failure modes and duplicate authority',
  assert.doesNotThrow(()=>assertActivation(valid()));
  for(const mutate of [v=>v.runtime.circuit_open=true,v=>v.unresolvedIncidents=1,v=>v.jobs[0].enabled=false,v=>v.jobs[0].target.body={},v=>v.captures.pop(),v=>v.captures[0].status='UNAVAILABLE',v=>v.diagnostic.results[0].technical=false,v=>v.providerCalls=1,v=>v.batch.enabled=true,v=>v.gpt.mode='ENFORCE',v=>v.readiness.native_stop_enabled=false,v=>v.scheduler.recovered_postmaster_at='old',v=>v.control.source_commit='b'.repeat(40),v=>v.jobs.push({...v.jobs[0],job_key:'duplicate'})]){
   const v=valid();mutate(v);assert.throws(()=>assertActivation(v));
+ }
+});
+test('resume reads actual active generation and paused permission without reactivating authority',()=>{
+ const v=valid();v.control.enabled=true;v.control.generation=2;v.leader20.active_strategy=ENGINE;v.readiness.entry_enabled=true;v.settings.pause_new_entries=true;
+ const before=structuredClone(v);assert.doesNotThrow(()=>assertResume(v));assert.deepEqual(v,before);assert.throws(()=>assertActivation(v));
+ for(const mutate of [x=>x.control.enabled=false,x=>x.control.generation=3,x=>x.settings.pause_new_entries=false,x=>x.readiness.entry_enabled=false,x=>x.control.source_commit='b'.repeat(40),x=>x.gpt.mode='ENFORCE',x=>x.batch.enabled=true,x=>x.unresolvedIncidents=1,x=>x.runtime.circuit_open=true,x=>x.scheduler.recovered_postmaster_at='old',x=>x.providerCalls=1,x=>x.diagnostic.results[0].technical=false,x=>x.diagnostic.results[0].capture_end_ms-=30000]){
+  const invalid=structuredClone(v);mutate(invalid);assert.throws(()=>assertResume(invalid));
  }
 });
 test('BTC context accepts finite observed depth, rejects causal gaps, and never grants BTC trade eligibility',()=>{

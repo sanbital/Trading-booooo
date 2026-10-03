@@ -8,7 +8,7 @@ on:
       operation:
         type: choice
         required: true
-        options: [stage, repair-capture, verify, activate]
+        options: [stage, repair-capture, verify, verify-resume, activate]
 permissions:
   contents: read
 concurrency:

@@ -32,8 +32,8 @@ Release evidence:
 - Workflow 37085407001 attempt 2 passed at 01:19:55 UTC: balance reconciled, 0
   positions/ordinary/protective orders, 18 matched fills, ONE_WAY, no open account
   incident. This clears the immediate stale-balance gate but does not establish
-  the cause of repeated platform interruptions. Keep new admission paused while
-  investigating; do not manually reset circuits, restart the DB, or enable AI.
+  the cause of repeated platform interruptions. Keep new admission paused until
+  fresh resume gates pass; do not manually reset circuits, restart the DB, or enable AI.
 - Complete regression at PR #326: workflow 37083937248, 1503/1503, no skips/failures.
   The later PR #327 only batches/reorders read-only release observations; its
   deterministic and execution-parity CI passed without changing service sources.
@@ -68,9 +68,20 @@ Restart logs prove interruption, not OOM or a specific resource cause. If platfo
 evidence is unavailable, report that limit and leave entries paused. To resume,
 first collect fresh signed account/order/fill/balance proof, verify the current
 postmaster recovery fence and clock, source parity, data freshness and single
-authority; address the interruption cause. Then use the normal trading-control
+authority. Retain the unexplained interruption as a reported infrastructure risk:
+entry requires completed recovery and complete current execution truth, and loses
+authority again on a changed postmaster. Then use the normal trading-control
 `resume_new_entries` action. Do not rerun the generation-2 activation transaction
 or redeploy stage over an enabled control. Existing position safety remains on.
+
+`verify-resume` is the read-only operation for an already active generation-2
+engine with operator entry permission paused. It checks actual enabled control,
+source SHA, strategy and readiness identity without rewriting them or running
+activation. All original signed account, source parity, data/candle/BTC freshness,
+single-clock, postmaster recovery, sizing/native-stop and no-provider gates remain.
+Failure does not disable the position-management engine or clear the pause. A
+successful verification itself never resumes permission, calls an executor cycle
+or sends an order; use the existing conditional reconciliation/resume workflow.
 
 Readiness requests explicitly select the observed production clock region,
 `ap-northeast-1`, and reject a different `x-sb-edge-region` response. On
