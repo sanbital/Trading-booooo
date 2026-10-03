@@ -1,10 +1,44 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Book,BOOK_STATE,Flow,WeightBudget,symbolSingleFlight,boundedSnapshotResync,vwap,inWindow,streamURLs,transportFresh,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue} from './core.mjs';
+import {Book,BOOK_STATE,Flow,WeightBudget,symbolSingleFlight,boundedSnapshotResync,vwap,inWindow,streamURLs,transportFresh,retireBookCapture,retireMarketCapture,snapshotStillCurrent,completeCaptureInterval,captureBucketDue,invalidateUnusableBook} from './core.mjs';
 test('Binance public book and market trade/kline routes are separated',()=>{const u=streamURLs('BTCUSDT');assert.equal(new URL(u.book).pathname,'/public/stream');assert.equal(new URL(u.market).pathname,'/market/stream');assert.equal(new URL(u.market).searchParams.get('streams'),'btcusdt@aggTrade/btcusdt@kline_1m/btcusdt@forceOrder');});
 test('bounded pre-snapshot buffer discards old events without declaring continuity',()=>{const b=new Book();for(let i=1;i<=300;i++)b.event({U:i,u:i,pu:i-1,b:[],a:[],E:i},i);assert.equal(b.buffer.length,200);assert.equal(b.ready,false);const out=b.snapshot(snap);assert.equal(out.status,BOOK_STATE.UNSYNCED);assert.equal(out.reason,'SNAPSHOT_BRIDGE_MISSING');});
 const snap={lastUpdateId:10,bids:[[99,10],[98,10]],asks:[[101,10],[102,10]]};
 const event=(u,pu=10)=>({U:u,u,pu,b:[],a:[],E:1000});
+
+test('finite sensor snapshot exhaustion retires only its book and requires a new bridge',()=>{
+ const s={book:new Book(),flow:new Flow(),lastBucket:5000,started:0,marketResetAt:0,marketSequenceVerified:true};
+ s.book.snapshot({lastUpdateId:10,bids:[[99.99,1]],asks:[[100.01,1]]},900);
+ s.book.event({U:10,u:11,pu:9,E:1000,b:[],a:[]},1000);
+ assert.equal(s.book.snapshotCovered25,false,'a finite BTC sensor does not need full trade-band depth');
+ s.flow.event({a:1,T:1000,E:1000,p:100,q:1,m:false},1000);s.flow.reset();
+ s.flow.event({a:2,T:6000,E:6000,p:100,q:2,m:false},6000);
+ s.book.event({U:12,u:12,pu:11,E:6500,b:[['100.02','1']],a:[['100.01','0'],['100.03','1']]},6500);
+ assert.equal(s.book.state,BOOK_STATE.SYNCED,'valid update IDs do not prove valid best prices');
+ const metrics=s.book.metrics(6500);assert.equal(metrics.reason,'CROSSED_OR_EMPTY');
+ const invalid=invalidateUnusableBook(s.book,metrics,6500);
+ assert.equal(invalid.incident.reason,'DEPTH_BOOK_INVALID');assert.equal(invalid.incident.previous_last_update_id,12);
+ assert.equal(s.book.state,BOOK_STATE.UNSYNCED);assert.equal(s.book.bids.size,0);assert.equal(s.book.asks.size,0);
+ assert.equal(invalidateUnusableBook(s.book,metrics,6501),null,'already retired books do not spawn another recovery');
+ assert.equal(s.lastBucket,5000);assert.equal(s.flow.last,2);assert.equal(s.flow.count,1);
+ s.book.snapshot({lastUpdateId:20,bids:[[100.02,1]],asks:[[100.03,1]]},7000);
+ assert.equal(s.book.metrics(7000).book_complete,false,'snapshot alone cannot authorize a capture');
+ s.book.event({U:20,u:21,pu:19,E:7200,b:[],a:[]},7200);
+ assert.equal(s.book.metrics(7200).book_complete,true);
+ assert.equal(completeCaptureInterval(s,10000,true),false,'the interval spanning recovery stays invalid');
+ s.lastBucket=10000;assert.equal(completeCaptureInterval(s,15000,true),true);
+});
+
+test('crossed book recovery leaves healthy and merely shallow books eligible',()=>{
+ const b=new Book(),other=new Book();
+ for(const book of [b,other]){book.snapshot(snap,900);book.event({...event(11),U:10},1000);}
+ assert.equal(invalidateUnusableBook(other,other.metrics(1000),1000),null);
+ b.event({U:12,u:12,pu:11,E:1100,b:[[101.5,1]],a:[]},1100);
+ const invalid=invalidateUnusableBook(b,b.metrics(1100),1100);
+ assert.equal(invalid.incident.reason,'DEPTH_BOOK_INVALID');assert.equal(other.state,BOOK_STATE.SYNCED);
+ assert.equal(other.metrics(1100).book_complete,true);
+ assert.equal(invalidateUnusableBook(other,other.metrics(20000),20000),null,'existing stale-book recovery remains responsible for stale data');
+});
 
 test('production timer jitter waits for the unchanged minimum and conserves trades across the deferred tick',()=>{
  const end=Date.parse('2026-09-28T02:29:00.638Z'),early=Date.parse('2026-09-28T02:29:05.040Z'),next=early+200;

@@ -1,0 +1,63 @@
+name: Deterministic collector book integrity repair
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: collector-watchdog
+  cancel-in-progress: false
+jobs:
+  repair:
+    if: github.repository == 'sanbital/Trading-booooo' && github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify exact main and collector repair regressions
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
+          git diff --check
+          node --test collectors/doa-capture/core.test.mjs tests/deterministic-collector-repair.test.mjs
+          node --check collectors/doa-capture/worker.mjs
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: 0.4.108
+      - name: Require fresh signed account reconciliation
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        run: node ops/deterministic/preflight.mjs
+      - name: Build and push the reviewed public-data collector
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl auth docker
+          docker build --build-arg SOURCE_COMMIT="$GITHUB_SHA" -t "registry.fly.io/sanbital-doa-capture-20260925:$GITHUB_SHA" collectors/doa-capture
+          docker push "registry.fly.io/sanbital-doa-capture-20260925:$GITHUB_SHA"
+      - name: Replace only the paused and reconciled collector image
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: node ops/deterministic/collector-repair.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deterministic-collector-repair-${{ github.run_id }}
+          path: infra-evidence/deterministic-*
+          retention-days: 7
+          if-no-files-found: error

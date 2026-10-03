@@ -1,4 +1,4 @@
-export const VERSION = 'DOA-CAPTURE-9-SYMBOL-RESYNC';
+export const VERSION = 'DOA-CAPTURE-10-BOOK-INTEGRITY';
 export const BOOK_STATE=Object.freeze({SYNCED:'SYNCED',UNSYNCED:'UNSYNCED',RESYNCING:'RESYNCING'});
 export function symbolSingleFlight(target,work){
   if(target.resyncPromise)return target.resyncPromise;
@@ -181,6 +181,13 @@ export class Flow {
     while(this.seconds.size>30) this.seconds.delete(this.seconds.keys().next().value);
   }
   metrics(cutoff=Date.now()){return {trade_event_at:this.eventAt===null?null:iso(this.eventAt),trade_received_at:this.receivedAt===null?null:iso(this.receivedAt),flow_causal:!this.invalidTime&&(this.eventAt===null||this.eventAt<=cutoff)&&(this.receivedAt===null||this.receivedAt<=cutoff),buy_quote_5s:this.buy,sell_quote_5s:this.sell,sell_quote_max_1s:Math.max(0,...this.seconds.values()),trade_count:this.count,trade_sequence_complete:this.complete,observed_liquidation_usdt:this.liquidation,liquidation_complete:false};}
+}
+// A finite snapshot can lose a usable best side while update IDs still chain.
+// Retire only that book; its invalid interval stays ineligible until a fresh
+// snapshot bridges and a complete interval is observed.
+export function invalidateUnusableBook(book,metrics,now){
+  if(book.state!==BOOK_STATE.SYNCED||metrics.book_complete!==false||metrics.reason!=='CROSSED_OR_EMPTY')return null;
+  return book.markUnsynced('DEPTH_BOOK_INVALID',null,now);
 }
 // Keep exchange streams independent: a depth reconnect must not erase a
 // still continuous trade stream or move the five-second bucket boundary.
