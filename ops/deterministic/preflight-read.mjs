@@ -2,11 +2,16 @@ import {createHash,createHmac,randomUUID} from 'node:crypto';
 import {freshPortfolio,confirmedLiveProtection,sameQuantity} from '../../supabase/functions/_shared/leader-ops-isolation.mjs';
 import {supportedFuturesMode} from '../../supabase/functions/v10-lane-executor/entry-evidence.mjs';
 
-const READS=new Set(['p10_portfolio','v18_open_orders','futures_position_mode','trade_history']);
+const READS=new Set(['p10_portfolio','v18_open_orders','futures_position_mode','trade_history','quote','v17_query_stop']);
+export function validateReadCommand(command){
+ const fields=command?.action==='trade_history'?['action','market','limit']:command?.action==='quote'?['action','market']:command?.action==='v17_query_stop'?['action','symbol','clientAlgoId']:['action'];
+ if(!READS.has(command?.action)||Object.keys(command).some(k=>!fields.includes(k))||
+   (['quote','trade_history'].includes(command.action)&&(!/^[\p{L}\p{N}]+USDT$/u.test(command.market)||command.action==='trade_history'&&command.limit!==1000))||
+   (command.action==='v17_query_stop'&&(!/^[\p{L}\p{N}]+USDT$/u.test(command.symbol)||!/^tb-v17s-[a-f0-9]{27}$/.test(command.clientAlgoId))))throw Error('PREFLIGHT_READ_ALLOWLIST');
+}
 export async function readVenue({app,token,commit,command,fetchImpl=fetch,now=Date.now}){
  if(!['trading-booooo','trading-booooo-sanbital-gateway'].includes(app)||typeof token!=='string'||token.length<32||!/^[a-f0-9]{40}$/.test(commit))throw Error('PREFLIGHT_READ_CONFIG');
- if(!READS.has(command?.action)||Object.keys(command).some(k=>!['action','market','limit'].includes(k))||
-   (command.action==='trade_history'&&(!/^[\p{L}\p{N}]+USDT$/u.test(command.market)||command.limit!==1000)))throw Error('PREFLIGHT_READ_ALLOWLIST');
+ validateReadCommand(command);
  const base=`https://${app}.fly.dev`,health=await fetchImpl(base+'/health',{signal:AbortSignal.timeout(5000)});
  if(!health.ok)throw Error('PREFLIGHT_HEALTH_UNAVAILABLE');const h=await health.json();
  if(h.deployment_commit!==commit||h.order_writer?.required!==true||h.keys_configured?.binance_futures!==true)throw Error('PREFLIGHT_VENUE_BUILD_OR_IDENTITY');
