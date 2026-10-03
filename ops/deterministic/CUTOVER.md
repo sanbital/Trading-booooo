@@ -1,3 +1,28 @@
+# 2026-10-03 14:07 UTC: writer HTTP repair deployed, entries paused
+
+PR342 merged as 31ab91abf0c30403303942373c73fadff2eb0265.
+Protected production workflow 37128457227 succeeded: signed Binance/DB
+flat account and wallet reconciliation at 14:06:25.848; zero ordinary/algo
+orders and no unresolved execution incident. Encrypted manifest confirms one
+existing machine / compute unchanged. At 14:07:21 Paris reports that exact
+source, mandatory writer=true, external scheduler=false and scheduler=false.
+Public build is 2026-10-03-writer-http-boundary-1 with writer_http_fencing=true.
+Tokyo remains 1bd5e3bf76bfb55f9df749818e325f91b5c6ab02, mandatory writer=true,
+external scheduler=true. No credential staging, migration, executor/generator,
+collector, scheduler authority, strategy or financial-policy rollout occurred.
+
+CI on head 498fdea6304d216ffb9e4049bcf3eac52a6a4260: 1544/1544 complete
+regression, verify, v714, entry evidence, validate and workflow lint passed.
+Gateway suite 122/122 and new HTTP regression 3/3 passed locally; all three
+HTTP regressions fail with WRITER_CONTEXT_REQUIRED on the original route.
+
+The reviewed per-app release pin now records Paris's observed deployment,
+retaining the independent Tokyo pin and staged engine source 5ccc46fa.
+Entries remain paused. Fresh post-rollout resume gates and any natural real
+fill are still pending at this timestamp. The original ~10s executor median
+latency is NOT fixed by connecting HTTP writer fencing. DB restart was performed
+by the operator, as confirmed in the conversation.
+
 # 2026-10-03 13:56 UTC: executor latency / writer HTTP repair pending
 
 The operator confirms they restarted the database; postmaster remains
