@@ -50,6 +50,28 @@ GitHub connector source review and read-only Supabase access remained available;
 do not extract credentials or replace normal deployment/approval paths. The
 repair must remain unapplied until normal Actions execution access is restored.
 
+Read-only verify-resume 37097801396 attempt 2 passed at 05:22:56 UTC against the
+unchanged deployed v191/v53 bundles and per-app gateway pins. Fresh signed truth
+showed 0 venue/DB positions, 0 ordinary/protective orders, 18 canonical/exchange
+matched fills, reconciled balance, ONE_WAY and no failures. All 20 candle/volume
+feature sets were complete; 19 trade contexts and the BTC sensor had all 24
+buckets. The newly warming IMX context was DATA/REJECT. Seven historical CLOSED
+floating-dust rows remain classified as terminal accounting records, not holdings.
+This passes account/data gates but cannot repair the still-deployed self-blocking
+executor or prove a new real fill. The rejected-row capture metric is per ingest
+batch, not cumulative; the collector also queues closed candle rows whereas the
+reviewed hot ingest contract admits micro rows. Current technical features use
+completed REST candles independently. Do not infer missing dynamic buckets or
+successful entry from that aggregate counter alone.
+
+In 04:51:53-05:20:50 UTC runtime logs, executor/generator had 1757/606 log rows,
+zero provider and GPT dependency events, and the entry/exit provider ledger was
+zero. Executor v191 had 146 requests, no HTTP errors, p50 8662ms/p95 13338.75ms;
+generator v53 had 301 requests, one HTTP 503 at 04:59:20, p50 1310ms/p95 2071ms.
+Later signed readiness and clock observations passed, but this does not prove
+the earlier 503's cause or a five-second end-to-end SLA. The candidate repair's
+34-file service dependency closure also contains no AI provider dependency.
+
 Fresh signed account proof passed at 03:34:15 UTC (37093625505), and all current
 read-only resume gates passed at 03:43:46 UTC (37094127813). The normal
 trading-control workflow 37094198341 resumed admission at 03:44 UTC. Through the
