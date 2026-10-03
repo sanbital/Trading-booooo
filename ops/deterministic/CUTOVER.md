@@ -1,10 +1,43 @@
 # Deterministic engine release and operator cutover
 
-Status: staged with deterministic admission disabled. Workflow 37079937802 applied
-the exact migration and deployed source e966badf791b641801dabac3ae282ac673c04819
-(executor v191, generator v53). Runtime resolved incident 148 by three normal
-independent observations. Activation still requires fresh workflow/runtime gates;
-this procedure does not claim real trades or completed activation.
+Status observed 2026-10-03 01:11:43 UTC: deterministic entry authority enabled,
+generation 2, source e966badf791b641801dabac3ae282ac673c04819 (executor v191,
+generator v53). The protected activation transaction ran at 01:06:28 UTC from
+release-runner main cd4960d9f87589a8bac15030a82a3f596c6917be. The former GPT and
+batch authorities remain OFF/disabled; one fenced five-second external clock
+drives the new generator/executor. This is an observed authority switch, not a
+claim that an order filled or that strategy returns improved.
+
+Release evidence:
+- Stage/migration/source parity: workflow 37079937802.
+- Additive capture-admission repair 20261003001800: workflow 37082047264.
+- All disabled-entry gates passed: workflow 37084637377.
+- Fresh repeated gates and generation/CAS activation: workflow 37084755969.
+- Signed post-activation read-only reconciliation: workflow 37084840875, 0 venue/DB
+  positions, 0 ordinary/protective orders, 18 matched ACCOUNTED attributed fills,
+  balance matched within 0.01 USDT, ONE_WAY observed, no failures. The old preflight
+  success label contained a static CUTOVER_NOT_PERFORMED suffix; the observed
+  active_strategy and authority transaction, not that label, establish cutover.
+- Complete regression at PR #326: workflow 37083937248, 1503/1503, no skips/failures.
+  The later PR #327 only batches/reorders read-only release observations; its
+  deterministic and execution-parity CI passed without changing service sources.
+
+At 01:11:43 UTC, all ten natural generation-2 BUY candidates had been rejected by
+the executor's current pre-order thesis check (CURRENT_THESIS_INVALID). New orders
+and holdings were still zero; no validation order was created. Resident protection
+and HOLD/PROTECT/EXIT on a new filled position therefore remain covered by preserved
+code/regressions rather than a newly observed live position cycle. Incident 148
+resolved through three normal independent observations and remains resolved.
+
+Observed limitations: intermittent management API 544/connection timeouts and a
+retryable executor 503 occurred. The clock remained enabled and executor cycles
+recovered; no forced restart or direct circuit reset was performed. The underlying
+platform interruption cause is not established. Full executor cycles exceed the
+nominal five-second clock, so five seconds describes schedule/capture cadence,
+not a guarantee for a complete account/entry cycle. Preserve the seven terminal
+accounted CLOSED dust rows; they are not holdings and may conservatively block a
+candidate for the affected symbol. A flat account has no held-position margin-type
+observation; no margin configuration was changed.
 
 Readiness requests explicitly select the observed production clock region,
 `ap-northeast-1`, and reject a different `x-sb-edge-region` response. On
