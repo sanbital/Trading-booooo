@@ -1,6 +1,7 @@
 import fs from 'node:fs';import {spawnSync} from 'node:child_process';
 import {createHash,createCipheriv,publicEncrypt,randomBytes} from 'node:crypto';
 import {readVenue,reconcileHoldings,reconcileTrades} from './preflight-read.mjs';
+import {readReadiness} from './readiness-read.mjs';
 import {ENGINE,assertAccountProof,assertActivation,protectedSettings} from './release-policy.mjs';
 const project='etaajwpernzrcdrifdnw',sha=process.env.GITHUB_SHA,operation=process.env.CUTOVER_OPERATION;
 if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.GITHUB_REF!=='refs/heads/main'||sha!==process.env.EXPECTED_COMMIT||!/^[a-f0-9]{40}$/.test(sha??'')||!['stage','repair-capture','verify','activate'].includes(operation))throw Error('EXACT_MAIN_RELEASE_REQUIRED');
@@ -50,8 +51,8 @@ async function endpoint(slug,body){
  // Existing internal endpoint authentication, confined to this exact main release
  // runner. No token/key is logged, exported, or persisted in evidence.
  const token=run('psql',[process.env.SUPABASE_DB_URL,'-XAt','--set=ON_ERROR_STOP=1','-c',`select token from public.edge_internal_tokens where name='${slug}'`]).trim();if(!token)throw Error('INTERNAL_ENDPOINT_TOKEN_MISSING');
- const r=await fetch(`https://${project}.supabase.co/functions/v1/${slug}`,{method:'POST',headers:{'content-type':'application/json',[slug==='v10-lane-executor'?'x-v10-executor-token':'x-v10-lane-token']:token},body:JSON.stringify(body),signal:AbortSignal.timeout(25000)});
- if(!r.ok)throw Error('READINESS_ENDPOINT_HTTP_'+r.status);const result=await r.json();if(result.ok!==true)throw Error('READINESS_ENDPOINT_REPORTED_FAILURE');return result;
+ const result=await readReadiness({project,slug,token,body,region:request.runtime_region});
+ note('PRODUCTION_REGION_READINESS_OBSERVED',{slug,mode:body.mode,region:request.runtime_region});return result;
 }
 async function stage(){
  const before=await value(stateSQL);evidence.before=before;save();

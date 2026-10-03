@@ -6,6 +6,15 @@ the exact migration and deployed source e966badf791b641801dabac3ae282ac673c04819
 independent observations. Activation still requires fresh workflow/runtime gates;
 this procedure does not claim real trades or completed activation.
 
+Readiness requests explicitly select the observed production clock region,
+`ap-northeast-1`, and reject a different `x-sb-edge-region` response. On
+2026-10-03 at 00:48:19 UTC, an unpinned GitHub runner diagnostic reached
+`us-east-2` and reported all 20 candle features unavailable while adjacent
+Tokyo production clock observations had no TECHNICAL rejections. This is an
+ops request-routing correction, not an exemption from any candle/data gate;
+there is no alternate-region retry or market-data fabrication. Actual regional
+verification is still required through the protected manual cutover workflow.
+
 The follow-up repair uses `deterministic-cutover.yml` on exact main with the normal
 production environment. `stage` requires the observed flat signed baseline,
 pauses/retire legacy admission, drains holders, applies only the exact migration,

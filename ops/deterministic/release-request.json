@@ -5,6 +5,7 @@
     "v10-lane-signal-generator": 52
   },
   "gateway_commit": "1bd5e3bf76bfb55f9df749818e325f91b5c6ab02",
+  "runtime_region": "ap-northeast-1",
   "staged_source_commit": "e966badf791b641801dabac3ae282ac673c04819",
   "expected_staged_versions": {
     "v10-lane-executor": 191,
