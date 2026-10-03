@@ -6,6 +6,7 @@ on:
       - 'supabase/functions/v10-lane-executor/**'
       - 'supabase/functions/v10-lane-signal-generator/index.ts'
       - 'supabase/migrations/20261002102500_deterministic_dynamic_state.sql'
+      - 'supabase/migrations/20261003001800_deterministic_capture_symbol_admission.sql'
       - 'test-support/deterministic/**'
       - 'ops/deterministic/**'
       - 'supabase/functions/_shared/internal-token-auth.mjs'

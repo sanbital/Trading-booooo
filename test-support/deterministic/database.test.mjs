@@ -99,3 +99,24 @@ test('a malformed ingest row does not roll back another symbol in the same batch
  assert.equal(result.inserted,1);assert.equal(result.rejected_rows,1);
  assert.equal((await pg.query('select symbol from doa_capture.live_micro')).rows[0].symbol,'GOODUSDT');await pg.close();
 });
+
+test('additive admission repair accepts one-character and Unicode symbols without changing causal truth or grants',async()=>{
+ const pg=await setup(),body={worker_id:'fixture-worker-123',batch_id:'33333333-3333-4333-8333-333333333333',rows:[
+  {kind:'micro',symbol:'QUSDT',at:new Date().toISOString(),payload:{mid:1,bucket_complete:false}},
+  {kind:'micro',symbol:'币安人生USDT',at:new Date().toISOString(),payload:{mid:1,bucket_complete:false}},
+  {kind:'micro',symbol:'Q/USDT',at:new Date().toISOString(),payload:{mid:1}},
+  {kind:'micro',symbol:'USDT',at:new Date().toISOString(),payload:{mid:1}}
+ ]};
+ const before=(await pg.query("select pg_get_functiondef('doa_capture_rpc(text,jsonb)'::regprocedure) def,proacl from pg_proc where oid='doa_capture_rpc(text,jsonb)'::regprocedure")).rows[0];
+ const run=async()=>(await pg.query("select doa_capture_rpc('ingest',$1) result",[body])).rows[0].result;
+ assert.equal((await run()).inserted,0,'production bug rejects both legitimate symbols');
+ const repair=fs.readFileSync(new URL('../../supabase/migrations/20261003001800_deterministic_capture_symbol_admission.sql',import.meta.url),'utf8');
+ await pg.exec('update deterministic_control set enabled=true');await assert.rejects(pg.exec(repair),/DISABLED_DETERMINISTIC_AUTHORITY_REQUIRED/);
+ await pg.exec('update deterministic_control set enabled=false');await pg.exec(repair);
+ const after=(await pg.query("select pg_get_functiondef('doa_capture_rpc(text,jsonb)'::regprocedure) def,proacl from pg_proc where oid='doa_capture_rpc(text,jsonb)'::regprocedure")).rows[0];
+ assert.equal(after.def,before.def.replace('^[A-Z0-9]{2,30}USDT$','^[[:alnum:]]{1,24}USDT$'));assert.deepEqual(after.proacl,before.proacl);
+ body.batch_id='44444444-4444-4444-8444-444444444444';const result=await run();assert.equal(result.inserted,2);assert.equal(result.rejected_rows,2);
+ const raw=(await pg.query('select deterministic_market_context($1,clock_timestamp()) result',[['QUSDT','币安人生USDT']])).rows[0].result;
+ assert.equal(raw.QUSDT.status,'UNAVAILABLE');assert.equal(raw['币安人生USDT'].status,'UNAVAILABLE','admission never fabricates 24 causal buckets');
+ await assert.rejects(pg.exec(repair),/EXACT_CAPTURE_ADMISSION_BASELINE_REQUIRED/);await pg.close();
+});

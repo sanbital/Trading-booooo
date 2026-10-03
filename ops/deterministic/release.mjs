@@ -3,7 +3,7 @@ import {createHash,createCipheriv,publicEncrypt,randomBytes} from 'node:crypto';
 import {readVenue,reconcileHoldings,reconcileTrades} from './preflight-read.mjs';
 import {ENGINE,assertAccountProof,assertActivation,protectedSettings} from './release-policy.mjs';
 const project='etaajwpernzrcdrifdnw',sha=process.env.GITHUB_SHA,operation=process.env.CUTOVER_OPERATION;
-if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.GITHUB_REF!=='refs/heads/main'||sha!==process.env.EXPECTED_COMMIT||!/^[a-f0-9]{40}$/.test(sha??'')||!['stage','verify','activate'].includes(operation))throw Error('EXACT_MAIN_RELEASE_REQUIRED');
+if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.GITHUB_REF!=='refs/heads/main'||sha!==process.env.EXPECTED_COMMIT||!/^[a-f0-9]{40}$/.test(sha??'')||!['stage','repair-capture','verify','activate'].includes(operation))throw Error('EXACT_MAIN_RELEASE_REQUIRED');
 const request=JSON.parse(fs.readFileSync('ops/deterministic/release-request.json','utf8'));
 const sourceSha=request.staged_source_commit??sha;
 fs.mkdirSync('infra-evidence',{recursive:true});const evidence={source_commit:sha,operation,started_at:new Date().toISOString(),stages:[],order_commands:0};
@@ -87,11 +87,25 @@ async function verify(){
  const after=await value(stateSQL);if(after.postmaster!==s.postmaster||JSON.stringify(s.positions)!==JSON.stringify(after.positions)||JSON.stringify(s.orders)!==JSON.stringify(after.orders))throw Error('EXECUTION_TRUTH_CHANGED_DURING_VERIFY');
  const validation={...after,...detail,diagnostic,readiness,sourceCommit:sourceSha};evidence.validation=validation;save();assertActivation(validation);note('PRE_ACTIVATION_GATES_PASSED',{source_commit:sourceSha,release_runner_commit:sha,captures:detail.captures,btc_sensor:{status:detail.marketSensor.status,buckets:detail.marketSensor.buckets,contract:detail.marketSensor.contract,depth_semantics:detail.marketSensor.depth_semantics},provider_calls:detail.providerCalls,phases:diagnostic.results.map(r=>({symbol:r.symbol,phase:r.phase,decision:r.decision,technical:r.technical,reasons:r.reasons})),runtime_cycle:after.runtime.last_cycle_completed_at});return validation;
 }
+async function repairCapture(){
+ const s=await value(stateSQL),ctl=await value("select to_jsonb(c) evidence from deterministic_control c where singleton");evidence.current=s;save();
+ if(!s.installed||ctl.enabled||ctl.source_commit!==sourceSha||s.leader20.active_strategy!=='PAUSED'||s.batch.enabled||s.gpt.mode!=='OFF')throw Error('DISABLED_STAGED_RELEASE_REQUIRED');
+ await signedProof(s);
+ const contract=await value("select jsonb_build_object('md5',md5(pg_get_functiondef('public.doa_capture_rpc(text,jsonb)'::regprocedure)),'installed',(select count(*) from supabase_migrations.schema_migrations where version='20261003001800'),'prerequisite',(select count(*) from supabase_migrations.schema_migrations where version='20261002102500')) evidence");
+ if(contract.md5!==request.capture_repair.expected_rpc_md5||contract.installed!==0||contract.prerequisite!==1)throw Error('CAPTURE_REPAIR_BASELINE_CHANGED');
+ const migration=fs.readFileSync('supabase/migrations/20261003001800_deterministic_capture_symbol_admission.sql','utf8');
+ if(createHash('sha256').update(migration).digest('hex')!==request.capture_repair.migration_sha256)throw Error('CAPTURE_REPAIR_HASH_CHANGED');
+ const path=process.env.RUNNER_TEMP+'/deterministic-capture-repair.sql';fs.writeFileSync(path,`set local lock_timeout='750ms';set local statement_timeout='20000ms';\n${migration}\ninsert into supabase_migrations.schema_migrations(version,name,statements) values('20261003001800','deterministic_capture_symbol_admission',ARRAY['reviewed sha256 ${request.capture_repair.migration_sha256}']);`);
+ run('psql',[process.env.SUPABASE_DB_URL,'-X','--set=ON_ERROR_STOP=1','--single-transaction','-f',path]);
+ const after=await value(stateSQL),identity=await value("select jsonb_build_object('disabled',(select not enabled from deterministic_control where singleton),'definition_md5',md5(pg_get_functiondef('public.doa_capture_rpc(text,jsonb)'::regprocedure))) evidence");
+ if(after.postmaster!==s.postmaster||identity.disabled!==true||identity.definition_md5!==request.capture_repair.expected_repaired_rpc_md5||JSON.stringify(protectedSettings(after))!==JSON.stringify(protectedSettings(s)))throw Error('CAPTURE_REPAIR_PROTECTED_STATE_CHANGED');
+ note('CAPTURE_ADMISSION_REPAIRED_ENTRIES_DISABLED',{version:'20261003001800',migration_sha256:request.capture_repair.migration_sha256,definition_md5:identity.definition_md5,service_source_commit:sourceSha,release_runner_commit:sha});
+}
 async function activate(v){
  // The normal runtime, not an operator SQL reset, has resolved the exact account
  // incident. This transaction grants one new authority and changes no sizing.
  const sql=`begin;set local lock_timeout='750ms';set local statement_timeout='5000ms';
- lock table public.deterministic_control,public.leader20_control,public.leader20_batch_control,public.gpt_final_review_control,public.v11_long_regime_runtime,public.trading_settings,public.trading_scheduler_jobs,public.trading_scheduler_control in share row exclusive mode;
+ lock table public.deterministic_control,public.leader20_control,public.leader20_batch_control,public.gpt_final_review_control,public.v11_long_regime_runtime,public.v18_ops_incidents,public.trading_settings,public.trading_scheduler_jobs,public.trading_scheduler_control in share row exclusive mode;
  do $$ begin
  if not exists(select 1 from deterministic_control where singleton and not enabled and source_commit='${sourceSha}' and generation=${v.control.generation})
  or not exists(select 1 from v11_long_regime_runtime where singleton and not circuit_open and incident_generation=148 and protection_health='FLAT')
@@ -108,7 +122,7 @@ async function activate(v){
  commit;`;
  await query(sql);note('DETERMINISTIC_AUTHORITY_ENABLED',{source_commit:sourceSha,release_runner_commit:sha});
 }
-try{save();if(operation==='stage')await stage();else{const v=await verify();if(operation==='activate')await activate(v);}note('OPERATION_COMPLETED',{operation});}
+try{save();if(operation==='stage')await stage();else if(operation==='repair-capture')await repairCapture();else{const v=await verify();if(operation==='activate')await activate(v);}note('OPERATION_COMPLETED',{operation});}
 catch(e){evidence.error=/^[A-Z0-9_]+$/.test(e.message)?e.message:'RELEASE_FAILED';save();
  // Never restore AI authority or roll a migrated execution proof backward.
  if(operation!=='verify'){try{await query(pauseSQL);if((await value(stateSQL)).installed)await query('update deterministic_control set enabled=false,updated_at=clock_timestamp() where singleton;');note('ENTRY_PAUSED_AFTER_FAILURE');}catch{note('PAUSE_WRITE_UNCONFIRMED');}}

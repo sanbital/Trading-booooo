@@ -23,6 +23,14 @@ staged service SHA and versions separately from an ops-only release-runner SHA.
 `activate` repeats those gates before one generation/CAS authority transaction.
 Failure pauses new admission; no AI rollback or direct circuit reset is performed.
 
+`repair-capture` installs only additive migration 20261003001800 while entry
+authority remains disabled. The original ingest regex rejected QUSDT and Unicode
+symbols that the collector and eligible universe accept. The repair replaces only
+that regex, pins the exact before/after RPC definition hashes, and preserves grants,
+all existing hot/archive rows and every causal bucket check. Previously discarded
+history is not reconstructed; collect a new genuine 25-boundary trajectory before
+the unchanged activation gates can pass.
+
 Credential lookup failures return retryable 503 rather than permanent 401; actual
 invalid callers remain 401. The executor preserves the scheduler's entry-free
 `account-recovery` route. Candidate wake keeps its compatibility signature but
