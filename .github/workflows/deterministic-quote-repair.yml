@@ -1,0 +1,75 @@
+name: Repair Binance execution quote snapshot (entries paused)
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        type: string
+        required: true
+      release_marker:
+        type: string
+        required: true
+        description: QUOTE_SNAPSHOT_REPAIR_1
+permissions:
+  contents: read
+concurrency:
+  group: deploy-binance-order-gateway
+  cancel-in-progress: false
+jobs:
+  repair:
+    if: github.repository == 'sanbital/Trading-booooo' && github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Require exact reviewed production source
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          RELEASE_MARKER: ${{ inputs.release_marker }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
+          test "$RELEASE_MARKER" = QUOTE_SNAPSHOT_REPAIR_1
+          git diff --check
+          node gateway/patch-trade-history.mjs
+          node gateway/stage-engine.mjs
+          node --check gateway/server.mjs
+          node --test gateway/*.test.mjs
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Preserve encrypted existing machine manifest without staging credentials
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          WRITER_STAGE_APP: trading-booooo
+        run: node ops/execution-infra/gateway-stage-backup.mjs
+      - name: Confirm paused, flat account and mandatory writer before rollout
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: node ops/deterministic/quote-repair-gate.mjs before
+      - name: Reconcile fresh signed flat venue truth before rollout
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+          FLY_BINANCE_APP_NAME: ${{ secrets.FLY_BINANCE_APP_NAME }}
+        run: node ops/deterministic/preflight.mjs
+      - name: Deploy same one-machine configuration through the normal Fly path
+        working-directory: gateway
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy . --remote-only --ha=false --strategy rolling -a trading-booooo --config fly.binance.toml --build-arg RELEASE_COMMIT="$GITHUB_SHA"
+      - name: Verify exact build and retained writer/scheduler/account roles
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: node ops/deterministic/quote-repair-gate.mjs after
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deterministic-quote-repair-${{ github.run_id }}
+          path: infra-evidence/*
+          retention-days: 7
+          if-no-files-found: error

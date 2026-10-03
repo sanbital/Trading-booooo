@@ -2090,7 +2090,9 @@ async function quote(exchange, market) {
   const futures = isBinanceFutures(exchange);
   const [ticker, depth, trades] = futures
     ? await Promise.all([
-      publicBinanceFutures("/fapi/v1/ticker/bookTicker", { symbol }),
+      // A separate ticker and depth REST read can observe different book tops.
+      // Futures execution quotes use one depth snapshot for price and liquidity.
+      Promise.resolve(null),
       publicBinanceFutures("/fapi/v1/depth", { symbol, limit: 100 }),
       publicBinanceFutures("/fapi/v1/trades", { symbol, limit: 100 }).catch(() => null),
     ])
@@ -2105,8 +2107,8 @@ async function quote(exchange, market) {
   const bids = Array.isArray(depth?.bids)
     ? depth.bids.map(([price, size]) => ({ price: Number(price), size: Number(size) }))
     : [];
-  const bestAsk = Number(ticker?.askPrice || asks[0]?.price || 0);
-  const bestBid = Number(ticker?.bidPrice || bids[0]?.price || 0);
+  const bestAsk = Number((futures ? asks[0]?.price : ticker?.askPrice || asks[0]?.price) || 0);
+  const bestBid = Number((futures ? bids[0]?.price : ticker?.bidPrice || bids[0]?.price) || 0);
   return {
     exchange,
     market: symbol,
@@ -2892,6 +2894,7 @@ export {
   formatStep,
   FUTURES_MIN_ENTRY_MARGIN_USDT,
   GATEWAY_BUILD,
+  quote,
   localRateLimit,
   monitorCadenceDelayMs,
   neverPlacedVerdict,
