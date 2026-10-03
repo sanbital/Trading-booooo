@@ -16,7 +16,7 @@ const owner=randomUUID();
 const order={exchange:'binance_futures',action:'create_order',engine_version:'8.0.0-P10-DONCHIAN-SLOW4R',leverage:3,
  order:{market:'BTCUSDT',side:'BUY',type:'LIMIT',price:100,quantity:4.5,time_in_force:'IOC',
  identifier:'tb-writer-http-fixture',position_side:'LONG',position_effect:'OPEN'},wait_for_final_ms:0,
- writer:{account_key:'binance_futures:futures',owner,fence:1,execution_key:'fixture-command'}};
+ writer:{account_key:'binance_futures:futures',owner,fence:1,execution_key:'f'.repeat(64)}};
 const json=value=>new Response(JSON.stringify(value),{status:200,headers:{'content-type':'application/json'}});
 async function fixture(t,authorize){
  const calls=[],original=globalThis.fetch;
@@ -24,7 +24,7 @@ async function fixture(t,authorize){
   const u=new URL(String(input)),method=init.method??'GET';calls.push({path:u.pathname,method});
   if(u.hostname==='writer-db.invalid'){
    assert.equal(u.pathname,'/rest/v1/rpc/v17_gateway_authorize');
-   const body=JSON.parse(init.body);assert.equal(body.p_owner,owner);assert.equal(body.p_fence,1);
+   const body=JSON.parse(init.body);assert.equal(body.p_owner,owner);assert.equal(body.p_fence,1);assert.equal(body.p_key.length,64);
    assert.equal(body.p_command.writer,undefined);return json(await authorize(body,calls));
   }
   if(u.pathname==='/api/v3/time')return json({serverTime:Date.now()});
