@@ -147,6 +147,15 @@ including the unchanged hard floor, stable execution truth and postmaster recove
 It records WAIT when no fill occurs and cannot report completion at its deadline.
 Raw account/trade/stop/quote evidence is encrypted; summaries exclude balances.
 
+`revalidation-evidence` adds a bounded read-only comparison of fresh signed books
+and actual current 24-bucket capture using a recent same-minute BUY's saved candle
+facts. Only proven bullish candle support is reused; minute changes, aged seeds
+and incomplete data are unavailable. It reports which pure market gates change
+when the executable book is overlaid. This is a current comparison, explicitly
+not the historical executor's exact order trace, and never submit authorization.
+It cannot change a signal, invoke a cycle or send an order. At most twelve
+comparisons are collected in one one-to-ten-minute run through normal credentials.
+
 Signed quote observation 37094913628 at 03:57:44 UTC found AXSUSDT
 BID_TOP_MISMATCH: separate ticker and depth reads described different book tops.
 The Binance-only repair takes executable bid/ask and liquidity from the same

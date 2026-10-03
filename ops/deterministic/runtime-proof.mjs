@@ -1,11 +1,13 @@
 // Signed, read-only observations. No entry/exit/control command or key-reveal API.
 import fs from 'node:fs';import {createCipheriv,publicEncrypt,randomBytes} from 'node:crypto';
-import {readVenue,reconcileHoldings,reconcileTrades} from './preflight-read.mjs';
+import {readVenue,validateReadCommand,reconcileHoldings,reconcileTrades} from './preflight-read.mjs';
 import {quoteIntegrity,settledBalanceProof,executionIdentity,nativeAckMatches} from './runtime-proof-read.mjs';
 import {expectedGatewayCommit} from './gateway-source.mjs';
+import {reusableSeed,quoteRevalidationEvidence} from './quote-revalidation-read.mjs';
 const project='etaajwpernzrcdrifdnw',sha=process.env.GITHUB_SHA,operation=process.env.PROOF_OPERATION,notBefore=Date.parse(process.env.NOT_BEFORE??''),minutes=Number(process.env.OBSERVATION_MINUTES??30);
-if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.GITHUB_REF!=='refs/heads/main'||sha!==process.env.EXPECTED_COMMIT||!/^[a-f0-9]{40}$/.test(sha??'')||!['quote-evidence','fill-proof'].includes(operation))throw Error('RUNTIME_PROOF_EXACT_MAIN_REQUIRED');
+if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.GITHUB_REF!=='refs/heads/main'||sha!==process.env.EXPECTED_COMMIT||!/^[a-f0-9]{40}$/.test(sha??'')||!['quote-evidence','revalidation-evidence','fill-proof'].includes(operation))throw Error('RUNTIME_PROOF_EXACT_MAIN_REQUIRED');
 if(operation==='fill-proof'&&(!Number.isFinite(notBefore)||notBefore>Date.now()+60000||Date.now()-notBefore>86400000||!Number.isInteger(minutes)||minutes<1||minutes>60))throw Error('FILL_OBSERVATION_WINDOW_INVALID');
+if(operation==='revalidation-evidence'&&(!Number.isInteger(minutes)||minutes<1||minutes>10))throw Error('REVALIDATION_OBSERVATION_WINDOW_INVALID');
 const request=JSON.parse(fs.readFileSync('ops/deterministic/release-request.json','utf8')),app=process.env.FLY_BINANCE_APP_NAME,config={app,token:process.env.LEARNING_ACCESS_TOKEN,commit:expectedGatewayCommit(request,app)};
 const ev={version:'DETERMINISTIC_SIGNED_RUNTIME_PROOF_1',operation,source_commit:sha,service_source_commit:request.staged_source_commit,not_before:operation==='fill-proof'?new Date(notBefore).toISOString():null,mutations:0,order_commands:0,observations:[]};
 function seal(){fs.mkdirSync('infra-evidence',{recursive:true});const key=randomBytes(32),iv=randomBytes(12),c=createCipheriv('aes-256-gcm',key,iv),data=Buffer.concat([c.update(JSON.stringify(ev)),c.final()]);fs.writeFileSync('infra-evidence/deterministic-runtime-proof.encrypted.json',JSON.stringify({version:1,key:publicEncrypt({key:fs.readFileSync('ops/execution-infra/evidence-public.pem'),oaepHash:'sha256'},key).toString('base64'),iv:iv.toString('base64'),tag:c.getAuthTag().toString('base64'),data:data.toString('base64')}));}
@@ -30,6 +32,22 @@ async function quoteEvidence(){const s=await state();authority(s);const symbols=
  for(const {symbol}of symbols){const quote=await readVenue({...config,command:{action:'quote',market:symbol}});ev['quote_'+symbol]=quote;note({utc:new Date().toISOString(),status:'SIGNED_QUOTE_OBSERVED',symbol,...quoteIntegrity(quote),order_commands:0});}
  if(!symbols.length)note({utc:new Date().toISOString(),status:'NO_RECENT_BUY_SYMBOLS',order_commands:0});
 }
+async function revalidationEvidence(){authority(await state());const end=Date.now()+minutes*60000,seen=new Set();let observations=0;
+ while(Date.now()<end&&observations<12){
+  const seeds=await query("select id,symbol,features->'deterministic' seed from v11_long_regime_signals where created_at>clock_timestamp()-interval '30 seconds' and features#>>'{deterministic,version}'='DETERMINISTIC_DYNAMIC_STATE_1' order by created_at desc limit 3");
+  for(const row of seeds){if(seen.has(row.id)||!reusableSeed(row.seed,Date.now()))continue;seen.add(row.id);
+   // Exact read schema validates the symbol before the separately escaped SQL literal.
+   const command={action:'quote',market:row.symbol};validateReadCommand(command);
+   const symbol=row.symbol.replaceAll("'","''"),raw=(await query(`with cutoff as materialized(select clock_timestamp() at) select deterministic_capture_raw('${symbol}',cutoff.at,null,cutoff.at) capture from cutoff`))[0].capture;
+   const quote=await readVenue({...config,command});
+   // Take the signed book last; all capture/query latency still counts toward data freshness.
+   ev['revalidation_'+row.id]={seed:row.seed,raw,quote};observations++;
+   note({utc:new Date().toISOString(),symbol:row.symbol,...quoteRevalidationEvidence({seed:row.seed,raw,quote}),quote:quoteIntegrity(quote),order_commands:0});
+  }
+  if(Date.now()<end&&observations<12)await new Promise(r=>setTimeout(r,10000));
+ }
+ note({utc:new Date().toISOString(),status:'READ_ONLY_COMPARISON_WINDOW_COMPLETED',observations,order_commands:0});
+}
 async function fillObservation(){const before=await state();authority(before);
  if(!before.new_fills.length){note({utc:before.utc,status:'WAITING_FOR_REAL_FILL',new_entry_fills:0,unresolved_orders:before.orders.length,open_positions:before.positions.filter(p=>p.state==='OPEN').length,circuit_open:before.runtime.circuit_open,order_commands:0});return false;}
  ev.before=before;const [portfolio,openOrders,mode]=await Promise.all(['p10_portfolio','v18_open_orders','futures_position_mode'].map(action=>readVenue({...config,command:{action}})));
@@ -46,5 +64,5 @@ async function fillObservation(){const before=await state();authority(before);
  ev.account={portfolio,openOrders,mode,history,holdings,trades,balance};ev.after=after;
  const summary={utc:new Date().toISOString(),status:failures.length?'FILL_PROOF_PENDING':'REAL_FILL_VERIFIED',failures:[...new Set(failures)],new_entry_fills:before.new_fills.length,new_positions:before.new_positions.length,holdings,trades,balance,native_acknowledgements_verified:nativeProofs.filter(Boolean).length,provider_calls:after.provider_calls,postmaster:after.postmaster,order_commands:0};note(summary);return failures.length===0;
 }
-try{seal();if(operation==='quote-evidence')await quoteEvidence();else{const end=Date.now()+minutes*60000;let complete=false;while(Date.now()<end){complete=await fillObservation();if(complete)break;await new Promise(r=>setTimeout(r,30000));}if(!complete){note({utc:new Date().toISOString(),status:'REAL_FILL_NOT_VERIFIED_WITHIN_WINDOW',order_commands:0});process.exitCode=3;}}}
+try{seal();if(operation==='quote-evidence')await quoteEvidence();else if(operation==='revalidation-evidence')await revalidationEvidence();else{const end=Date.now()+minutes*60000;let complete=false;while(Date.now()<end){complete=await fillObservation();if(complete)break;await new Promise(r=>setTimeout(r,30000));}if(!complete){note({utc:new Date().toISOString(),status:'REAL_FILL_NOT_VERIFIED_WITHIN_WINDOW',order_commands:0});process.exitCode=3;}}}
 catch(e){const error=/^[A-Z0-9_]+$/.test(e.message)?e.message:'RUNTIME_PROOF_READ_FAILED';note({utc:new Date().toISOString(),status:'BLOCKED',error,order_commands:0});process.exitCode=2;}

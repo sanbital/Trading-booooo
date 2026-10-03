@@ -1,6 +1,22 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {validateReadCommand} from '../ops/deterministic/preflight-read.mjs';
 import {quoteIntegrity,settledBalanceProof,executionIdentity,nativeAckMatches} from '../ops/deterministic/runtime-proof-read.mjs';
+import {reusableSeed,quoteRevalidationEvidence} from '../ops/deterministic/quote-revalidation-read.mjs';
+import {classifyMarket} from '../supabase/functions/_shared/deterministic/market-state.mjs';
+import {scenario,executableQuote} from '../test-support/deterministic/fixtures.mjs';
+test('read-only comparison cannot manufacture current candle facts across minutes or unsupported candle context',()=>{
+ const now=Date.parse('2026-10-02T10:00:30.500Z'),input=scenario({at:now}),seed={version:input.profile.version,decision:classifyMarket(input),facts:input.facts.values,return24h:input.return24h};
+ assert(reusableSeed(seed,now));for(const time of [now-1,now+31000])assert.equal(reusableSeed(seed,time),false);
+ const unsupported=structuredClone(seed);unsupported.decision.families.CANDLE.bullish=false;assert.equal(reusableSeed(unsupported,now),false);
+ assert.equal(quoteRevalidationEvidence({seed,raw:{status:'UNAVAILABLE',reason:'INCOMPLETE_TRAJECTORY'},quote:{},now}).reason,'INCOMPLETE_TRAJECTORY');
+});
+test('signed-book comparison exposes liquidity and integrity rejection without altering the actual seed',()=>{
+ const now=Date.parse('2026-10-02T10:00:30.500Z'),input=scenario({at:now}),seed={version:input.profile.version,decision:classifyMarket(input),facts:input.facts.values,return24h:input.return24h},before=structuredClone(seed);
+ const quote=executableQuote({at:now,depth:500,askDepth:30000}),result=quoteRevalidationEvidence({seed,raw:input.raw,quote,now});
+ assert.equal(result.baseline.decision,'BUY');assert.equal(result.allowed_by_pure_comparison,false);assert.equal(result.signed_book.liquidity.support,false);assert.match(result.basis,/NOT_EXECUTOR_TRACE/);assert.deepEqual(seed,before);
+ const stale=quoteRevalidationEvidence({seed,raw:input.raw,quote:{...quote,timing:{requested_at_ms:now-2500,received_at_ms:now-2000}},now});
+ assert.equal(stale.executable_capture_reason,'CURRENT_EXECUTABLE_BOOK_INCOMPLETE');assert.equal(stale.signed_book.gates.data,false);
+});
 test('runtime evidence accepts only exact read-only command schemas',()=>{
  for(const command of [{action:'quote',market:'QUSDT'},{action:'v17_query_stop',symbol:'QUSDT',clientAlgoId:'tb-v17s-'+'a'.repeat(27)},{action:'trade_history',market:'QUSDT',limit:1000}])assert.doesNotThrow(()=>validateReadCommand(command));
  for(const command of [{action:'v17_create_stop'},{action:'quote',market:'QUSDT',quantity:1},{action:'v17_query_stop',symbol:'QUSDT',clientAlgoId:'foreign'},{action:'p10_portfolio',market:'QUSDT'},{action:'trade_history',market:'QUSDT',limit:2000}])assert.throws(()=>validateReadCommand(command));
