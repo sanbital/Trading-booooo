@@ -1,0 +1,37 @@
+name: Deterministic read-only platform health
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: execution-infrastructure-read-only-observation
+  cancel-in-progress: false
+jobs:
+  observe:
+    if: github.repository == 'sanbital/Trading-booooo' && github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Read only allowlisted platform metrics and grouped SQL activity
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: node ops/deterministic/platform-health.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deterministic-platform-health-${{ github.run_id }}
+          path: infra-evidence/deterministic-platform-health.json
+          retention-days: 7
+          if-no-files-found: error
