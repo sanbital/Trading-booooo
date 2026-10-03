@@ -1134,7 +1134,7 @@ async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComp
  return {entered:entries.some(x=>x.entered),entryCount:entries.filter(x=>x.entered).length,entries,reason:entries.length?entries.at(-1).reason??null:'NO_DETERMINISTIC_BUY',capacity:cap};
 }
 async function run(db,{recoveryReady=true}={}){
- const started=Date.now();await verifyExecutionLease(db);let pair=await executorStage('initial_account',()=>readOpsPair(db)),managed=[],protectedIds=new Set();await recordMismatch(db,pair.match);
+ const started=Date.now();await verifyExecutionLease(db);let pair=await executorStage('initial_account',()=>readOpsPair(db)),managed=[],protectedIds=new Set();const initialIncidents=await recordMismatch(db,pair.match);
  const controls=await opsControls(db);
  if(controls.settings.manual_intervention_required||controls.settings.emergency_liquidation)return {ok:true,skipped:'OPERATOR_MANAGEMENT_OWNERSHIP'};
  // Position safety owns the first turn and is independent from universe/entry/capture authority.
@@ -1146,7 +1146,7 @@ async function run(db,{recoveryReady=true}={}){
  });
  managed=work.map((x,i)=>x.error?{id:pair.match.safe[i].id,symbol:pair.match.safe[i].symbol,error:String(x.error.message??x.error)}:x.value);
  for(const x of work)if(x.error&&classifyFailure(x.error).fatal)throw x.error;
- if(work.length)pair=await executorStage('post_management_account',()=>readOpsPair(db));
+ if(work.length||initialIncidents.length)pair=await executorStage('post_management_account',()=>readOpsPair(db));
  const reconciliation=await executorStage('reconciliation',()=>reconcileOps(db,pair));
  if(reconciliation.length)pair=await executorStage('post_reconciliation_account',()=>readOpsPair(db));
  await recordMismatch(db,pair.match);

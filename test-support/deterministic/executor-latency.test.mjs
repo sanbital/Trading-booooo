@@ -19,6 +19,14 @@ test('recovered account skips a writer; restart recovery rereads readiness insid
  assert.equal(await h.ctx.ensureShortWriterRecovery(db),true);assert.equal(writers,0);
  ready=false;assert.equal(await h.ctx.ensureShortWriterRecovery(db),true);assert.equal(writers,1);assert.equal(readInside,true);
 });
+test('new incident is refreshed before reconciliation even when no owned position can be managed',async()=>{
+ const h=await evaluateModule(),db={},pair=flat();let incident=false,reads=0;
+ h.ctx.verifyExecutionLease=async()=>{};h.ctx.readOpsPair=async()=>{reads++;return {...pair,quarantines:incident?[{id:'new-incident'}]:[]};};
+ h.ctx.recordMismatch=async()=>{incident=true;return [{id:'new-incident'}];};h.ctx.opsControls=async()=>({runtime:{circuit_open:false},control:{},settings:{}});
+ h.ctx.reconcileOps=async(client,current)=>{assert.equal(current.quarantines[0].id,'new-incident');return[];};
+ h.ctx.attemptSymbolRecoveries=async()=>[];h.ctx.attemptOpsRecovery=async()=>({resolved:false});h.ctx.operatorAllowsRecovery=()=>false;h.ctx.writeRuntimeTelemetry=async()=>{};
+ await h.ctx.run(db);assert.equal(reads,3);
+});
 test('held-position management retains priority and account refreshes around reconciliation',async()=>{
  const h=await evaluateModule(),db={},pair=flat(),events=[];pair.positions=[{id:'held',symbol:'TESTUSDT',metadata:{}}];pair.match.safe=pair.positions;
  h.ctx.verifyExecutionLease=async()=>{};h.ctx.readOpsPair=async()=>{events.push('read');return structuredClone(pair);};h.ctx.recordMismatch=async()=>[];

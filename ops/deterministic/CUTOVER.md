@@ -10,12 +10,12 @@ HTTPerrors1; generatorv53 n137 p50 1167ms / p95 1870ms / max3071ms, errors0.
 
 The reviewed latency repair removes idle recovery writers, overlaps independent
 signed-account/DB reads without caching, and skips intermediate account reads
-only when no management/reconciliation work ran. Position management stays
+only when no management/reconciliation work or new incident write ran. Position management stays
 first; final signed account evidence, final BUY revalidation, capacity, writer
 fencing, receipts, accounting and native protection remain required. Stage
 telemetry records durations without credentials or account payloads.
 
-Immutable service source384ed629c952b243af70d17eb2d26c608fa3b623 has exactly
+Immutable service source017c7f0012cd867a01658eee6192475d6cea64a1 has exactly
 one changed file relative to5ccc46fa: executor/index.ts. Production deployment
 must archive this source, not current main dependencies. No entry-rescue strategy
 change, generator, gateway, collector, scheduler or migration belongs to this
