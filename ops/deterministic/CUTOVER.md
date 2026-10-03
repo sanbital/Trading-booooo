@@ -1,3 +1,52 @@
+# 2026-10-03 14:32 UTC: resumed, executor latency remains, no real fill proof
+
+Operator-confirmed database restart: postmaster 12:16:55.400305Z. This task
+performed no DB restart, compute change or new migration. Existing migrations
+20261002102500 / 20261002123820 / 20261003001800 remain installed.
+
+Paris gateway writer HTTP fix PR342 is live at
+31ab91abf0c30403303942373c73fadff2eb0265; PR343 pins that observed source.
+Tokyo remains 1bd5e3bf76bfb55f9df749818e325f91b5c6ab02 with the single external
+clock. Actual bundle parity at 14:21 confirms executor v192 / generator v53
+against 5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4. External main entry-rescue
+code was NOT deployed to those functions. Collector remains 98f272cc / ingest v10.
+
+First post-rollout resume checks failed at 14:14 (RELEASE_DB_HTTP_544 and
+PREFLIGHT_READ_FAILED); entries stayed paused. DB small-query safety and
+platform health recovered with the SAME postmaster. Fresh signed preflight
+37129186269 and full resume gate 37129262172 passed sequentially, including
+BTC24, 20 technical features, per-symbol data fail-closed and provider calls0.
+Normal resume 37129368783 confirmed pause_new_entries=false at 14:22:46.383.
+Authority remains deterministic enabled / generation2, GPT OFF and batch OFF.
+
+14:22:46..14:28 request logs: executor v192 n12, p50 15905ms / p95 and max
+36282ms; generator v53 n57, p50 1352ms / p95 2513ms / max 2645ms. HTTP errors0.
+These are bounded request samples, not order send/fill latency or a 5s SLA.
+432 runtime/Edge records show provider/GPT wait-budget-timeout mentions0,
+old WRITER_CONTEXT_REQUIRED0 and execution errors0. Production source closure
+34 files has provider dependency/invocation matches0; ENTRY/EXIT ledger0.
+The gateway fix does NOT resolve the executor's repeated account reads and
+writer sections. Per-operation attribution of the remaining runtime is still absent.
+
+14:28 DB snapshot: positions0 / unresolved orders0 / incidents0 / reservations0.
+12 post-resume BUY candidates: rejected CURRENT_THESIS_INVALID10,
+LATEST_PRICE_OR_MARGIN_INVALID1, NEW1. Two durable entry intents were rejected
+for those two gates respectively, both notDispatched=true / no venue identity.
+Collector watched/synced21, BTC24, 17/20 trade captures AVAILABLE24;
+EVAA/TAKE/YFI INCOMPLETE_TRAJECTORY stay fail-closed. This is a timestamped
+snapshot; the universe and capture readiness continue to change.
+
+Natural fill observer 37129370401 made no orders, observed ten times and ended
+14:28:06.488 REAL_FILL_NOT_VERIFIED_WITHIN_WINDOW. New fills0; new native-stop
+ACK, HOLD/PROTECT/EXIT receipts and post-fill attribution/accounting remain
+UNVERIFIED. No validation trade, forced close, duplicate stop or AI fallback.
+Final signed account proof 37129933151 at 14:32:15.670: venue/DB flat,
+ordinary/algo orders0, trades0 in the documented scope, wallet matched,
+ONE_WAY and no circuit. Entry authority is resumed; this is not a claim of
+completed real-fill verification or solved executor latency. Preserve all
+financial parameters, IOC and native -2.5% stop. Management HTTP544 cause
+remains unproven; recurrence requires fresh truth and failed gates stay closed.
+
 # 2026-10-03 14:07 UTC: writer HTTP repair deployed, entries paused
 
 PR342 merged as 31ab91abf0c30403303942373c73fadff2eb0265.
