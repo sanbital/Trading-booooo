@@ -2,9 +2,9 @@ import fs from 'node:fs';import {spawnSync} from 'node:child_process';
 import {createHash,createCipheriv,publicEncrypt,randomBytes} from 'node:crypto';
 import {readVenue,reconcileHoldings,reconcileTrades} from './preflight-read.mjs';
 import {readReadiness} from './readiness-read.mjs';
-import {ENGINE,assertAccountProof,assertActivation,protectedSettings} from './release-policy.mjs';
+import {ENGINE,assertAccountProof,assertActivation,assertResume,protectedSettings} from './release-policy.mjs';
 const project='etaajwpernzrcdrifdnw',sha=process.env.GITHUB_SHA,operation=process.env.CUTOVER_OPERATION;
-if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.GITHUB_REF!=='refs/heads/main'||sha!==process.env.EXPECTED_COMMIT||!/^[a-f0-9]{40}$/.test(sha??'')||!['stage','repair-capture','verify','activate'].includes(operation))throw Error('EXACT_MAIN_RELEASE_REQUIRED');
+if(process.env.GITHUB_REPOSITORY!=='sanbital/Trading-booooo'||process.env.GITHUB_REF!=='refs/heads/main'||sha!==process.env.EXPECTED_COMMIT||!/^[a-f0-9]{40}$/.test(sha??'')||!['stage','repair-capture','verify','verify-resume','activate'].includes(operation))throw Error('EXACT_MAIN_RELEASE_REQUIRED');
 const request=JSON.parse(fs.readFileSync('ops/deterministic/release-request.json','utf8'));
 const sourceSha=request.staged_source_commit??sha;
 fs.mkdirSync('infra-evidence',{recursive:true});const evidence={source_commit:sha,operation,started_at:new Date().toISOString(),stages:[],order_commands:0};
@@ -93,7 +93,8 @@ async function verify(){
  // Emit only the existing non-secret diagnostic projection before validation:
  // a failed gate needs the exact observed symbol and watermark, not a guess.
  note('PRE_ACTIVATION_EVIDENCE',{source_commit:sourceSha,release_runner_commit:sha,diagnostic_version:diagnostic.version,diagnostic_members:diagnostic.members,diagnostic_observed_at:diagnostic.observed_at,captures:detail.captures,btc_sensor:{status:detail.marketSensor.status,buckets:detail.marketSensor.buckets,contract:detail.marketSensor.contract,depth_semantics:detail.marketSensor.depth_semantics},provider_calls:detail.providerCalls,phases:diagnostic.results.map(r=>({symbol:r.symbol,phase:r.phase,setup:r.setup,trigger:r.trigger,confirmation:r.confirmation,decision:r.decision,technical:r.technical,capture_end_ms:r.capture_end_ms,reasons:r.reasons,timing:r.timing})),runtime_cycle:after.runtime.last_cycle_completed_at});
- assertActivation(validation);note('PRE_ACTIVATION_GATES_PASSED',{source_commit:sourceSha,release_runner_commit:sha});return validation;
+ if(operation==='verify-resume'){assertResume(validation);note('PRE_RESUME_GATES_PASSED',{source_commit:sourceSha,release_runner_commit:sha,generation:validation.control.generation,entry_paused:validation.settings.pause_new_entries});}
+ else {assertActivation(validation);note('PRE_ACTIVATION_GATES_PASSED',{source_commit:sourceSha,release_runner_commit:sha});}return validation;
 }
 async function repairCapture(){
  const s=await value(stateSQL),ctl=await value("select to_jsonb(c) evidence from deterministic_control c where singleton");evidence.current=s;save();
@@ -133,5 +134,5 @@ async function activate(v){
 try{save();if(operation==='stage')await stage();else if(operation==='repair-capture')await repairCapture();else{const v=await verify();if(operation==='activate')await activate(v);}note('OPERATION_COMPLETED',{operation});}
 catch(e){evidence.error=/^[A-Z0-9_]+$/.test(e.message)?e.message:'RELEASE_FAILED';save();
  // Never restore AI authority or roll a migrated execution proof backward.
- if(operation!=='verify'){try{await query(pauseSQL);if((await value(stateSQL)).installed)await query('update deterministic_control set enabled=false,updated_at=clock_timestamp() where singleton;');note('ENTRY_PAUSED_AFTER_FAILURE');}catch{note('PAUSE_WRITE_UNCONFIRMED');}}
+ if(!['verify','verify-resume'].includes(operation)){try{await query(pauseSQL);if((await value(stateSQL)).installed)await query('update deterministic_control set enabled=false,updated_at=clock_timestamp() where singleton;');note('ENTRY_PAUSED_AFTER_FAILURE');}catch{note('PAUSE_WRITE_UNCONFIRMED');}}
  console.error(JSON.stringify({error:evidence.error,entry_activation_completed:false,order_commands:0}));process.exitCode=1;}
