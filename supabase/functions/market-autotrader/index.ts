@@ -10286,7 +10286,7 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
     // existing reconciler. Never clear settings, suppress unknown exposure, or
     // treat the pending order as permission to open another position.
     const v17PendingEntries = await db(
-      "v11_long_regime_orders?state=eq.DISPATCHED&intent=eq.OPEN_LONG&select=id,symbol,intent,state,position_id,client_order_id,exchange_order_id,requested_quantity,request_payload,created_at",
+      "v11_long_regime_orders?state=in.(PLANNED,DISPATCHED,RECONCILIATION_PENDING,RECONCILIATION_FAILED)&intent=eq.OPEN_LONG&select=id,symbol,intent,state,position_id,client_order_id,exchange_order_id,requested_quantity,request_payload,created_at",
     ) as any[];
     const settlementObservation = await observeV17EntrySettlement({
       exposures: untrackedFutures,

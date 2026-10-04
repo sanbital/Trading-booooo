@@ -8,7 +8,7 @@ on:
       operation:
         type: choice
         required: true
-        options: [audit, deploy-gateway]
+        options: [audit, deploy-gateway, stream-audit]
 permissions:
   contents: read
 concurrency:
@@ -55,14 +55,23 @@ jobs:
           if(!r.ok||h.deployment_commit!==process.env.GITHUB_SHA||h.build!=='2026-10-04-stream-reads-1'||h.order_writer.required!==true||h.scheduler_enabled!==false||!h.futures_rest_budget||h.futures_stream_reads?.enabled!==true)throw Error('PRODUCTION_GATEWAY_MISMATCH');
           JS
       - name: Audit exact orders and current venue evidence without orders
+        if: inputs.operation != 'stream-audit'
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
         run: node ops/deterministic/entry-boundary-audit.mjs
+      - name: Observe production streams and request weight without trading mutations
+        if: inputs.operation == 'stream-audit'
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: node ops/deterministic/stream-read-audit.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: entry-boundary-${{ github.run_id }}
-          path: infra-evidence/entry-boundary
+          path: |
+            infra-evidence/entry-boundary
+            infra-evidence/stream-reads
           retention-days: 30
           if-no-files-found: warn
