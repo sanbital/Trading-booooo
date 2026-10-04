@@ -2,9 +2,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
+import {confirmedManualProtectiveOrder,confirmedLiveProtection} from '../../supabase/functions/_shared/leader-ops-isolation.mjs';
 import {untrackedFuturesExposures} from '../../supabase/functions/market-autotrader/p10-entry-reconciliation.ts';
 const position={market:'GTCUSDT',side:'LONG',quantity:1944.6};
 const lock={exchange:'binance_futures',asset:'GTC',state:'LOCKED',metadata:{v17ManualPosition:true,side:'LONG',maxQuantity:1944.6}};
+const allowance={symbol:'GTCUSDT',side:'LONG',maxQuantity:1944.6};
+const protective={symbol:'GTCUSDT',side:'SELL',positionSide:'BOTH',orderType:'STOP_MARKET',algoStatus:'NEW',algoId:'123',clientAlgoId:'manual-stop',triggerPrice:'0.11',closePosition:true,quantity:'0'};
+test('only bounded protective orders on confirmed manual inventory permit recovery',()=>{
+ const check=o=>confirmedManualProtectiveOrder(o,[allowance],[position]);
+ assert.equal(check(protective),true);assert.equal(check({...protective,closePosition:false,reduceOnly:true,quantity:1944.6}),true);
+ for(const o of [{...protective,side:'BUY'},{...protective,symbol:'AKTUSDT'},
+   {...protective,closePosition:false,reduceOnly:false,quantity:1944.6},
+   {...protective,closePosition:false,reduceOnly:true,quantity:1944.7},
+   {...protective,clientAlgoId:'tb-v11-stop'}, {...protective,algoStatus:'UNKNOWN'}])assert.equal(check(o),false);
+ assert.equal(confirmedManualProtectiveOrder(protective,[],[position]),false);
+ assert.equal(confirmedManualProtectiveOrder(protective,[allowance],[{...position,quantity:2000}]),false);
+ assert.equal(confirmedManualProtectiveOrder(protective,[allowance],[position],[{symbol:'GTCUSDT'}]),false);
+ const now=Date.now(),live={complete:true,orders:[],algos:[protective],observed_at_ms:now};
+ assert.equal(confirmedLiveProtection(live,[],now),false);
+ assert.equal(confirmedLiveProtection(live,[],now,{manual:[allowance],exchangePositions:[position]}),true);
+ assert.equal(confirmedLiveProtection({...live,orders:[{side:'BUY'}]},[],now,{manual:[allowance],exchangePositions:[position]}),false);
+});
 test('confirmed manual holding and partial reduction do not become unexplained bot inventory',()=>{
   assert.deepEqual(untrackedFuturesExposures([position],[],[lock]),[]);
   assert.deepEqual(untrackedFuturesExposures([{...position,quantity:100}],[],[lock]),[]);

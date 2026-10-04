@@ -43,7 +43,17 @@ begin
     (e#>>'{portfolio,positions,0,quantity}')::numeric is distinct from 1944.6 or
     e#>>'{openOrders,complete}' is distinct from 'true' or
     e#>'{openOrders,orders}' is distinct from '[]'::jsonb or
-    e#>'{openOrders,algos}' is distinct from '[]'::jsonb or
+    jsonb_array_length(e#>'{openOrders,algos}') is distinct from 1 or
+    e#>>'{openOrders,algos,0,algoId}' is distinct from '2000001487161701' or
+    e#>>'{openOrders,algos,0,clientAlgoId}' is distinct from 'ios_ScbHXJOJDrMVhbojw7my' or
+    e#>>'{openOrders,algos,0,symbol}' is distinct from 'GTCUSDT' or
+    e#>>'{openOrders,algos,0,side}' is distinct from 'SELL' or
+    e#>>'{openOrders,algos,0,positionSide}' is distinct from 'BOTH' or
+    e#>>'{openOrders,algos,0,orderType}' is distinct from 'TAKE_PROFIT_MARKET' or
+    e#>>'{openOrders,algos,0,algoStatus}' is distinct from 'NEW' or
+    e#>>'{openOrders,algos,0,reduceOnly}' is distinct from 'true' or
+    (e#>>'{openOrders,algos,0,quantity}')::numeric is distinct from 1944.6 or
+    (e#>>'{openOrders,algos,0,triggerPrice}')::numeric is distinct from 0.133 or
     e#>>'{openOrders,observed_at_ms}' is null or
     to_timestamp((e#>>'{openOrders,observed_at_ms}')::double precision/1000)<clock_timestamp()-interval '5 seconds' then
    raise exception 'MANUAL_REVIEW_FRESH_EXACT_HOLDING_REQUIRED';end if;
@@ -66,6 +76,7 @@ begin
  values('binance_futures','GTC','LOCKED','USER_CONFIRMED_MANUAL_POSITION',
    jsonb_build_object('v17ManualPosition',true,'side','LONG','maxQuantity',1944.6,
      'source','USER_CONFIRMED_DIRECT_ORDER_2026_10_04','exchangeOrderId','4634347872',
+     'manualProtectiveAlgoIds',jsonb_build_array('2000001487161701'),
      'operatorReview',a,'botManagementAuthorized',false));
  result:=public.v19_record_incident(owner_id,'ACCOUNTING_DETAILS_PENDING',
    'MANUAL_POSITION_ATTRIBUTED_PENDING_ACCOUNT_VERIFICATION:GTCUSDT','ACCOUNT_ENTRY_HOLD',null,

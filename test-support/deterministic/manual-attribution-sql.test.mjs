@@ -22,7 +22,7 @@ return jsonb_build_object('globalCircuit',true);end$$;
 `);return pg;}
 async function evidence(pg){const {postmaster}= (await pg.query('select pg_postmaster_start_time() postmaster')).rows[0];const now=Date.now();return {
  version:'USER_CONFIRMED_GTC_20261004_1',attestation:'USER_CONFIRMED_DIRECT_ORDER',commit:'a'.repeat(40),postmaster,owner:'11111111-1111-4111-8111-111111111111',
- evidence:{portfolio:{exchange:'binance_futures',account_scope:'futures',positions_complete:true,observation:{id:'fresh',source:'BINANCE_ACCOUNT_REST',requested_at_ms:now,received_at_ms:now},positions:[{market:'GTCUSDT',side:'LONG',quantity:1944.6}]},openOrders:{complete:true,orders:[],algos:[],observed_at_ms:now},order:{exchange_order_id:'4634347872',status:'FILLED',executed_volume:1944.6}}};}
+ evidence:{portfolio:{exchange:'binance_futures',account_scope:'futures',positions_complete:true,observation:{id:'fresh',source:'BINANCE_ACCOUNT_REST',requested_at_ms:now,received_at_ms:now},positions:[{market:'GTCUSDT',side:'LONG',quantity:1944.6}]},openOrders:{complete:true,orders:[],algos:[{algoId:'2000001487161701',clientAlgoId:'ios_ScbHXJOJDrMVhbojw7my',symbol:'GTCUSDT',side:'SELL',positionSide:'BOTH',orderType:'TAKE_PROFIT_MARKET',algoStatus:'NEW',reduceOnly:true,quantity:'1944.6',triggerPrice:'0.133'}],observed_at_ms:now},order:{exchange_order_id:'4634347872',status:'FILLED',executed_volume:1944.6}}};}
 const query=a=>template.replace('__REVIEW_JSON__',"'"+JSON.stringify(a).replaceAll("'","''")+"'");
 test('exact manual attribution registers only a bounded external allowance and retains the circuit',async()=>{
  const pg=await setup();await pg.exec(query(await evidence(pg)));
@@ -31,7 +31,7 @@ test('exact manual attribution registers only a bounded external allowance and r
  assert.equal((await pg.query('select count(*)::int n from v11_long_regime_positions')).rows[0].n,0);await pg.close();
 });
 test('stale evidence, unknown orders, changed quantity, absent confirmation and a new incident roll back attribution',async()=>{
- for(const mutate of [a=>a.evidence.portfolio.observation.requested_at_ms-=10000,a=>a.evidence.openOrders.orders=[{id:'foreign'}],a=>a.evidence.portfolio.positions[0].quantity=1944.7,a=>a.attestation='UNKNOWN',null]){
+ for(const mutate of [a=>a.evidence.portfolio.observation.requested_at_ms-=10000,a=>a.evidence.openOrders.orders=[{id:'foreign'}],a=>a.evidence.openOrders.algos[0].reduceOnly=false,a=>a.evidence.portfolio.positions[0].quantity=1944.7,a=>a.attestation='UNKNOWN',null]){
   const pg=await setup(),a=await evidence(pg);if(mutate)mutate(a);else await pg.exec('update v11_long_regime_runtime set incident_generation=200');
   await assert.rejects(()=>pg.exec(query(a)),/MANUAL_REVIEW/);await pg.exec('rollback');
   assert.equal((await pg.query('select count(*)::int n from trading_asset_locks')).rows[0].n,0);assert.equal((await pg.query('select circuit_open from v11_long_regime_runtime')).rows[0].circuit_open,true);await pg.close();
