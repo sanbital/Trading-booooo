@@ -158,6 +158,20 @@ test('sequenced full book supplies unchanged fresh-book gate with zero per-quote
  for(let i=0;i<20;i++)c.m.quote('BTCUSDT');assert.equal(c.depth(),1);
  c.m.setSymbols(['ETHUSDT']);assert.throws(()=>c.m.quote('BTCUSDT'),/NOT_WATCHED/);
 });
+for(const kind of ['crossed','empty'])test(`a continuously sequenced ${kind} execution book retires only that symbol and requires a real recovery bridge`,async()=>{
+ let now=T,reads=0;const m=createExecutionMarkets({now:()=>now,fetchDepth:async()=>{reads++;return {lastUpdateId:reads<3?10:12,bids:[['99','10']],asks:[['101','10']]};}});
+ m.setSymbols(['BTCUSDT','ETHUSDT']);
+ for(const symbol of m.symbols()){m.event({...event(),s:symbol});await m.recover(symbol);}
+ now+=5100;m.event({...event(11,10),E:now,b:kind==='empty'?[['99','0']]:[['102','10']],a:[]});
+ m.event({...event(11,10),s:'ETHUSDT',E:now});
+ const peer=m.quote('ETHUSDT');assert.throws(()=>m.quote('BTCUSDT'),/BOOK_UNAVAILABLE/);
+ assert.equal(m.status().unsynced.find(x=>x.symbol==='BTCUSDT').reason,'DEPTH_BOOK_INVALID');
+ await m.recover('BTCUSDT');assert.equal(reads,3);assert.throws(()=>m.quote('BTCUSDT'),/BOOK_UNAVAILABLE/);
+ assert.deepEqual(m.quote('ETHUSDT').raw,peer.raw);
+ m.event({...event(12,11),E:now});const fresh=m.quote('BTCUSDT');
+ assert.equal(fresh.best_bid,99);assert.equal(fresh.best_ask,101);assert.equal(fresh.raw.book_update_id,12);
+ assert.equal(fresh.timing.book_captured_at_ms,now);assert.equal(reads,3);
+});
 test('depth sequence gap, old event and socket reset never send stale quotes or create per-candidate REST fallback',async()=>{
  const c=market();c.m.event(event());await c.m.recover('BTCUSDT');c.time(T+1600);assert.throws(()=>c.m.quote('BTCUSDT'),/BOOK_UNAVAILABLE/);assert.equal(c.depth(),1);
  c.time(T);c.m.event(event(12,11));assert.throws(()=>c.m.quote('BTCUSDT'),/BOOK_UNAVAILABLE/);
