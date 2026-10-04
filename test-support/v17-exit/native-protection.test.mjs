@@ -57,12 +57,18 @@ test('legacy rejected submission is retired without treating a generic missing l
  assert.equal(retired.lastQueryError,null);assert.equal(f.calls.filter(x=>x[0]==='query').length,0);
  assert.equal(f.state().protection.health,'POSITION_CLOSED');
 });
-test('definitive replacement rejection keeps the acknowledged older stop protective',async()=>{
+test('exchange already-triggered rejection becomes crossed-stop evidence and preserves the older stop',async()=>{
  const f=fixture(),first=await f.api().ensure('position-1',f.request);
  f.exchange.createStop=async()=>{throw Error('GW_400:Order would immediately trigger.')};
  const result=await f.api().ensure('position-1',{...f.request,stopPrice:98.1});
- assert.equal(result.status,'REJECTED');assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');
+ assert.equal(result.status,'STOP_ALREADY_CROSSED');assert.equal(result.crossingEvidence.kind,'EXCHANGE_STOP_ALREADY_CROSSED');
+ assert.equal(result.crossingEvidence.triggerPrice,98.1);assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');
  assert.equal(f.state().protection.health,'PROTECTED');assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
+});
+test('local price crossing returns explicit crossing evidence before any stop POST',async()=>{
+ const f=fixture(),result=await f.api().ensure('position-1',{...f.request,stopPrice:100,lastPrice:99.9});
+ assert.equal(result.status,'STOP_ALREADY_CROSSED');assert.equal(result.crossingEvidence.kind,'LOCAL_STOP_ALREADY_CROSSED');
+ assert.equal(f.calls.filter(x=>x[0]==='create').length,0);
 });
 test('an unchanged normalized stop never creates or cancels protection because of floating point noise',async()=>{
  const f=fixture(),request={...f.request,stopPrice:97.50000000000001};
