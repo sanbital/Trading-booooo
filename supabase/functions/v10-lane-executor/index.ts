@@ -1018,10 +1018,19 @@ async function installEntryNativeProtection(db,p,gw,manualSymbols=[]){
  if(approved.crossed)return {status:'RESIDENT_EXIT_REQUIRED',position:p};
  const result=await createGatewayProtection(db,gw,()=>verifyExecutionLease(db)).ensure(p.id,{exitClass:approved.exitClass,authorityVersion:EXIT_AUTHORITY_VERSION,
   legacySoftOrderIds:[],protectionReason:approved.reason,stopPrice:approved.level,priceTick:tick,quantityStep:step,exchangeQuantity:N(p.remaining_quantity),positionMode:'ONE_WAY',manualSymbols,lastPrice:q.bid});
- const latest=await db.from('v11_long_regime_positions').select('*').eq('id',p.id).single();if(latest.error)throw Error('PROTECTION_POST_READ');return {...result,position:latest.data};
+ const latest=await db.from('v11_long_regime_positions').select('*').eq('id',p.id).single();if(latest.error)throw Error('PROTECTION_POST_READ');
+ return {...result,status:result.status==='STOP_ALREADY_CROSSED'?'RESIDENT_EXIT_REQUIRED':result.status,position:latest.data};
 }
 async function manageLeader(db,p,ctx={}){
- await verifyExecutionLease(db);const gw=ctx.gateway??opsGateway(db);let q=await leaderQuote(p,{...ctx,gateway:gw});
+ await verifyExecutionLease(db);const gw=ctx.gateway??opsGateway(db),cross=ctx.residentCrossingEvidence;
+ if(cross&&['EXCHANGE_STOP_ALREADY_CROSSED','LOCAL_STOP_ALREADY_CROSSED'].includes(cross.kind)&&Number.isSafeInteger(Number(cross.at))&&Date.now()-Number(cross.at)>=0&&Date.now()-Number(cross.at)<=10000){
+  const proof={authority:ENGINE,positionId:String(p.id),generation:positionGeneration(p),at:Number(cross.at),input:{capture:{trajectory:[]}}};
+  const result=await closePos(db,p,1,'DETERMINISTIC_RESIDENT_STOP',{...ctx,gateway:gw,finalApproval:proof,
+   revalidateExit:async latest=>({allowed:true,proof:{...proof,positionId:String(latest.id),generation:positionGeneration(latest),at:Date.now()}})});
+  detachAudit(db,{symbol:p.symbol,position_id:p.id,kind:'POSITION',state:'PROTECTION_CROSSED',decision:'EXIT',evidence:{reason:cross.kind,crossing:cross},timing:{decision:Date.now(),fill:result?.position?.closed_at??null}});
+  return {action:result.strategyDeferred?'HOLD':'CLOSE',reason:'DETERMINISTIC_RESIDENT_STOP',result,nativeStop:null,crossingEvidence:cross};
+ }
+ let q=await leaderQuote(p,{...ctx,gateway:gw});
  const at=q.detectedAtMs,meta=rec(p.metadata),previous=meta.deterministicPosition??null;
  const hard=hardSafetyState(p,{bid:q.bid,now:at,peak:Math.max(N(p.peak_price),q.bid),policy:POLICY,priceTick:N(meta.entryMarketRules?.priceTick)});
  const resident=Math.max(N(p.hard_stop_price),...(meta.exitProtection?.orders??[]).filter(o=>!o.terminal&&['ACTIVE','NEW'].includes(o.status)).map(o=>N(o.spec?.params?.triggerPrice)));
@@ -1061,6 +1070,8 @@ async function manageLeader(db,p,ctx={}){
  const nativeStop=NATIVE_STOP_ENABLED?await installEntryNativeProtection(db,write.data,gw,ctx.manualSymbols??[]):null;return {write,nativeStop};
  });
  if(previous?.state!==decision.state||decision.action==='PROTECT')detachAudit(db,{symbol:p.symbol,position_id:p.id,kind:'POSITION',state:decision.state,decision:decision.action,evidence:decision,timing:{market_deterioration:decision.market_deterioration_at??null,state_change:state.state_changed_at,decision:decision.at}});
+ if(nativeStop?.status==='RESIDENT_EXIT_REQUIRED'&&nativeStop.crossingEvidence)
+  return manageLeader(db,nativeStop.position??write.data,{...ctx,gateway:gw,residentCrossingEvidence:nativeStop.crossingEvidence});
  return {action:decision.action,reason:decision.reason,position:nativeStop?.position??write.data,nativeStop,state};
 }
 async function entryReadTiming(timing,stage,operation){
@@ -1284,7 +1295,8 @@ async function ensureShortWriterRecovery(db){
   for(const p of pair.match.safe){
     const protectedNow=await installEntryNativeProtection(db,p,gw,pair.manual.map(x=>x.symbol));
     if(protectedNow.status==="RESIDENT_EXIT_REQUIRED")await manageLeader(db,protectedNow.position,
-      {gateway:gw,recoveryOnly:true,evaluateQv3:false,exchangeQuantity:new Map([[p.symbol,Number(p.remaining_quantity)]]),manualSymbols:pair.manual.map(x=>x.symbol)});
+      {gateway:gw,recoveryOnly:true,evaluateQv3:false,residentCrossingEvidence:protectedNow.crossingEvidence,
+       exchangeQuantity:new Map([[p.symbol,Number(p.remaining_quantity)]]),manualSymbols:pair.manual.map(x=>x.symbol)});
   }
   pair=await readOpsPair(db,gw);const live=await gw({action:"v18_open_orders"},5000);
   if(!pair.match.ok||riskOrders(pair.orders).length||!confirmedLiveProtection(live,pair.positions,Date.now(),{manual:pair.manual,exchangePositions:pair.pf.positions}))return false;
