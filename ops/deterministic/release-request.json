@@ -6,7 +6,7 @@
   },
   "gateway_commit": "1bd5e3bf76bfb55f9df749818e325f91b5c6ab02",
   "gateway_commits": {
-    "trading-booooo": "31ab91abf0c30403303942373c73fadff2eb0265",
+    "trading-booooo": "d3f9bffd00153af2fd9a5d9f4cc29f146a2b3f0c",
     "trading-booooo-sanbital-gateway": "1bd5e3bf76bfb55f9df749818e325f91b5c6ab02"
   },
   "runtime_region": "ap-northeast-1",
@@ -17,14 +17,42 @@
   },
   "executor_latency_repair": {
     "baseline_source_commit": "5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4",
-    "baseline_versions": {"v10-lane-executor": 192, "v10-lane-signal-generator": 53},
+    "baseline_versions": {
+      "v10-lane-executor": 192,
+      "v10-lane-signal-generator": 53
+    },
     "source_commit": "017c7f0012cd867a01658eee6192475d6cea64a1",
-    "expected_versions": {"v10-lane-executor": 193, "v10-lane-signal-generator": 53}
+    "expected_versions": {
+      "v10-lane-executor": 193,
+      "v10-lane-signal-generator": 53
+    }
   },
   "migration_sha256": "73ea63d6eac28cd0303d54b304be8cdfdd32e1bd07605e01f503ca401ae0e3c2",
   "capture_repair": {
     "expected_rpc_md5": "f5a85f791423302f4b82bce5cfeeca4c",
     "expected_repaired_rpc_md5": "fd82de658e4df104e49416fc5eee09a7",
     "migration_sha256": "3b974c18615ede73ea328170799f17a3b80eab7a74788f6e2a0125850dd0fab9"
+  },
+  "production_entry_boundary": {
+    "baseline_source_commit": "5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4",
+    "source_commit": "bdd47f4a8eb12b383ee72e4ec85bf957a7c7612b",
+    "expected_versions": {
+      "v10-lane-executor": 194,
+      "v10-lane-signal-generator": 53
+    },
+    "executor_bundle_sha256": "d9d96af7c877458ef571c496863e7c640ed7800428b470b01a1dd25472e495b1",
+    "gateway_source_commit": "d3f9bffd00153af2fd9a5d9f4cc29f146a2b3f0c",
+    "deployed_at_kst": "2026-10-04T08:59:27.876+09:00",
+    "sql_definition_md5": {
+      "deterministic_begin_submit": "50bfd0b4738d9fc70e68f1758ee9f564",
+      "deterministic_entry_authority": "583cbcc8fcc8b66cdeb4543da16df96f",
+      "deterministic_order_key": "a68e3320a4666d8b2b643d9336d1953d",
+      "deterministic_publish_universe": "34dd218613533652ca195a4abea550aa",
+      "deterministic_recover_claims": "5ab833d4157b43239cfc460fe57766e9",
+      "v17_gateway_authorize": "bedac14043825fde8bd940162914878c",
+      "v17_gateway_authorize_evidence": "efe41e62a7ffb13fc588c2cf71864bd9",
+      "v17_release_writer": "5cfaadffd929d07d4ff8dc7c20348f85",
+      "v17_verify_writer": "e02de33501bf03dd5f2ee4118c840a53"
+    }
   }
 }
