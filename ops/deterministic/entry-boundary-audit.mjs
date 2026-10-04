@@ -39,6 +39,7 @@ const readinessResponse=await fetch(`https://${project}.supabase.co/functions/v1
  headers:{'content-type':'application/json','x-v10-executor-token':token,'x-region':'ap-northeast-1'},
  body:JSON.stringify({mode:'ops-readiness'}),signal:AbortSignal.timeout(25000)});
 const readiness={http_status:readinessResponse.status,...await readinessResponse.json()};
+console.log(JSON.stringify({readiness_http_status:readiness.http_status,readiness_ok:readiness.ok,readiness_error:readiness.error??null}));
 const report={observed_at:new Date().toISOString(),commit:process.env.GITHUB_SHA,snap,signals,orders,venue,portfolio,openOrders,readiness,watchReads,watchQuotes,gtcOrder};
 fs.writeFileSync(`${out}/audit.json`,JSON.stringify(report,null,2));
 console.log(JSON.stringify({observed_at:report.observed_at,orders:orders.length,signals:signals.length,venue:venue.map(x=>({symbol:x.market,http_status:x.proof.http_status,proven:x.proof.result?.proven})),portfolio_ok:portfolio.ok,open_orders_ok:openOrders.ok,

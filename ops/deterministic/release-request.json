@@ -159,5 +159,31 @@
     "observed_executor_version": 201,
     "strategy_contract_unchanged": true,
     "sql_definitions_unchanged": true
+  },
+  "production_manual_position_coexistence_repair": {
+    "source_commit": "a5e1e5d536cda3ce8a95147cd5727857b4283422",
+    "expected_versions": {
+      "v10-lane-executor": 202,
+      "market-autotrader": 457,
+      "v10-lane-signal-generator": 53
+    },
+    "gateway_source_commit": "79165cd39f9c8a4dbfeef7bd24e6db27b859c441",
+    "attribution_workflow_run": 37193507713,
+    "read_only_audit_workflow_run": 37193716439,
+    "user_confirmed_manual_symbol": "GTCUSDT",
+    "manual_quantity_limit": 1944.6,
+    "manual_exchange_order_id": "4634347872",
+    "preserved_manual_take_profit_algo_id": "2000001487161701",
+    "bot_management_authorized_for_manual_position": false,
+    "reviewed_incident_generation": 199,
+    "replacement_incident_id": "482bcc1e-a05d-45a6-a3dc-85335a90c5a5",
+    "replacement_incident_generation": 200,
+    "independent_recovery_checks": 3,
+    "resolved_at_utc": "2026-10-04T09:54:34.180335Z",
+    "deterministic_tests_passed": 78,
+    "strategy_contract_unchanged": true,
+    "sql_definitions_unchanged": true,
+    "target_margin_usdt": 150,
+    "minimum_funded_slot_usdt": 152.121375
   }
 }
