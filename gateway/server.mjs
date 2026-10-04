@@ -1,4 +1,5 @@
 import { createInFlightRead } from "./venue-read-flight.mjs";
+import { createBinanceRestBudget } from "./binance-rest-budget.mjs";
 import { createSchedulerOrchestrator } from "./scheduler-orchestrator.mjs";
 import { createScheduledJobRunner, createSchedulerRepository } from "./scheduler-repository.mjs";
 import { readFuturesModeEvidence } from "./futures-mode-evidence.mjs";
@@ -43,7 +44,7 @@ const VERSION = "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT";
  *
  * Bump this on every gateway release.
  */
-const GATEWAY_BUILD = "2026-10-04-submission-boundary-2";
+const GATEWAY_BUILD = "2026-10-04-rest-budget-1";
 // Keep exactly one audited previous protocol revision during the rolling cutover. Both the
 // old engine/new gateway and new engine/old gateway therefore remain order-compatible;
 // arbitrary or older revisions stay rejected.
@@ -117,6 +118,7 @@ let lastBinanceTimeSyncAt = 0;
 // lifetime. Binance rejects nothing when leverage is re-sent, but the call is signed and
 // rate limited, so it is sent once per symbol and whenever the requested value changes.
 const futuresLeverageApplied = new Map();
+const futuresRestBudget = createBinanceRestBudget({blockedUntil: Number(env("BINANCE_FUTURES_REST_BLOCK_UNTIL_MS"))});
 let futuresDualPositionSide = null;
 
 function env(name, fallback = "") {
@@ -436,6 +438,7 @@ async function syncBinanceTime(force = false) {
 }
 async function publicBinance(path, query = {}, timeoutMs = 10_000, venue = "binance") {
   guardRate(venue, "rest");
+  const permit = venue === "binance_futures" ? futuresRestBudget.admit(path, query) : null;
   const encoded = binanceQueryString(query);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -444,8 +447,13 @@ async function publicBinance(path, query = {}, timeoutMs = 10_000, venue = "bina
       signal: controller.signal,
       headers: { Accept: "application/json" },
     });
+    if (permit) futuresRestBudget.observe(response, permit);
     return (await parseResponse(response, "Binance public")).data;
+  } catch (error) {
+    if (permit) futuresRestBudget.banFromBody(error);
+    throw error;
   } finally {
+    if (permit) futuresRestBudget.finish(permit);
     clearTimeout(timer);
   }
 }
@@ -465,7 +473,8 @@ async function binanceRequest(
     });
   }
   guardRate(venue, "rest");
-  await syncBinanceTime(false);
+  const permit = venue === "binance_futures" ? futuresRestBudget.admit(path, parameters, method) : null;
+  try { await syncBinanceTime(false); } catch (error) { if (permit) futuresRestBudget.finish(permit); throw error; }
   const signed = {
     ...parameters,
     recvWindow: Math.min(5_000, Math.max(1_000, Number(parameters.recvWindow) || 5_000)),
@@ -488,10 +497,12 @@ async function binanceRequest(
         headers: { Accept: "application/json", "X-MBX-APIKEY": BINANCE_API_KEY },
       },
     );
+    if (permit) futuresRestBudget.observe(response, permit);
     try {
       const parsed = await parseResponse(response, "Binance");
       return { data: parsed.data, headers: parsed.headers };
     } catch (error) {
+      if (permit) futuresRestBudget.banFromBody(error);
       if (retryTimestamp && Number(error?.code) === -1021) {
         await syncBinanceTime(true);
         return binanceRequest(method, path, parameters, {
@@ -503,6 +514,7 @@ async function binanceRequest(
       throw error;
     }
   } finally {
+    if (permit) futuresRestBudget.finish(permit);
     clearTimeout(timer);
   }
 }
@@ -2765,6 +2777,7 @@ export function createServer() {
             required: ORDER_WRITER_REQUIRED,
             active_accounts: orderWriterFence.activeAccounts(),
           },
+          futures_rest_budget: futuresRestBudget.snapshot(),
           scheduler_enabled: SCHEDULER_ENABLED,
           external_scheduler: {
             enabled: EXTERNAL_SCHEDULER_ENABLED,

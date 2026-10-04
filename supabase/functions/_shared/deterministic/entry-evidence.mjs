@@ -1,4 +1,6 @@
 export function cancellationCategory(reason,latest=null){
+ if(/WRITER|LEASE|FENCE/.test(reason??''))return 'AUTHORITY_OR_STATE';
+ if(/GW_(418|429|5\d\d|408)|BINANCE_(IP_BANNED|RATE_LIMITED|WEIGHT_BUDGET)|LOCAL_RATE_GUARD|UNIVERSE_HTTP_(418|429|5\d\d)|TIMEOUT|timed out|fetch failed/.test(reason??''))return 'DATA_UNAVAILABLE';
  if(latest?.gates?.data===false||latest?.gates?.technical===false||/DATA|STALE|INCOMPLETE|CAPTURE|CONTEXT_UNAVAILABLE|UNIVERSE_REFRESH|TOP20_REFRESH|TOP20_SNAPSHOT/.test(reason??''))return 'DATA_UNAVAILABLE';
  if(latest?.gates?.execution===false||/BOOK|LIQUIDITY|COST|SPREAD/.test(reason??''))return 'EXECUTION_COST';
  if(/MARGIN|CAPACITY|ACCOUNT_FEE|POSITION_MODE|ACCOUNT_ENTRY_HOLD/.test(reason??''))return 'ACCOUNT_CONSTRAINT';

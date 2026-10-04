@@ -2,7 +2,12 @@ import test from 'node:test';import assert from 'node:assert/strict';import fs f
 import {PGlite} from '@electric-sql/pglite';
 import {scenario} from './fixtures.mjs';
 import {classifyMarket,revalidateEntry} from '../../supabase/functions/_shared/deterministic/market-state.mjs';
-import {entryEvidence} from '../../supabase/functions/_shared/deterministic/entry-evidence.mjs';
+import {entryEvidence,cancellationCategory} from '../../supabase/functions/_shared/deterministic/entry-evidence.mjs';
+test('exchange dependency failures remain distinct from healthy market cancellations',()=>{
+ for(const reason of ['GW_429:Too many requests','GW_418:IP banned','GW_503:exchange unavailable','GW_504:timed out'])assert.equal(cancellationCategory(reason,{decision:'WAIT',gates:{data:true}}),'DATA_UNAVAILABLE');
+ assert.equal(cancellationCategory('GW_503:WRITER_FENCED'),'AUTHORITY_OR_STATE');
+ assert.equal(cancellationCategory('CURRENT_MARKET_THESIS_CANCELLED',{decision:'WAIT',gates:{data:true}}),'MARKET_CANCEL');
+});
 const sql=fs.readFileSync(new URL('../../supabase/migrations/20261003232458_deterministic_submission_boundary.sql',import.meta.url),'utf8');
 const owner='11111111-1111-4111-8111-111111111111';
 async function fixture(){

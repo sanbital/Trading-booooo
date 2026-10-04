@@ -1142,7 +1142,7 @@ async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComp
  const claim=await withAccountMutation(db,()=>db.from('v11_long_regime_signals').update({status:'CLAIMED',features:{...row.features,executionClaim:claimContext},updated_at:new Date().toISOString()}).eq('id',row.id).eq('status','NEW').select('*').maybeSingle());if(claim.error)throw Error('SIGNAL_CLAIM_FAILED');if(!claim.data)return null;
   const attempt={dispatched:false};let result;
   try{result=await openBull(db,claim.data,pair.positions,manual,attempt,pair.managementFailures??[]);}
-  catch(e){if(classifyFailure(e).fatal||attempt.dispatched)throw e;result={entered:false,reason:String(e.message??e),releaseScope:RELEASE_SCOPE.SYMBOL};attempt.evidence??=entryEvidence(row,{authority:e.authority,reason:result.reason});}
+  catch(e){if(classifyFailure(e).fatal||attempt.dispatched)throw e;const reason=String(e.message??e),rateLimited=/GW_(418|429)|BINANCE_(IP_BANNED|RATE_LIMITED|WEIGHT_BUDGET)|LOCAL_RATE_GUARD/.test(reason);result={entered:false,reason,releaseScope:rateLimited?RELEASE_SCOPE.ACCOUNT:RELEASE_SCOPE.SYMBOL};attempt.evidence??=entryEvidence(row,{authority:e.authority,reason:result.reason});}
   if(!result.entered){
    const reason=result.reason??'ENTRY_CANCELLED';const evidence={...attempt.evidence,reason,category:cancellationCategory(reason,attempt.evidence?.latest),cancelled_at_ms:Date.now()};
    const retire=await withAccountMutation(db,()=>db.from('v11_long_regime_signals').update({status:'REJECTED',reject_reason:reason.slice(0,500),features:{...row.features,entryExecution:evidence},updated_at:new Date().toISOString()}).eq('id',row.id).eq('status','CLAIMED'));if(retire.error)throw Error('NO_ORDER_TERMINAL_WRITE');
