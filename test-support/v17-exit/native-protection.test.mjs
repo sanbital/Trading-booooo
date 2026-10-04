@@ -64,6 +64,22 @@ test('definitive replacement rejection keeps the acknowledged older stop protect
  assert.equal(result.status,'REJECTED');assert.equal(f.orders.get(first.clientId).algoStatus,'NEW');
  assert.equal(f.state().protection.health,'PROTECTED');assert.equal(f.calls.filter(x=>x[0]==='cancel').length,0);
 });
+test('an unchanged normalized stop never creates or cancels protection because of floating point noise',async()=>{
+ const f=fixture(),request={...f.request,stopPrice:97.50000000000001};
+ const first=await f.api().ensure('position-1',request);
+ assert.equal(f.state().protection.orders[0].spec.params.triggerPrice,97.5);
+ f.calls.length=0;
+ for(let i=0;i<3;i++){
+  const again=await f.api().ensure('position-1',request);
+  assert.equal(again.status,'PROTECTED');assert.equal(again.clientId,first.clientId);
+ }
+ assert.equal(f.state().protection.generation,1);
+ assert.equal(f.calls.filter(x=>['create','cancel'].includes(x[0])).length,0);
+ const raised=await f.api().ensure('position-1',{...request,stopPrice:97.6});
+ assert.equal(raised.status,'PROTECTED');assert.notEqual(raised.clientId,first.clientId);
+ assert.equal(f.state().protection.orders.at(-1).spec.params.triggerPrice,97.6);
+});
+
 test('replacement is acknowledged before old stop cancellation',async()=>{
  const f=fixture(),first=await f.api().ensure('position-1',f.request);
  const second=await f.api().ensure('position-1',{...f.request,stopPrice:98.1});
