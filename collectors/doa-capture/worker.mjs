@@ -63,7 +63,7 @@ function connect(symbol,candles){
   const now=Date.now();
   // Only the first timer anchor uses the grid. Actual connection/sync times still
   // invalidate its partial interval; every later interval uses its real end.
-  const s={symbol,candles,book:new Book(),flow:new Flow(),ring:[],socket:null,marketSocket:null,started:now,lastBucket:initialBucketBoundary(now),marketResetAt:now,marketSequenceVerified:true,bookGeneration:0,lastTradeAt:0,lastCandle:null,needBackfill:candles,bookReconnectAt:0,marketReconnectAt:0};
+  const s={symbol,candles,book:new Book(),flow:new Flow(),ring:[],socket:null,marketSocket:null,started:now,lastBucket:initialBucketBoundary(now),marketResetAt:now,marketSequenceVerified:true,bookGeneration:0,lastTradeAt:0,lastCandle:null,needBackfill:candles,bookReconnectAt:0,marketReconnectAt:0,derivatives:{fundingRate:null,markPrice:null,indexPrice:null,basisBps:null,markEventAt:0,markReceivedAt:0,nextFundingTime:null,openInterest:null,openInterestAt:0,openInterestReceivedAt:0,lastOiPollAt:0}};
   states.set(symbol,s);openSocket(s);return s;
 }
 function resyncTelemetry(s,success,failureReason=null,completedAt=Date.now(),bufferedCount=s.book.buffer.length){
@@ -143,6 +143,12 @@ function openSocket(s){
     if(!e || (e.st!==undefined && +e.st!==1) || e.s && e.s!==s.symbol)return;
     eventIds={aggregate_id:e.a,previous_aggregate_id:s.flow.last,event_ms:e.E,trade_ms:e.T,received_ms:now};
     if(!transportFresh(e,now))throw Error('TRANSPORT_EVENT_STALE_OR_FUTURE');
+    if(e.e==='markPriceUpdate'){
+      const mark=Number(e.p),index=Number(e.i),funding=Number(e.r),eventAt=Number(e.E),nextFunding=Number(e.T);
+      if(Number.isFinite(mark)&&mark>0&&Number.isFinite(index)&&index>0&&Number.isFinite(funding)&&Number.isSafeInteger(eventAt)){
+        s.derivatives={...s.derivatives,markPrice:mark,indexPrice:index,basisBps:(mark/index-1)*10000,fundingRate:funding,markEventAt:eventAt,markReceivedAt:now,nextFundingTime:Number.isSafeInteger(nextFunding)?nextFunding:null};
+      }
+    }
     if(e.e==='aggTrade'){
       const previous=s.flow.last;
       s.flow.event(e,now);
@@ -200,6 +206,22 @@ async function recover(){
     }
     if(s.book.state===BOOK_STATE.UNSYNCED)void resyncSymbol(s);
   }
+  // Open interest has no USD-M market websocket stream. Poll at low frequency and
+  // keep it observational: failure never invalidates the core order-book/flow capture.
+  for(const s of ordered){
+    if(s.symbol==='BTCUSDT'&&!s.roles?.includes('OPEN_POSITION'))continue;
+    if(s.book.state!==BOOK_STATE.SYNCED||now-(s.derivatives?.lastOiPollAt??0)<30000)continue;
+    try{
+      const oi=await publicGet('/fapi/v1/openInterest?symbol='+s.symbol,1);
+      if(!oi)break;
+      const value=Number(oi.openInterest),exchangeAt=Number(oi.time),receivedAt=Date.now();
+      if(Number.isFinite(value)&&value>=0){
+        s.derivatives.openInterest=value;s.derivatives.openInterestAt=Number.isSafeInteger(exchangeAt)?exchangeAt:receivedAt;
+        s.derivatives.openInterestReceivedAt=receivedAt;s.derivatives.lastOiPollAt=receivedAt;
+      }
+    }catch(e){restFailures++;log('OPEN_INTEREST_RECOVERY_ERROR',{symbol:s.symbol,reason:e.message});}
+    break;
+  }
   if(busyBackfill)return;busyBackfill=true;
   try{
     for(const s of ordered)if(s.needBackfill&&captureDisposition(s.roles,clockWindow,Date.now()).persist){
@@ -217,7 +239,11 @@ function bucket(now){
     const invalid=invalidateUnusableBook(s.book,m,now);
     if(invalid){log('BOOK_INTEGRITY_RESYNC',{symbol:s.symbol,reason:m.reason});noteBookOutcome(s,invalid);void resyncSymbol(s);}
     const full=completeCaptureInterval(s,now,s.marketSocket?.readyState===WebSocket.OPEN);
-    const row={kind:'micro',symbol:s.symbol,at:iso(Math.floor(now/5000)*5000),payload:{...m,...flow,available_at:iso(now),interval_start:iso(s.lastBucket),interval_end:iso(now),interval_ms:now-s.lastBucket,
+    const d=s.derivatives??{},markFresh=Number.isSafeInteger(d.markReceivedAt)&&now-d.markReceivedAt<=5000,oiFresh=Number.isSafeInteger(d.openInterestReceivedAt)&&now-d.openInterestReceivedAt<=45000;
+    const derivativePayload={funding_rate:markFresh&&Number.isFinite(d.fundingRate)?d.fundingRate:null,mark_price:markFresh&&Number.isFinite(d.markPrice)?d.markPrice:null,index_price:markFresh&&Number.isFinite(d.indexPrice)?d.indexPrice:null,
+      basis_bps:markFresh&&Number.isFinite(d.basisBps)?d.basisBps:null,mark_event_at:markFresh?iso(d.markEventAt):null,mark_received_at:markFresh?iso(d.markReceivedAt):null,next_funding_at:markFresh&&Number.isSafeInteger(d.nextFundingTime)?iso(d.nextFundingTime):null,
+      open_interest:oiFresh&&Number.isFinite(d.openInterest)?d.openInterest:null,open_interest_at:oiFresh?iso(d.openInterestAt):null,open_interest_received_at:oiFresh?iso(d.openInterestReceivedAt):null};
+    const row={kind:'micro',symbol:s.symbol,at:iso(Math.floor(now/5000)*5000),payload:{...m,...flow,...derivativePayload,available_at:iso(now),interval_start:iso(s.lastBucket),interval_end:iso(now),interval_ms:now-s.lastBucket,
       bucket_complete:full && m.book_complete && flow.trade_sequence_complete && flow.flow_causal,
       ...btcCandleFields(btc,now),watch_roles:s.roles??[],sector_return_1m:null,sector_map_version:null,maker_fee_bps:null,taker_fee_bps:null,funding_cashflow:null,
       source:'BINANCE_USDM_DIFF_AGGTRADE',version:VERSION}};
@@ -233,7 +259,7 @@ async function flush(){
   if(!pending){
     const selected=[];let size=0;
     for(const [k,row] of [...queue].sort((a,b)=>Number(!states.get(a[1].symbol)?.roles?.includes('OPEN_POSITION'))-Number(!states.get(b[1].symbol)?.roles?.includes('OPEN_POSITION')))){const bytes=Buffer.byteLength(JSON.stringify(row));if(selected.length>=300||size+bytes>350000)break;selected.push([k,row]);size+=bytes;}
-    pending={batch_id:randomUUID(),rows:selected.map(x=>x[1]),metrics:{version:VERSION,source_commit:process.env.SOURCE_COMMIT??null,watched:states.size,synced:[...states.values()].filter(s=>s.book.state===BOOK_STATE.SYNCED).length,trade_streams_seen:[...states.values()].filter(s=>s.lastTradeAt>0).length,candle_streams_seen:[...states.values()].filter(s=>s.lastCandle!==null).length,queue:queue.size,buffer_dropped_rows:bufferDrops,queue_cap:PERSIST_QUEUE_CAP,ws_gaps:wsGaps,coverage_refreshes:coverageRefreshes,rest_failures:restFailures,resync_successes:resyncSuccesses,resync_failures:resyncFailures,rss_bytes:process.memoryUsage().rss,last_bucket_at:iso(Date.now()),order_calls:0,llm_calls:0}};
+    pending={batch_id:randomUUID(),rows:selected.map(x=>x[1]),metrics:{version:VERSION,source_commit:process.env.SOURCE_COMMIT??null,watched:states.size,synced:[...states.values()].filter(s=>s.book.state===BOOK_STATE.SYNCED).length,trade_streams_seen:[...states.values()].filter(s=>s.lastTradeAt>0).length,candle_streams_seen:[...states.values()].filter(s=>s.lastCandle!==null).length,mark_streams_seen:[...states.values()].filter(s=>s.derivatives?.markReceivedAt>0).length,open_interest_seen:[...states.values()].filter(s=>s.derivatives?.openInterestReceivedAt>0).length,queue:queue.size,buffer_dropped_rows:bufferDrops,queue_cap:PERSIST_QUEUE_CAP,ws_gaps:wsGaps,coverage_refreshes:coverageRefreshes,rest_failures:restFailures,resync_successes:resyncSuccesses,resync_failures:resyncFailures,rss_bytes:process.memoryUsage().rss,last_bucket_at:iso(Date.now()),order_calls:0,llm_calls:0}};
     pending.metrics.live_contexts=Object.fromEntries([...states].map(([symbol,s])=>[symbol,summarizeCapture(s.ring,Date.now())]));
     pending.metrics.watch_roles=Object.fromEntries([...states].map(([symbol,s])=>[symbol,s.roles??[]]));
     pending.metrics.unavailable_symbols=unavailableSymbols;
