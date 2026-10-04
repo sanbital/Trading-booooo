@@ -20,5 +20,6 @@ export function entryEvidence(signal,{check=null,quote=null,authority=null,timin
   data_quality:check?.input?.facts?.quality??null,capture_status:check?.input?.capture?.status??null,capture_reason:check?.input?.capture?.reason??null,
   book_validation:check?.input?.execution_book??null,
   quote:quote?{requested_at_ms:quote.timing?.requested_at_ms??null,received_at_ms:quote.timing?.received_at_ms??null,exchange_at_ms:quote.timing?.book_captured_at_ms??quote.timing?.exchange_at_ms??quote.exchange_at_ms??null,validated_at_ms:latest?.at??Date.now(),source:quote.timing?.source??null,book_update_id:quote.raw?.book_update_id??null,book_generation:quote.raw?.book_generation??null,best_bid:quote.best_bid,best_ask:quote.best_ask}:null,
+  execution_authority:check?.authority??null,execution_state:decision(check?.execution_state),
   universe:authority??null,writer,phase,timing:{...timing},reason,category:reason?cancellationCategory(reason,latest):null};
 }

@@ -144,13 +144,44 @@ export function evaluateEntryRescue(initial,input,latest,drift){
  if(score<p.strongMinScore)return {allowed:false,reason:'RESCUE_STRENGTH_INSUFFICIENT',age_ms:age,strength_score:score,strengths};
  return {allowed:true,reason:'STRONG_CONTINUATION_RESCUE',age_ms:age,strength_score:score,strengths};
 }
+export const ENTRY_SIGNAL_POLICY=Object.freeze({version:'INITIAL_BUY_CONTINUATION_1',maxAgeMs:30000});
+const ENTRY_TRIGGERS=new Set(['BREAKOUT','PULLBACK_RECOVERY','LOCAL_HIGH_RECLAIM','MOMENTUM_REACCELERATION']);
+export function entrySignalWindow(initial,at){
+ const age=at-initial?.at;
+ const reason=!Number.isSafeInteger(initial?.at)||!Number.isSafeInteger(at)||age<0?'INITIAL_BUY_TIME_INVALID':
+  age>=ENTRY_SIGNAL_POLICY.maxAgeMs?'ENTRY_SIGNAL_EXPIRED':null;
+ return {allowed:reason===null,reason,age_ms:age,valid_until_ms:initial?.at+ENTRY_SIGNAL_POLICY.maxAgeMs};
+}
 export function revalidateEntry(initial,input){
- const latest=classifyMarket(input),price=input.price??input.capture?.trajectory?.at(-1)?.mid,drift=price/initial.reference_price-1;
- const failure=latest.decision!=='BUY'?(input.capture?.reason==='CURRENT_EXECUTABLE_DEPTH_INSUFFICIENT'?'CURRENT_EXECUTION_COST_INVALID':latest.gates.data===false||latest.gates.technical===false?'CURRENT_DATA_INCOMPLETE_OR_STALE':latest.gates.execution===false?'CURRENT_EXECUTION_COST_INVALID':latest.phase==='FAILED_BREAKOUT'?'CURRENT_BREAKOUT_FAILED':'CURRENT_MARKET_THESIS_CANCELLED'):!finite(drift)?'PRICE_UNKNOWN':
-  drift>Math.min(input.profile.bands.entry_drift.block,initial.atr_normalized)?'LATE_EXECUTION':
-  price<initial.trigger_reference&&initial.trigger==='BREAKOUT'?'FAILED_BREAKOUT':
-  latest.capture_end_ms<initial.capture_end_ms?'CAPTURE_REGRESSED':null;
- return {allowed:failure===null,action:failure?'CANCEL_ENTRY':'EXECUTE',reason:failure,decision_age_ms:input.at-initial.at,drift,latest};
+ const latest=classifyMarket(input),price=input.price??input.capture?.trajectory?.at(-1)?.mid,drift=price/initial?.reference_price-1,
+  window=entrySignalWindow(initial,input.at),limit=Math.min(input.profile?.bands?.entry_drift?.block,initial?.atr_normalized);
+ const initialApproved=initial?.version===ENGINE&&initial.decision==='BUY'&&initial.setup==='PASS'&&initial.confirmation==='PASS'&&
+  ENTRY_TRIGGERS.has(initial.trigger)&&finite(initial.reference_price)&&initial.reference_price>0&&finite(initial.trigger_reference)&&
+  Number.isSafeInteger(initial.capture_end_ms)&&initial.capture_end_ms<=initial.at&&initial.at-initial.capture_end_ms<10000;
+ // Preserve the original short-lived trigger, not an old quote or a failed thesis.
+ // The raw current market decision remains visible, separate from execution authority.
+ const hardInvalidation=['REVERSAL_RISK','DISTRIBUTION','EXHAUSTION','FAILED_BREAKOUT'].includes(latest.phase)||
+  latest.families.FLOW.collapsing||latest.families.LIQUIDITY.weak||input.facts?.values?.sell_volume_expansion===true||
+  input.facts?.values?.volume_climax_decline===true;
+ const gateFailure=input.capture?.reason==='CURRENT_EXECUTABLE_DEPTH_INSUFFICIENT'?'CURRENT_EXECUTION_COST_INVALID':
+  !latest.gates.data||!latest.gates.technical?'CURRENT_DATA_INCOMPLETE_OR_STALE':
+  !latest.gates.execution?'CURRENT_EXECUTION_COST_INVALID':'CURRENT_MARKET_THESIS_CANCELLED';
+ const failure=!initialApproved?'INITIAL_BUY_REQUIRED':!window.allowed?window.reason:
+  !Object.values(latest.gates).every(Boolean)?gateFailure:
+  !finite(price)||price<=0||!finite(drift)||!finite(limit)||limit<=0?'PRICE_UNKNOWN':
+  latest.capture_end_ms<initial.capture_end_ms?'CAPTURE_REGRESSED':
+  drift>limit?'LATE_EXECUTION':
+  price<initial.trigger_reference&&['BREAKOUT','LOCAL_HIGH_RECLAIM'].includes(initial.trigger)?'FAILED_BREAKOUT':
+  price<initial.trigger_reference&&initial.trigger==='PULLBACK_RECOVERY'?'PULLBACK_LOW_BROKEN':
+  drift< -limit?'ENTRY_PRICE_DETERIORATED':
+  hardInvalidation?'CURRENT_MARKET_THESIS_CANCELLED':
+  latest.decision!=='BUY'&&(latest.decision!=='WAIT'||latest.structural_strength!=='STRONG')?'CURRENT_MARKET_THESIS_CANCELLED':null;
+ const retained=failure===null&&latest.decision!=='BUY',authority={version:ENTRY_SIGNAL_POLICY.version,allowed:failure===null,
+  mode:failure?'CANCELLED':retained?'RETAINED_INITIAL_BUY':'CURRENT_BUY',reason:failure??(retained?'INITIAL_BUY_STILL_VALID':'CURRENT_BUY_VALID'),
+  initial_at_ms:initial?.at??null,valid_until_ms:window.valid_until_ms,age_ms:window.age_ms,market_decision:latest.decision};
+ const execution_state=failure?null:{...latest,decision:'BUY',trigger:retained?initial.trigger:latest.trigger,
+  confirmation:'PASS',entry_authority:authority};
+ return {allowed:failure===null,action:failure?'CANCEL_ENTRY':'EXECUTE',reason:failure,decision_age_ms:window.age_ms,drift,latest,authority,execution_state};
 }
 export function decidePosition({position,facts,capture,profile,at,bid,previous=null}){
  const entry=Number(position.entry_price),recordedPeak=Number(position.peak_price),peak=Math.max(Number.isFinite(recordedPeak)?recordedPeak:entry,bid,entry),mfe=peak/entry-1,pnl=bid/entry-1,drawdown=bid/peak-1;

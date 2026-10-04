@@ -7,7 +7,7 @@ export function scenario({prices=null,pressure=null,bidDepth=null,askDepth=null,
   const mid=prices?.[i]??100+.01*(i+1),prior=i?rows[i-1]:null,share=pressure?.[i]??.51+i*.01,
    total=1000+i*100,buy=total*share,sell=total-buy,bd=bidDepth?.[i]??20000+i*500,ad=askDepth?.[i]??18000-i*150,
    finish=end-(23-i)*5000,start=finish-5000;
-  rows.push({bucket_ms:finish,start_ms:start,end_ms:finish,received_at_ms:finish+100,exchange_event_ms:finish-100,
+  rows.push({bucket_ms:finish,start_ms:start,end_ms:finish,received_at_ms:finish+Math.min(100,at-finish),exchange_event_ms:finish-100,
    book_received_at_ms:finish-50,flow_event_ms:finish-200,flow_received_at_ms:finish-150,mid,start_mid:prior?.mid??100,
    aggressive_buy:buy,aggressive_sell:sell,net_taker_quote_5s:buy-sell,buy_share_5s:share,trade_count:50+i,arrival_rate:(50+i)/5,
    aggressive_notional:total,bid_depth_25_usdt:bd,ask_depth_25_usdt:ad,imbalance:(bd-ad)/(bd+ad),spread_bps:1.5,

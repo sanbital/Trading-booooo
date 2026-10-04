@@ -6,7 +6,7 @@ import {authenticateInternalToken} from '../_shared/internal-token-auth.mjs';
 import {createAnalysisReadCoalescer} from './analysis-read-coalescer.mjs';
 import {createHostAccountScopes} from './account-host-scopes.mjs';
 import {currentExecutionContext,currentAccountOwner,contextualOwners,contextualState,executionContextHeaders,assertActiveExecutionRequest} from './account-scope-context.mjs';
-import {ENGINE,decidePosition} from '../_shared/deterministic/market-state.mjs';
+import {ENGINE,decidePosition,entrySignalWindow} from '../_shared/deterministic/market-state.mjs';
 import {PROFILE} from '../_shared/deterministic/calibration.mjs';
 import {control,currentMarket,requireEntryAuthority,isLeader20,detachAudit,validateOrder,validatePreparedOrder} from '../_shared/deterministic/runtime.mjs';
 import {entryEvidence,cancellationCategory} from '../_shared/deterministic/entry-evidence.mjs';
@@ -1066,6 +1066,8 @@ async function entryReadTiming(timing,stage,operation){
  timing[stage+'_started']=Date.now();try{return await operation();}catch(error){throw Object.assign(error,{entryStage:stage});}finally{timing[stage+'_completed']=Date.now();}
 }
 async function openBull(db,s,openPositions,manual=null,attempt={},managementFailures=[]){
+ const signalWindow=entrySignalWindow(s.features?.deterministic?.decision,Date.now());
+ if(!signalWindow.allowed)return {entered:false,reason:signalWindow.reason};
  const executorStarted=s.features?.executionClaim?.claimed_at_ms??Date.now();
  const universeAuthority=await requireEntryAuthority(db,s,{refresh:true});await requireLeaderEntryControls(db);
  attempt.evidence=entryEvidence(s,{authority:universeAuthority,timing:{candidate_started:Date.now()}});
@@ -1117,7 +1119,7 @@ async function openBull(db,s,openPositions,manual=null,attempt={},managementFail
      if(limitPrice<Number(quote.best_ask))return {allowed:false,reason:'LATEST_PRICE_MOVED_ABOVE_LIMIT'};
      if(limitPrice>Number(quote.best_ask)*(1+IOC_MAX_BPS/10000))return {allowed:false,reason:'LATEST_PRICE_CHASE_INVALID'};
      if(quantity*limitPrice/LEV+(position?N(position.original_quantity)*N(position.entry_price)/LEV:0)>MAX_ORDER_MARGIN_USDT+1e-9)return {allowed:false,reason:'ACCOUNT_MARGIN_LIMIT'};
-     timing.pre_order_validation=Date.now();return {allowed:true,deterministic:check.latest,accountEvidence:fresh.pf.observation};
+     timing.pre_order_validation=Date.now();return {allowed:true,deterministic:check.execution_state??check.latest,accountEvidence:fresh.pf.observation};
     }}),{correlationId:String(s.id)});
    if(sent.blocked){if(!position)return {entered:false,reason:sent.reason};break;}
    firstIntent??=sent.oi.id;lastAttempt=sent;

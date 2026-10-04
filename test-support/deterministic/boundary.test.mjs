@@ -27,7 +27,7 @@ async function fixture(){
  const command={exchange:'binance_futures',action:'create_order',leverage:3,order:{market:'TESTUSDT',side:'BUY',type:'LIMIT',price:100,quantity:4.5,identifier:'same-order',position_effect:'OPEN',position_side:'LONG',time_in_force:'IOC'}};
  const order=(await pg.query("insert into v11_long_regime_orders(symbol,state,signal_id,intent,client_order_id,requested_quantity,request_payload) values('TESTUSDT','PLANNED',$1,'OPEN_LONG','same-order',4.5,$2) returning id",[sig,{...command,deterministic:{version:state.version},entry_ioc_attempt:1}])).rows[0].id;
  await pg.query("insert into leader20_entry_reservations(symbol,signal_id,state,expires_at) values('TESTUSDT',$1,'RESERVED',clock_timestamp()+interval '2 minutes')",[sig]);
- const submit=async()=> (await pg.query('select deterministic_begin_submit($1,$2,$3) r',[order,owner,{...state,at:Date.now(),capture_end_ms:Date.now()}])).rows[0].r;
+ const submit=async(overrides={})=> (await pg.query('select deterministic_begin_submit($1,$2,$3) r',[order,owner,{...state,at:Date.now(),capture_end_ms:Date.now(),...overrides}])).rows[0].r;
  let proof=await submit();
  const auth=async(c=command,o=owner,fence=1,key=proof.proof.execution_key)=>(await pg.query('select v17_gateway_authorize_evidence($1,$2,$3,$4,$5) r',[key,'binance_futures:futures',o,fence,c])).rows[0].r;
  return {pg,sig,order,command,publish,submit,auth,setProof:p=>proof=p};
@@ -114,5 +114,20 @@ test('Top20 refusal at the submit boundary retains the exact authority snapshot 
   await f.publish('LEFTUSDT');const refused=await f.submit();
   assert.equal(refused.updated,false);assert.equal(refused.reason,'TOP20_LEFT_UNIVERSE');
   assert.equal(refused.authority.member,null);assert.ok(refused.authority.epoch_id);assert.ok(refused.authority.validated_at);
+ }finally{await f.pg.close();}
+});
+
+test('retained BUY authority passes the real SQL submit and gateway fences while raw WAIT remains refused',async()=>{
+ const f=await fixture();try{
+  const at=Date.now(),initial=classifyMarket(scenario({at:at-8000})),prices=Array.from({length:24},(_,i)=>100+.01*(i+1));
+  prices[23]=prices[22]-.001;
+  const check=revalidateEntry(initial,scenario({prices,at}));
+  assert.equal(check.latest.decision,'WAIT');assert.equal(check.allowed,true);
+  await f.pg.query("update v11_long_regime_signals set features=jsonb_set(features,'{deterministic,decision}',$2) where id=$1",[f.sig,initial]);
+  await f.pg.query('update v11_long_regime_orders set response_payload=null where id=$1',[f.order]);
+  assert.equal((await f.submit(check.latest)).reason,'CURRENT_STATE_NOT_EXECUTABLE');
+  const proof=await f.submit(check.execution_state);assert.equal(proof.updated,true);f.setProof(proof);
+  assert.equal((await f.auth()).allowed,true);
+  assert.equal(check.latest.decision,'WAIT','execution authority never rewrites the raw market observation');
  }finally{await f.pg.close();}
 });
