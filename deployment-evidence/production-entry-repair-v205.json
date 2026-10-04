@@ -1,0 +1,117 @@
+{
+  "project": "etaajwpernzrcdrifdnw",
+  "function": "v10-lane-executor",
+  "current_version": 205,
+  "source_commit": "8f963b8d150741caed974e4c4d78685c9b207caf",
+  "deployments": [
+    {
+      "project": "etaajwpernzrcdrifdnw",
+      "function": "v10-lane-executor",
+      "version": 203,
+      "baseline_version": 202,
+      "bundle_sha256": "06a1dbc649eba0166848360c9fbf275ea5c1eebd2381a501c86658194bac27c4",
+      "source_commit": "df0687e8dd0cbb3d5abe22e6999ab1ce8f18dbf7",
+      "updated_at": "2026-10-04T10:21:54.704Z",
+      "changed_files": [
+        "functions/v10-lane-executor/index.ts",
+        "functions/_shared/deterministic/market-state.mjs",
+        "functions/_shared/deterministic/entry-evidence.mjs"
+      ],
+      "file_count": 35,
+      "readback_exact": true,
+      "verification": {
+        "deterministic": 88,
+        "writer_fences": 39,
+        "native_stop_and_settlement": 70
+      },
+      "policy": {
+        "version": "INITIAL_BUY_CONTINUATION_1",
+        "approval_max_age_ms": 30000
+      }
+    },
+    {
+      "project": "etaajwpernzrcdrifdnw",
+      "function": "v10-lane-executor",
+      "version": 204,
+      "baseline_version": 203,
+      "bundle_sha256": "6b14f4304a1c3076972ac88cc88478c990c37faca55e39c707810745a5b0b0f3",
+      "source_commit": "aa5eafddde04f7dc31c72bf06421c1560c807ac6",
+      "updated_at": "2026-10-04T10:44:49.819Z",
+      "changed_files": [
+        "functions/v10-lane-executor/index.ts"
+      ],
+      "file_count": 35,
+      "readback_exact": true,
+      "fix": "Second IOC attempt consumes planner.remainingQuantity after confirmed first-attempt finality",
+      "verification": {
+        "deterministic_tests": 102,
+        "full_executor_zero_fill_retry": true
+      },
+      "preserved": {
+        "initial_buy_continuation_1_max_age_ms": 30000,
+        "owner_fence_lease_cleanup": true,
+        "max_ioc_attempts": 2
+      }
+    },
+    {
+      "project": "etaajwpernzrcdrifdnw",
+      "function": "v10-lane-executor",
+      "version": 205,
+      "baseline_version": 204,
+      "bundle_sha256": "1b537db8c813c1921cbc4cee599d605cd4a6d55804a2c6e8dc5c11cc5d57710d",
+      "source_commit": "8f963b8d150741caed974e4c4d78685c9b207caf",
+      "updated_at": "2026-10-04T10:50:35.460Z",
+      "changed_files": [
+        "functions/_shared/leader-native-protection.mjs"
+      ],
+      "file_count": 35,
+      "readback_exact": true,
+      "fix": "Compare existing acknowledged trigger against the normalized exchange-tick trigger; retain the stop when it already covers the floor",
+      "verification": {
+        "native_protection_and_reconciliation_tests": 57,
+        "unnecessary_replacement_test": true,
+        "real_higher_floor_replacement_test": true
+      }
+    }
+  ],
+  "verified_trade": {
+    "symbol": "STRKUSDT",
+    "exchange_order_id": "5245214380",
+    "order_id": "2638b02f-623a-4577-9028-954ef755d077",
+    "position_id": "a2caa592-4e24-4c43-a498-4d0526c93ce7",
+    "quantity": 8338.6,
+    "average_entry_price": 0.05403989,
+    "filled_at_utc": "2026-10-04T10:46:18.898Z",
+    "fill_executor_version": 204,
+    "execution_authority_mode": "CURRENT_BUY",
+    "same_order_finality": "FILLED",
+    "position_final_state": "CLOSED",
+    "closed_at_utc": "2026-10-04T10:50:44.543Z",
+    "exit_reason": "DETERMINISTIC_THESIS_FAILURE",
+    "realized_pnl_after_fees_usdt": -3.3630298039999613,
+    "exit_accounting_pending": false,
+    "live_native_stops_after_close": 0
+  },
+  "current_account": {
+    "live_enabled": true,
+    "circuit_open": false,
+    "last_error": null,
+    "entry_block_reason": "CURRENT_MARKET_THESIS_CANCELLED",
+    "protection_health": "FLAT",
+    "updated_at": "2026-10-04T10:56:34.537Z"
+  },
+  "validation": {
+    "complete_regression": {
+      "tests": 1646,
+      "pass": 1646,
+      "fail": 0,
+      "run_id": 37196678414
+    },
+    "leader20_verification_run_id": 37196678462,
+    "entry_gateway_and_types_run_id": 37196678438,
+    "deterministic_engine_run_id": 37196678496,
+    "capture_regression_run_id": 37196678450
+  },
+  "merge_commit": "300e66a67dda0fe8fcb018da3ad50e1590a7aa55",
+  "pull_request": "https://github.com/sanbital/Trading-booooo/pull/348"
+}
