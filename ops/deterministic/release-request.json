@@ -6,7 +6,7 @@
   },
   "gateway_commit": "1bd5e3bf76bfb55f9df749818e325f91b5c6ab02",
   "gateway_commits": {
-    "trading-booooo": "a0fa139725eb88d50369bfde2c7316d9c3bf968d",
+    "trading-booooo": "b8bdd912f63e038181dc6df6e9072491fd45d0c2",
     "trading-booooo-sanbital-gateway": "1bd5e3bf76bfb55f9df749818e325f91b5c6ab02"
   },
   "runtime_region": "ap-northeast-1",
@@ -41,7 +41,7 @@
       "v10-lane-signal-generator": 53
     },
     "executor_bundle_sha256": "ebc38de6644325fe59e61733f0287fc97f4e24bbe7ecfc8da71e429db304c4db",
-    "gateway_source_commit": "a0fa139725eb88d50369bfde2c7316d9c3bf968d",
+    "gateway_source_commit": "b8bdd912f63e038181dc6df6e9072491fd45d0c2",
     "deployed_at_kst": "2026-10-04T11:30:37.514000+09:00",
     "sql_definition_md5": {
       "deterministic_begin_submit": "b9dadf9c57ec33edb972283fba4d0d26",
@@ -126,15 +126,17 @@
     "executor_version": 200,
     "executor_file_count": 35,
     "executor_bundle_sha256": "ebc38de6644325fe59e61733f0287fc97f4e24bbe7ecfc8da71e429db304c4db",
-    "gateway_source_commit": "a0fa139725eb88d50369bfde2c7316d9c3bf968d",
-    "gateway_build": "2026-10-04-stream-reads-1",
-    "gateway_verified_at_kst": "2026-10-04T10:59:11+09:00",
+    "gateway_source_commit": "b8bdd912f63e038181dc6df6e9072491fd45d0c2",
+    "gateway_build": "2026-10-04-stream-reads-2",
+    "gateway_verified_at_kst": "2026-10-04T11:40:54.818139+09:00",
     "legacy_source_commit": "d1f289bf3380780749a95ac2af7e910f331e05b6",
     "legacy_version": 456,
     "legacy_file_count": 66,
     "legacy_deployed_at_kst": "2026-10-04T11:09:11.006000+09:00",
     "generator_version": 53,
     "strategy_contract_unchanged": true,
-    "sql_definitions_unchanged": true
+    "sql_definitions_unchanged": true,
+    "gateway_workflow_run": 37171611614,
+    "executor_deployed_at_kst": "2026-10-04T11:30:37.514000+09:00"
   }
 }
