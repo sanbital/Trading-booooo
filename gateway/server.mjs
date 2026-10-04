@@ -47,7 +47,7 @@ const VERSION = "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT";
  *
  * Bump this on every gateway release.
  */
-const GATEWAY_BUILD = "2026-10-04-stream-reads-1";
+const GATEWAY_BUILD = "2026-10-04-stream-reads-2";
 // Keep exactly one audited previous protocol revision during the rolling cutover. Both the
 // old engine/new gateway and new engine/old gateway therefore remain order-compatible;
 // arbitrary or older revisions stay rejected.

@@ -92,6 +92,26 @@ test('depth sequence gap, old event and socket reset never send stale quotes or 
  c.time(T);c.m.event(event(12,11));assert.throws(()=>c.m.quote('BTCUSDT'),/BOOK_UNAVAILABLE/);
  c.m.disconnect('book');assert.throws(()=>c.m.quote('BTCUSDT'),/BOOK_UNAVAILABLE/);
 });
+test('late Top20 membership bootstraps all 21 books fairly within the bounded recovery budget',async()=>{
+ let now=T,reads=0,inFlight=0,maxInFlight=0;const m=createExecutionMarkets({now:()=>now,fetchDepth:async()=>{reads++;maxInFlight=Math.max(maxInFlight,++inFlight);await Promise.resolve();inFlight--;return {lastUpdateId:10,bids:[['99','10']],asks:[['101','10']]};}});
+ now+=120000;const symbols=Array.from({length:21},(_,i)=>'S'+i+'USDT');m.setSymbols(symbols);
+ for(const s of symbols)m.event({...event(),s,E:now});
+ for(let i=0;i<11;i++)await Promise.all(m.recoverySymbols().map(s=>m.recover(s)));
+ assert.equal(reads,21);assert.equal(m.status().synced,21);assert.ok(maxInFlight<=2);
+ m.disconnect('book');now+=5001;for(const s of symbols)m.event({...event(),s,E:now});
+ for(let i=0;i<11;i++)await Promise.all(m.recoverySymbols().map(s=>m.recover(s)));
+ assert.equal(reads,25);assert.equal(m.status().recovery_requests_last_minute,25);assert.equal(m.status().synced,4);
+ now+=60001;for(const s of symbols)m.event({...event(11,10),s,E:now});
+ for(let i=0;i<11;i++)await Promise.all(m.recoverySymbols().map(s=>m.recover(s)));
+ assert.equal(m.status().synced,21);assert.ok(reads<=46);
+});
+test('failed early symbols cannot starve later books and failures expose only bounded diagnostics',async()=>{
+ let now=T,reads=0;const m=createExecutionMarkets({now:()=>now,fetchDepth:async s=>{reads++;if(s==='FAILUSDT')throw Error('REST_TIMEOUT');return {lastUpdateId:10,bids:[['99','10']],asks:[['101','10']]};}});
+ m.setSymbols(['FAILUSDT','BTCUSDT','ETHUSDT']);for(const s of m.symbols())m.event({...event(),s});
+ await Promise.all(m.recoverySymbols().map(s=>m.recover(s)));await Promise.all(m.recoverySymbols().map(s=>m.recover(s)));
+ assert.equal(reads,3);assert.equal(m.status().synced,2);assert.equal(m.status().unsynced[0].reason,'REST_TIMEOUT');
+ await m.recover('FAILUSDT');assert.equal(reads,3);assert.ok(m.status().unsynced[0].retry_at_ms>now);
+});
 test('stream quote timestamps cannot launder an old exchange event into a fresh quote',async()=>{
  const c=market();c.m.event(event());await c.m.recover('BTCUSDT');const q=c.m.quote('BTCUSDT');q.timing.book_captured_at_ms=T-1501;
  assert.ok(normalizeEntryBook(q,1500,T).health.reasons.includes('QUOTE_STALE'));

@@ -35,14 +35,14 @@
   },
   "production_entry_boundary": {
     "baseline_source_commit": "5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4",
-    "source_commit": "a0fa139725eb88d50369bfde2c7316d9c3bf968d",
+    "source_commit": "2df2f2a56e0854af7bcb45d2f8cb6707622c20c3",
     "expected_versions": {
-      "v10-lane-executor": 199,
+      "v10-lane-executor": 200,
       "v10-lane-signal-generator": 53
     },
-    "executor_bundle_sha256": "bea2b7914977dc104578f167749c06e7b949a78e76bc5f3f255f2d70f30c22a7",
+    "executor_bundle_sha256": "ebc38de6644325fe59e61733f0287fc97f4e24bbe7ecfc8da71e429db304c4db",
     "gateway_source_commit": "a0fa139725eb88d50369bfde2c7316d9c3bf968d",
-    "deployed_at_kst": "2026-10-04T11:00:22.209000+09:00",
+    "deployed_at_kst": "2026-10-04T11:30:37.514000+09:00",
     "sql_definition_md5": {
       "deterministic_begin_submit": "b9dadf9c57ec33edb972283fba4d0d26",
       "deterministic_entry_authority": "583cbcc8fcc8b66cdeb4543da16df96f",
@@ -122,10 +122,10 @@
     }
   },
   "production_stream_read_repair": {
-    "executor_source_commit": "a0fa139725eb88d50369bfde2c7316d9c3bf968d",
-    "executor_version": 199,
+    "executor_source_commit": "2df2f2a56e0854af7bcb45d2f8cb6707622c20c3",
+    "executor_version": 200,
     "executor_file_count": 35,
-    "executor_bundle_sha256": "bea2b7914977dc104578f167749c06e7b949a78e76bc5f3f255f2d70f30c22a7",
+    "executor_bundle_sha256": "ebc38de6644325fe59e61733f0287fc97f4e24bbe7ecfc8da71e429db304c4db",
     "gateway_source_commit": "a0fa139725eb88d50369bfde2c7316d9c3bf968d",
     "gateway_build": "2026-10-04-stream-reads-1",
     "gateway_verified_at_kst": "2026-10-04T10:59:11+09:00",

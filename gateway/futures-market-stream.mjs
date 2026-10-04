@@ -3,21 +3,21 @@ import {Book,BOOK_STATE,normalizeSymbol,transportFresh} from './capture-book-cor
 const failure=reason=>Object.assign(Error(reason),{code:reason,status:503});
 
 export function createExecutionMarkets({fetchDepth,now=Date.now}={}){
- const states=new Map();let recoveries=0,quoteReads=0,activeRecoveries=0;const startedAt=now(),snapshotTimes=[];
+ const states=new Map();let recoveries=0,quoteReads=0,activeRecoveries=0;const snapshotTimes=[],routineTimes=[];
  function state(symbol){const s=states.get(symbol);if(!s)throw failure('EXECUTION_STREAM_NOT_WATCHED');return s;}
  return {
   setSymbols(symbols){const wanted=new Set(symbols.map(normalizeSymbol).filter(Boolean));
    for(const s of states.keys())if(!wanted.has(s))states.delete(s);
-   for(const symbol of wanted)if(!states.has(symbol))states.set(symbol,{symbol,book:new Book(),generation:1,trades:[],mark:null,flight:null,retryAt:0});
+   for(const symbol of wanted)if(!states.has(symbol))states.set(symbol,{symbol,book:new Book(),generation:1,trades:[],mark:null,flight:null,retryAt:0,bootstrap:true,lastRecoveryAt:0,failures:0,snapshotError:null});
    return [...states.keys()];
   },
   disconnect(kind){for(const s of states.values()){
-   if(kind==='book'){s.generation++;s.book.reset('EXECUTION_SOCKET_DISCONNECTED');}
+   if(kind==='book'){s.generation++;s.bootstrap=true;s.book.reset('EXECUTION_SOCKET_DISCONNECTED');}
    else {s.trades=[];s.mark=null;s.lastTradeId=null;}
   }},
   event(e){const symbol=normalizeSymbol(e?.s),s=states.get(symbol);if(!s)return;
    const t=now();if(!transportFresh(e,t)){if(e.e==='depthUpdate')s.book.markUnsynced('EXECUTION_EVENT_STALE',null,t);return;}
-   if(e.e==='depthUpdate')s.book.event(e,t);
+   if(e.e==='depthUpdate'){s.book.event(e,t);if(s.book.ready){s.bootstrap=false;s.failures=0;s.snapshotError=null;}}
    if(e.e==='aggTrade'){
     const id=Number(e.a);if(!Number.isSafeInteger(id)||Number(e.T)>t||s.lastTradeId!=null&&id!==s.lastTradeId+1){s.trades=[];}
     if(s.lastTradeId!=null&&id<=s.lastTradeId)return;
@@ -32,19 +32,24 @@ export function createExecutionMarkets({fetchDepth,now=Date.now}={}){
    if(s.book.state===BOOK_STATE.SYNCED&&!drift&&!stale)return;
    if(t<s.retryAt)return;
    while(snapshotTimes.length&&snapshotTimes[0]<=t-60000)snapshotTimes.shift();
-   // Two bootstrap/resync reads at once; 500 weight on cold start, then 100/min.
+   while(routineTimes.length&&routineTimes[0]<=t-60000)routineTimes.shift();
+   // A new/reconnected socket needs every member bootstrapped, even after process
+   // startup. Bound ALL recovery to 500 weight/min, routine drift to 100/min.
    // Never enqueue a quote or writer request behind book recovery.
-   if(activeRecoveries>=2||snapshotTimes.length>=(t-startedAt<60000?25:5))return;
+   if(activeRecoveries>=2||snapshotTimes.length>=25||!s.bootstrap&&routineTimes.length>=5)return;
    if(drift||stale){s.generation++;s.book.reset(drift?'EXECUTION_COVERAGE_DRIFT':'EXECUTION_BOOK_STALE');}
-   const generation=s.generation;s.book.beginResync(t);s.retryAt=t+5000;recoveries++;activeRecoveries++;snapshotTimes.push(t);
+   const generation=s.generation;s.book.beginResync(t);s.retryAt=t+5000;s.lastRecoveryAt=t;recoveries++;activeRecoveries++;snapshotTimes.push(t);if(!s.bootstrap)routineTimes.push(t);
+   const failed=reason=>{s.snapshotError=reason;s.failures++;s.retryAt=now()+Math.min(60000,10000*2**Math.min(s.failures-1,3));};
    s.flight=Promise.resolve().then(()=>fetchDepth(symbol)).then(depth=>{
     if(states.get(symbol)!==s||generation!==s.generation)return;
-    const result=s.book.snapshot(depth,now());if(result.status===BOOK_STATE.UNSYNCED)s.retryAt=now()+10000;
-   }).catch(error=>{if(states.get(symbol)===s&&generation===s.generation){s.book.failResync('EXECUTION_SNAPSHOT_UNAVAILABLE');s.retryAt=Math.max(now()+10000,Number(error.retryAtMs)||0);}})
+    const result=s.book.snapshot(depth,now());if(result.status===BOOK_STATE.UNSYNCED)failed(result.reason??'EXECUTION_SNAPSHOT_SEQUENCE_FAILED');
+    else if(s.book.ready){s.bootstrap=false;s.failures=0;s.snapshotError=null;}
+   }).catch(error=>{if(states.get(symbol)===s&&generation===s.generation){s.book.failResync('EXECUTION_SNAPSHOT_UNAVAILABLE');failed(String(error.code??error.message??'EXECUTION_SNAPSHOT_UNAVAILABLE').slice(0,100));s.retryAt=Math.max(s.retryAt,Number(error.retryAtMs)||0);}})
     .finally(()=>{s.flight=null;activeRecoveries--;});return s.flight;
   },
   mark(symbol){return states.get(symbol)?.mark??null;},
   symbols(){return [...states.keys()];},
+  recoverySymbols(){return [...states.values()].sort((a,b)=>a.lastRecoveryAt-b.lastRecoveryAt).map(s=>s.symbol);},
   quote(symbol){const s=state(symbol),t=now(),m=s.book.metrics(t);
    // Enforce the executor's existing 1.5s book boundary here too. Do not stamp an
    // old depth as a freshly received quote or fall back to REST on every candidate.
@@ -58,7 +63,10 @@ export function createExecutionMarkets({fetchDepth,now=Date.now}={}){
   },
   status(){return {watched:states.size,synced:[...states.values()].filter(s=>s.book.state===BOOK_STATE.SYNCED).length,
    fresh:[...states.values()].filter(s=>s.book.ready&&now()-s.book.received<=1500&&now()-s.book.at<=1500).length,
-   mark_fresh:[...states.values()].filter(s=>s.mark&&now()-s.mark.received_at_ms<=2500).length,recoveries,quote_reads:quoteReads};},
+   mark_fresh:[...states.values()].filter(s=>s.mark&&now()-s.mark.received_at_ms<=2500).length,recoveries,quote_reads:quoteReads,
+   recovery_in_flight:activeRecoveries,recovery_requests_last_minute:snapshotTimes.filter(t=>t>now()-60000).length,
+   unsynced:[...states.values()].filter(s=>!s.book.ready).map(s=>({symbol:s.symbol,state:s.book.state,generation:s.generation,
+    reason:s.snapshotError??s.book.lastIncident?.reason,last_recovery_at_ms:s.lastRecoveryAt,retry_at_ms:s.retryAt,buffered_events:s.book.buffer.length})).slice(0,32)};},
  };
 }
 
@@ -95,7 +103,7 @@ export function startExecutionStreams({WebSocketClient,fetchDepth,watch,now=Date
   finally{watching=false;}
  }
  refresh();const watchTimer=setInterval(refresh,5000),recoveryTimer=setInterval(()=>{
-  if(sockets.get('book')?.ws.readyState===1)for(const symbol of markets.symbols())markets.recover(symbol);
+  if(sockets.get('book')?.ws.readyState===1)for(const symbol of markets.recoverySymbols())markets.recover(symbol);
  },1000);watchTimer.unref?.();recoveryTimer.unref?.();
  return {...markets,stop(){stopped=true;clearInterval(watchTimer);clearInterval(recoveryTimer);for(const t of timers)clearTimeout(t);
   for(const e of sockets.values()){clearInterval(e.ping);e.ws.terminate();}sockets.clear();}};

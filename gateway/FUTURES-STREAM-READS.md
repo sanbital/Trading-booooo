@@ -34,7 +34,10 @@ gap invalidation and bounded resync. Quotes use actual exchange/receipt times an
 the unchanged 1.5s book window. Quotes never trigger per-candidate REST fallback.
 The two combined sockets subscribe incrementally, so continuing Top20 membership
 does not reset a book on an epoch replacement. Recovery is limited to two concurrent
-snapshots, 500 bootstrap weight in the first minute, then 100 weight/min. The market
+snapshots, 500 total recovery weight/min and 100 routine drift weight/min. New
+membership and reconnected sockets bootstrap after startup too. Oldest attempted
+books run first, failed snapshots back off, and health exposes bounded reasons.
+The market
 capture collector and strategy gates are unchanged.
 
 Reference reads keep their original timestamps: exchange filters 15min, fees 5min,

@@ -14,7 +14,7 @@ const health=async()=>{const r=await fetch('https://trading-booooo.fly.dev/healt
 const manifest=JSON.parse(fs.readFileSync('ops/deterministic/release-request.json','utf8')),expected=manifest.gateway_commits['trading-booooo'];
 const samples=[];let initial;
 for(let n=0;n<5;n++){
- const h=await health();if(h.deployment_commit!==expected||h.build!=='2026-10-04-stream-reads-1'||!h.order_writer.required||h.scheduler_enabled!==false||!h.futures_stream_reads?.enabled)throw Error('STREAM_RELEASE_IDENTITY_MISMATCH');
+ const h=await health();if(h.deployment_commit!==expected||h.build!=='2026-10-04-stream-reads-2'||!h.order_writer.required||h.scheduler_enabled!==false||!h.futures_stream_reads?.enabled)throw Error('STREAM_RELEASE_IDENTITY_MISMATCH');
  samples.push(h);if(n===0)initial=h;
  console.log(JSON.stringify({at:new Date(h.at).toISOString(),build:h.build,account:h.futures_stream_reads.account,market:h.futures_stream_reads.market,
   weight:h.futures_rest_budget.estimated_or_observed_weight,exchange_weight:h.futures_rest_budget.exchange_observed_weight,denied:h.futures_rest_budget.denied,blocked_until:h.futures_rest_budget.blocked_until_ms}));
