@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {createAccountContinuity,conservativeStreamAccount,startAccountStream} from './futures-account-stream.mjs';
-import {createExecutionMarkets} from './futures-market-stream.mjs';
+import {createExecutionMarkets,startExecutionStreams} from './futures-market-stream.mjs';
 import {createVenueReadCache} from './venue-read-cache.mjs';
 import {freshPortfolio} from '../supabase/functions/_shared/leader-ops-isolation.mjs';
 import {freshAccountEvidence,freshOpenOrderEvidence} from '../supabase/functions/_shared/leader-entry-control.mjs';
@@ -80,6 +80,42 @@ test('metadata reuse does not renew authenticated mode timestamps; invalidation 
 function market(){let now=T,depth=0;const m=createExecutionMarkets({now:()=>now,fetchDepth:async()=>{depth++;return {lastUpdateId:10,bids:[['99','10'],['98','10']],asks:[['101','10'],['102','10']]};}});
  m.setSymbols(['BTCUSDT']);return {m,time:t=>now=t,depth:()=>depth};}
 const event=(u=10,pu=9)=>({e:'depthUpdate',s:'BTCUSDT',E:T,U:u,u,pu,b:[['99','10']],a:[['101','10']]});
+class MarketSocket extends EventEmitter{
+ static instances=[];
+ constructor(url){super();this.url=url;this.readyState=0;this.sent=[];MarketSocket.instances.push(this);}
+ send(raw){this.sent.push(JSON.parse(raw));}
+ ping(){}
+ terminate(){if(this.readyState===3)return;this.readyState=3;this.emit('close');}
+ open(){this.readyState=1;this.emit('open');}
+}
+test('late BUY member refreshes watch once, subscribes and obtains a sequenced book; unapproved symbol remains refused',async()=>{
+ MarketSocket.instances=[];let symbols=['BTCUSDT'],watches=0,stream;
+ stream=startExecutionStreams({WebSocketClient:MarketSocket,now:()=>T,watch:async()=>{watches++;await Promise.resolve();return symbols;},
+  fetchDepth:async symbol=>{stream.event({...event(),s:symbol});return {lastUpdateId:10,bids:[['99','10'],['98','10']],asks:[['101','10'],['102','10']]};}});
+ try{
+  await stream.refresh();for(const ws of MarketSocket.instances)ws.open();await stream.recover('BTCUSDT');
+  symbols=['BTCUSDT','AKTUSDT'];
+  const quotes=await Promise.all([stream.quoteReady('AKTUSDT'),stream.quoteReady('AKTUSDT')]);
+  assert.equal(watches,2);assert.equal(quotes[0].market,'AKTUSDT');assert.equal(quotes[0].timing.source,'BINANCE_DEPTH_STREAM');
+  const bookSocket=MarketSocket.instances.find(ws=>ws.url.includes('/public/'));
+  assert.ok(bookSocket.sent.some(x=>x.method==='SUBSCRIBE'&&x.params.includes('aktusdt@depth@100ms')));
+  await assert.rejects(stream.quoteReady('NOAUTHUSDT'),/NOT_WATCHED/);
+  assert.equal(stream.symbols().includes('NOAUTHUSDT'),false);
+  assert.equal(stream.status().watch.error,null);assert.equal(stream.status().watch.last_success_at_ms,T);
+ }finally{stream.stop();}
+});
+test('failed watch refresh is observable and does not erase an existing book; connection opening applies pending membership',async()=>{
+ MarketSocket.instances=[];let symbols=['BTCUSDT'],fail=false;
+ const stream=startExecutionStreams({WebSocketClient:MarketSocket,now:()=>T,watch:async()=>{if(fail)throw Error('EXECUTION_WATCH_HTTP_503');return symbols;},fetchDepth:async()=>({lastUpdateId:10,bids:[['99','10']],asks:[['101','10']]})});
+ try{
+  await stream.refresh();symbols=['BTCUSDT','AKTUSDT'];await stream.refresh();
+  const book=MarketSocket.instances.find(ws=>ws.url.includes('/public/'));book.open();
+  assert.ok(book.sent.some(x=>x.method==='SUBSCRIBE'&&x.params.includes('aktusdt@depth@100ms')));
+  fail=true;await stream.refresh();assert.equal(stream.status().watch.error,'EXECUTION_WATCH_HTTP_503');
+  assert.equal(stream.status().watch.failures,1);assert.deepEqual(stream.symbols(),symbols);
+  await assert.rejects(stream.quoteReady('IOTAUSDT'),/NOT_WATCHED/);
+ }finally{stream.stop();}
+});
 test('sequenced full book supplies unchanged fresh-book gate with zero per-quote REST; continuous Top20 member retains book',async()=>{
  const c=market();c.m.event(event());await c.m.recover('BTCUSDT');c.time(T+100);
  c.m.setSymbols(['BTCUSDT','ETHUSDT']);const q=c.m.quote('BTCUSDT');assert.equal(q.timing.received_at_ms,T);

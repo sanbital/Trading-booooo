@@ -70,8 +70,9 @@ export function createExecutionMarkets({fetchDepth,now=Date.now}={}){
  };
 }
 
-export function startExecutionStreams({WebSocketClient,fetchDepth,watch,now=Date.now}){
- const markets=createExecutionMarkets({fetchDepth,now}),sockets=new Map(),timers=new Set();let stopped=false,nextId=1,watching=false;
+export function startExecutionStreams({WebSocketClient,fetchDepth,watch,now=Date.now,watchIntervalMs=5000}){
+ const markets=createExecutionMarkets({fetchDepth,now}),sockets=new Map(),timers=new Set();let stopped=false,nextId=1,watchFlight=null;
+ const watchState={last_attempt_at_ms:null,last_success_at_ms:null,error:null,failures:0};
  const schedule=(work,ms)=>{const timer=setTimeout(()=>{timers.delete(timer);if(!stopped)work();},ms);timers.add(timer);timer.unref?.();};
  const streams=(kind,symbols)=>symbols.flatMap(s=>kind==='book'?[s.toLowerCase()+'@depth@100ms']:
   [s.toLowerCase()+'@aggTrade',s.toLowerCase()+'@markPrice@1s']);
@@ -83,6 +84,7 @@ export function startExecutionStreams({WebSocketClient,fetchDepth,watch,now=Date
   ws.on('open',()=>{if(sockets.get(kind)!==entry)return;
    ws.on('pong',()=>{entry.lastPong=now();});entry.lastPong=now();
    entry.ping=setInterval(()=>{if(now()-entry.lastPong>5000){ws.terminate();return;}if(ws.readyState===1)ws.ping();},1500);entry.ping.unref?.();
+   updateSubscriptions();
    if(kind==='book')for(const symbol of markets.symbols())markets.recover(symbol);
   });
   ws.on('message',raw=>{if(sockets.get(kind)!==entry)return;try{const p=JSON.parse(String(raw));if(p.code!=null)throw failure('EXECUTION_STREAM_SUBSCRIPTION_FAILED');
@@ -98,13 +100,31 @@ export function startExecutionStreams({WebSocketClient,fetchDepth,watch,now=Date
   if(add.length)entry.ws.send(JSON.stringify({method:'SUBSCRIBE',params:add,id:nextId++}));entry.subscribed=wanted;
   if(kind==='book'&&add.length)for(const symbol of markets.symbols())markets.recover(symbol);
  }}
- async function refresh(){if(watching||stopped)return;watching=true;
-  try{markets.setSymbols(await watch());updateSubscriptions();}catch{/* Existing books remain data-only; DB authority still validates membership. */}
-  finally{watching=false;}
+ function refresh(){if(stopped)return Promise.resolve();if(watchFlight)return watchFlight;
+  watchState.last_attempt_at_ms=now();
+  watchFlight=Promise.resolve().then(watch).then(symbols=>{
+   if(stopped)return;markets.setSymbols(symbols);updateSubscriptions();
+   watchState.last_success_at_ms=now();watchState.error=null;watchState.failures=0;
+  }).catch(error=>{
+   // Retained books cannot grant membership; expose failed watch refreshes instead
+   // of reporting a healthy count for a permanently obsolete subscription set.
+   watchState.error=String(error?.code??error?.message??'EXECUTION_WATCH_UNAVAILABLE').slice(0,100);watchState.failures++;
+  }).finally(()=>{watchFlight=null;});return watchFlight;
  }
- refresh();const watchTimer=setInterval(refresh,5000),recoveryTimer=setInterval(()=>{
+ async function quoteReady(symbol){
+  if(!markets.symbols().includes(symbol))await refresh();
+  try{return markets.quote(symbol);}catch(error){
+   if(error.code!=='EXECUTION_STREAM_BOOK_UNAVAILABLE')throw error;
+   // One bounded recovery shares the existing budget and sequence checks. A late
+   // member is warmed before the executor starts spending its approval lifetime.
+   if(sockets.get('book')?.ws.readyState===1)await markets.recover(symbol);
+   return markets.quote(symbol);
+  }
+ }
+ refresh();const watchTimer=setInterval(refresh,watchIntervalMs),recoveryTimer=setInterval(()=>{
   if(sockets.get('book')?.ws.readyState===1)for(const symbol of markets.recoverySymbols())markets.recover(symbol);
  },1000);watchTimer.unref?.();recoveryTimer.unref?.();
- return {...markets,stop(){stopped=true;clearInterval(watchTimer);clearInterval(recoveryTimer);for(const t of timers)clearTimeout(t);
+ return {...markets,refresh,quoteReady,status(){return {...markets.status(),watched_symbols:markets.symbols(),watch:{...watchState,in_flight:watchFlight!==null},
+  sockets:Object.fromEntries([...sockets].map(([kind,e])=>[kind,{connected:e.ws.readyState===1,subscriptions:e.subscribed.size,last_pong_at_ms:e.lastPong}]))};},stop(){stopped=true;clearInterval(watchTimer);clearInterval(recoveryTimer);for(const t of timers)clearTimeout(t);
   for(const e of sockets.values()){clearInterval(e.ping);e.ws.terminate();}sockets.clear();}};
 }

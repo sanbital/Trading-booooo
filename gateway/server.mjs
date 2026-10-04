@@ -182,7 +182,8 @@ async function futuresWatchSymbols(){
  try{const [u,p]=await Promise.all([
   fetch(SUPABASE_URL+'/rest/v1/rpc/deterministic_universe',{method:'POST',headers:{...headers,'content-type':'application/json'},body:'{}',signal:controller.signal}),
   fetch(SUPABASE_URL+'/rest/v1/v11_long_regime_positions?state=neq.CLOSED&select=symbol&limit=11',{headers,signal:controller.signal})]);
-  if(!u.ok||!p.ok)throw Error('EXECUTION_WATCH_UNAVAILABLE');const universe=await u.json(),positions=await p.json();
+  if(!u.ok||!p.ok)throw Error('EXECUTION_WATCH_HTTP_'+(!u.ok?'UNIVERSE_'+u.status:'POSITIONS_'+p.status));const universe=await u.json(),positions=await p.json();
+  if(!universe||!Array.isArray(universe.members))throw Error('EXECUTION_WATCH_UNIVERSE_UNREADABLE');
   if(!Array.isArray(positions)||positions.length>10)throw Error('EXECUTION_WATCH_POSITION_OVERFLOW');
   // Subscription warming is data-only. The existing SQL authority still requires
   // a current epoch; a brief refresh delay must not reset continuing local books.
@@ -2110,10 +2111,10 @@ function normalizeP10QuoteBatch(exchange, markets, payload, requestedAtMs, recei
 async function p10Quotes(exchange, markets,acceptStream=false) {
   const symbols = [...new Set(validateMarkets(exchange, markets))];
   if (symbols.length > 20) throw new Error("P10 quote batch is limited to 20 markets");
-  if(isBinanceFutures(exchange)&&FUTURES_STREAM_READS&&acceptStream)return symbols.map(symbol=>{
-   try{const q=futuresMarketStream?.quote(symbol);if(!q)throw Error('EXECUTION_STREAM_STARTING');const {trades,...result}=q;return {...result,trade_flow:null,trade_flow_available:false};}
-   catch(error){return {exchange,market:symbol,error:error.message,code:'EXECUTION_STREAM_BOOK_UNAVAILABLE'};}
-  });
+  if(isBinanceFutures(exchange)&&FUTURES_STREAM_READS&&acceptStream)return Promise.all(symbols.map(async symbol=>{
+   try{const q=await futuresMarketStream?.quoteReady(symbol);if(!q)throw Error('EXECUTION_STREAM_STARTING');const {trades,...result}=q;return {...result,trade_flow:null,trade_flow_available:false};}
+   catch(error){return {exchange,market:symbol,error:error.message,code:error.code??'EXECUTION_STREAM_BOOK_UNAVAILABLE'};}
+  }));
   const requestedAtMs = Date.now();
   const payload = exchange === "upbit"
     ? await publicUpbit(
@@ -2139,7 +2140,7 @@ async function quote(exchange, market,acceptStream=false) {
   const symbol = validateMarket(exchange, market);
   if(isBinanceFutures(exchange)&&FUTURES_STREAM_READS&&acceptStream){
    if(!futuresMarketStream)throw Object.assign(Error('EXECUTION_STREAM_STARTING'),{status:503});
-   const {trades,...q}=futuresMarketStream.quote(symbol);return {...q,trade_flow:summarizeTradeFlow(trades,Date.now()),trade_flow_available:trades.length>0};
+   const {trades,...q}=await futuresMarketStream.quoteReady(symbol);return {...q,trade_flow:summarizeTradeFlow(trades,Date.now()),trade_flow_available:trades.length>0};
   }
   // v6.5: the moment this gateway asked the exchange, and the moment it got an answer.
   // Without these the autotrader cannot tell a slow venue from a slow scheduler, and the
