@@ -9,8 +9,8 @@ const gateway=async command=>{
  const data=await r.json();return {http_status:r.status,...data};
 };
 const snap=await sql("select now() observed_at,public.v17_account_recovery_state() recovery,public.leader20_batch_capacity() capacity,public.deterministic_universe() universe;"),signals=await sql("select id,symbol,status,created_at,updated_at,reject_reason,features->'entryExecution' entry_evidence from public.v11_long_regime_signals where id in ('758216c8-8025-465d-9c4f-56a1987acd3d','c5befe98-9810-45b8-897b-a2886542eb9b') or features#>>'{deterministic,version}'='DETERMINISTIC_DYNAMIC_STATE_1' and created_at>clock_timestamp()-interval '20 minutes' order by created_at desc limit 40;"),orders=await sql("select id,signal_id,symbol,intent,state,client_order_id,exchange_order_id,requested_quantity,reject_reason,created_at,updated_at,request_payload->'entry_latency' timing,response_payload from public.v11_long_regime_orders where created_at>clock_timestamp()-interval '40 minutes' order by created_at desc limit 20;");
-const oldIds=[['ATHUSDT','tb-v11e-96aa6af9cdc5483e9b2fe4d0'],['WLDUSDT','tb-v11e-758216c88025465d9c4f56a1'],['BERAUSDT','tb-v11e-c5befe98981045b8897ba288']];
-const venue=await Promise.all(oldIds.map(async([market,identifier])=>({market,identifier,proof:await gateway({action:'v18_entry_never_placed_proof',market,identifier})})));
+const oldIds=[['ATHUSDT','tb-v11e-96aa6af9cdc5483e9b2fe4d0'],['WLDUSDT','tb-v11e-758216c88025465d9c4f56a1'],['BERAUSDT','tb-v11e-c5befe98981045b8897ba288'],['OPUSDT','tb-v11e-139458733f1b4b95ab5dbd0e']];
+const venue=[];for(const [market,identifier] of oldIds)venue.push({market,identifier,proof:await gateway({action:'v18_entry_never_placed_proof',market,identifier})});
 const [portfolio,openOrders]=await Promise.all([gateway({action:'p10_portfolio'}),gateway({action:'v18_open_orders'})]);
 const report={observed_at:new Date().toISOString(),commit:process.env.GITHUB_SHA,snap,signals,orders,venue,portfolio,openOrders};
 fs.writeFileSync(`${out}/audit.json`,JSON.stringify(report,null,2));

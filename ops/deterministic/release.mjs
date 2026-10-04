@@ -88,6 +88,13 @@ async function verify({serviceSourceCommit=null,versions=null}={}){
  const s=await value(stateSQL);evidence.current=s;if(!s.installed)throw Error('DETERMINISTIC_NOT_INSTALLED');await signedProof(s);
  const ctl=await value('select to_jsonb(c) evidence from deterministic_control c where singleton'),identity=serviceIdentity(request,serviceSourceCommit??ctl.source_commit);
  serviceSourceCommit=identity.sourceCommit;versions??=identity.versions;
+ if(serviceSourceCommit===request.production_entry_boundary?.source_commit){
+  const pins=request.production_entry_boundary.sql_definition_md5;
+  if(!pins||Object.keys(pins).length!==9||Object.entries(pins).some(([name,hash])=>!/^\w+$/.test(name)||!/^[a-f0-9]{32}$/.test(hash)))throw Error('BOUNDARY_SQL_PINS_REQUIRED');
+  const actual=await query(`select p.proname,md5(pg_get_functiondef(p.oid)) md5 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname in (${Object.keys(pins).map(name=>"'"+name+"'").join(',')})`);
+  if(actual.length!==9||actual.some(row=>pins[row.proname]!==row.md5))throw Error('BOUNDARY_SQL_DEFINITION_CHANGED');
+  note('EXACT_BOUNDARY_SQL_PARITY',{functions:actual.length});
+ }
  const listed=await functionList(),rows=listed.functions??listed;
  for(const [slug,version] of Object.entries(versions)){const f=rows.find(x=>x.slug===slug);if(f?.version!==version||f.verify_jwt!==false||f.status!=='ACTIVE')throw Error('STAGED_FUNCTION_CHANGED');}
  for(const slug of Object.keys(request.expected_versions)){const sourceRoot=serviceSourceRoot(identity.sources[slug]),out=process.env.RUNNER_TEMP+'/verify-'+slug;fs.mkdirSync(out,{recursive:true});run('supabase',['functions','download',slug,'--project-ref',project,'--use-api','--workdir',out]);evidence[slug]=JSON.parse(run('node',['ops/gpt-final-review/verify-bundle-parity.mjs',out,sourceRoot,slug]));note('EXACT_PINNED_SERVICE_PARITY',{slug,version:versions[slug],source_commit:identity.sources[slug],bundle_digest:evidence[slug].bundleDigest,file_count:evidence[slug].fileCount});}
@@ -264,7 +271,7 @@ async function repairSubmitProof(){
  const repair=request.submit_proof_repair;
  if(!repair||repair.expected_submit_md5!=='50bfd0b4738d9fc70e68f1758ee9f564'||repair.generation!==190||
  repair.incident_id!=='b28c890b-0191-49d9-a2aa-fe826cf6f708'||repair.order_id!=='ad65e821-1ce1-482e-b8fc-615ebb3d8c7f')throw Error('SUBMIT_PROOF_EXACT_INCIDENT_REQUIRED');
- const before=await value(stateSQL),ctl=await value('select to_jsonb(c) evidence from deterministic_control c where singleton'),services=serviceIdentity(request,request.submission_boundary_identity?.source_commit),needsRecovery=before.runtime.circuit_open===true;
+ const before=await value(stateSQL),ctl=await value('select to_jsonb(c) evidence from deterministic_control c where singleton'),services=serviceIdentity(request,request.production_entry_boundary?.source_commit),needsRecovery=before.runtime.circuit_open===true;
  if(!ctl.enabled||ctl.generation!==2||![sourceSha,services.sourceCommit].includes(ctl.source_commit)||!before.settings.pause_new_entries||
  before.runtime.incident_id!==repair.incident_id||before.runtime.incident_generation!==repair.generation||
  before.runtime.incident_kind!=='KNOWN_ORDER_PENDING_RECONCILIATION'||(!needsRecovery&&!before.runtime.incident_resolved_at)||before.runtime.protection_health!=='FLAT'||before.orders.length||before.positions.some(p=>p.state==='OPEN')||
@@ -277,12 +284,12 @@ async function repairSubmitProof(){
  evidence[slug]=JSON.parse(run('node',['ops/gpt-final-review/verify-bundle-parity.mjs',out,serviceSourceRoot(services.sources[slug]),slug]));
  note('SUBMIT_PROOF_EXACT_SERVICE_PARITY',{slug,version,source_commit:services.sources[slug],file_count:evidence[slug].fileCount,bundle_digest:evidence[slug].bundleDigest});
  }
- for(const [version,hash] of Object.entries(request.submission_boundary_identity.migrations)){
+ for(const [version,hash] of Object.entries(request.production_entry_boundary.migrations)){
   const applied=await value(`select encode(sha256(convert_to(statements[1],'UTF8')),'hex') evidence from supabase_migrations.schema_migrations where version='${version}'`);
   if(applied!==hash)throw Error('SUBMIT_PROOF_BOUNDARY_MIGRATION_CHANGED');
  }
  const authDefinition=await value("select md5(pg_get_functiondef('public.v17_gateway_authorize_evidence(text,text,uuid,bigint,jsonb)'::regprocedure)) evidence");
- if(authDefinition!==request.submission_boundary_identity.gateway_authorize_md5)throw Error('SUBMIT_PROOF_GATEWAY_AUTH_CHANGED');
+ if(authDefinition!==request.production_entry_boundary.sql_definition_md5.v17_gateway_authorize_evidence)throw Error('SUBMIT_PROOF_GATEWAY_AUTH_CHANGED');
  const identity=await value(`select jsonb_build_object('definition_md5',md5(pg_get_functiondef('public.deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure)),
  'installed',(select count(*) from supabase_migrations.schema_migrations where version='20261004000400'),
  'migration_statement',(select statements[1] from supabase_migrations.schema_migrations where version='20261004000400'),

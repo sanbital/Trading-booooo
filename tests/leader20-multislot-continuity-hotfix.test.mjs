@@ -51,11 +51,17 @@ test('post-fill capacity proof has a separate read-only budget, never a write es
   assert.ok(src.includes('await verifyExecutionLease(db,allowCycleBudgetExceeded)'));
 });
 
-test('every deterministic order attempt gets a current market and executable-book validation',async()=>{
-  const src=await read('supabase/functions/v10-lane-executor/index.ts');
-  assert.ok(src.includes('const validated=await validateOrder(db,s,initialQuote)'));
-  assert.ok(src.includes("if(!validated.allowed)return {entered:false,reason:validated.reason}"));
-  assert.ok(src.includes('check=await validateOrder(db,s,quote)'));
-  assert.ok(src.includes('book=normalizeEntryBook(quote,1500,Date.now())'));
-  assert.ok(src.includes("if(!check.allowed||!book.health.bookHealthy)return {allowed:false"));
+test('current market, capture and executable book can cancel an older deterministic BUY',async()=>{
+  const {classifyMarket}=await import('../supabase/functions/_shared/deterministic/market-state.mjs');
+  const {validatePreparedOrder}=await import('../supabase/functions/_shared/deterministic/runtime.mjs');
+  const {scenario,bearish,executableQuote}=await import('../test-support/deterministic/fixtures.mjs');
+  const at=Date.now(),initial=scenario({at}),signal={features:{deterministic:{decision:classifyMarket(initial)}}};
+  assert.equal(validatePreparedOrder(signal,initial,executableQuote({at})).allowed,true);
+  for(const [market,quote] of [
+    [bearish({at}),executableQuote({at})],
+    [scenario({at:at-15000}),executableQuote({at})],
+    [initial,executableQuote({at:at-2000})],
+    [initial,executableQuote({at,depth:100})],
+    [initial,executableQuote({at,price:102.25})],
+  ])assert.equal(validatePreparedOrder(signal,market,quote).allowed,false);
 });
