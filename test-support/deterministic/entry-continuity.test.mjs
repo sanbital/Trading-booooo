@@ -10,25 +10,25 @@ const pause=(at=AT+8000)=>{
 };
 const seed=()=>classifyMarket(scenario());
 
-test('fresh approved BUY survives a brief five-second pause with all present safeguards intact',()=>{
+test('a weak WAIT after BUY cancels execution instead of preserving stale authority',()=>{
  const initial=seed(),current=pause(),before=structuredClone(initial),check=revalidateEntry(initial,current);
  assert.equal(check.latest.decision,'WAIT');assert.equal(check.latest.phase,'MOMENTUM_DECAY');
- assert.ok(Object.values(check.latest.gates).every(Boolean));assert.equal(check.allowed,true);
- assert.equal(check.execution_state.decision,'BUY');assert.equal(check.execution_state.trigger,initial.trigger);
- assert.equal(check.authority.mode,'RETAINED_INITIAL_BUY');assert.deepEqual(initial,before);
+ assert.equal(check.latest.current_propulsion,'WEAK');assert.ok(Object.values(check.latest.gates).every(Boolean));
+ assert.equal(check.allowed,false);assert.equal(check.reason,'CURRENT_MARKET_THESIS_CANCELLED');assert.equal(check.execution_state,null);
+ assert.deepEqual(initial,before);
  const signal={id:'s',features:{deterministic:{decision:initial}}},evidence=entryEvidence(signal,{check});
- assert.equal(evidence.latest.decision,'WAIT');assert.equal(evidence.execution_state.decision,'BUY');
+ assert.equal(evidence.latest.decision,'WAIT');assert.equal(evidence.execution_state,null);
  assert.equal(evidence.execution_authority.valid_until_ms,initial.at+ENTRY_SIGNAL_POLICY.maxAgeMs);
 });
 
-test('repeated preparation checks never renew the initial 30-second approval window',()=>{
+test('repeated preparation checks never renew the initial 15-second approval window',()=>{
  const initial=seed();
- for(const offset of [8000,18000,29999]){
-  const check=revalidateEntry(initial,pause(AT+offset));assert.equal(check.allowed,true);
-  assert.equal(check.authority.valid_until_ms,AT+30000);
+ for(const offset of [5000,10000,14999]){
+  const check=revalidateEntry(initial,scenario({at:AT+offset}));assert.equal(check.allowed,true);
+  assert.equal(check.authority.valid_until_ms,AT+15000);
  }
- const check=revalidateEntry(initial,pause(AT+30000));assert.equal(check.allowed,false);assert.equal(check.reason,'ENTRY_SIGNAL_EXPIRED');
- assert.equal(revalidateEntry(initial,scenario({at:AT+30001})).reason,'ENTRY_SIGNAL_EXPIRED','fresh market BUY cannot revive an expired original signal');
+ const check=revalidateEntry(initial,scenario({at:AT+15000}));assert.equal(check.allowed,false);assert.equal(check.reason,'ENTRY_SIGNAL_EXPIRED');
+ assert.equal(revalidateEntry(initial,scenario({at:AT+15001})).reason,'ENTRY_SIGNAL_EXPIRED','fresh market BUY cannot revive an expired original signal');
 });
 
 test('unapproved, future and malformed original decisions cannot obtain retained execution authority',()=>{
@@ -71,7 +71,7 @@ test('expired queued signals retire before any account, quote or authority RPC',
 });
 
 async function dispatchPausedEntry({retry=false}={}){
- const h=await evaluateModule(),at=Date.now(),initial=classifyMarket(scenario({at:at-8000})),market=pause(at),
+ const h=await evaluateModule(),at=Date.now(),initial=classifyMarket(scenario({at:at-8000})),market=scenario({at}),
   quote=executableQuote({at,price:market.price,depth:40000,askDepth:10000}),actions=[],submitted=[];
  const {db,writes}=mockDb(q=>{
   if(q.rpc==='deterministic_reserve_entry_slot')return {data:{reserved:true,id:'reservation'}};
@@ -102,11 +102,11 @@ async function dispatchPausedEntry({retry=false}={}){
  return {submitted,actions,writes};
 }
 
-test('the complete entry path sends the retained execution state to SQL and reaches exactly one create_order',async()=>{
+test('the complete entry path requires a current BUY at final revalidation',async()=>{
  const {submitted,actions,writes}=await dispatchPausedEntry();
  assert.equal(submitted.length,1);assert.equal(submitted[0].decision,'BUY');
- assert.equal(submitted[0].entry_authority.mode,'RETAINED_INITIAL_BUY');
- assert.equal(submitted[0].entry_authority.market_decision,'WAIT');
+ assert.equal(submitted[0].entry_authority.mode,'CURRENT_BUY');
+ assert.equal(submitted[0].entry_authority.market_decision,'BUY');
  assert.equal(actions.filter(x=>x==='create_order').length,1);assert.ok(actions.includes('get_order'));
  assert.ok(writes.some(x=>x.table==='v11_long_regime_orders'&&x.op==='insert'));
 });
@@ -120,5 +120,5 @@ test('a confirmed zero-fill IOC retries the real planner remaining quantity thro
  assert.equal(intents[1].patch.request_payload.entry_ioc.filled_before,0);
  assert.equal(intents[1].patch.request_payload.retry_of_order_id,'intent');
  assert.deepEqual(actions.filter(x=>['create_order','get_order'].includes(x)),['create_order','get_order','create_order','get_order']);
- assert.ok(submitted.every(x=>x.entry_authority.mode==='RETAINED_INITIAL_BUY'));
+ assert.ok(submitted.every(x=>x.entry_authority.mode==='CURRENT_BUY'));
 });
