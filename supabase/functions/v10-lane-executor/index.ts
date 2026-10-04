@@ -1145,7 +1145,7 @@ async function readLossLoopHistory(db,now=Date.now()){
   .select('symbol,state,closed_at,exit_reason,realized_pnl_usdt,entry_price,peak_price,metadata')
   .eq('state','CLOSED').gte('closed_at',since).order('closed_at',{ascending:false}).limit(80);
  if(r.error)throw Error('LOSS_LOOP_HISTORY_UNAVAILABLE');
- return r.data??[];
+ return Array.isArray(r.data)?r.data:[];
 }
 async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComplete=true){
  const ctl=await control(db);if(!ctl.enabled)return {entered:false,reason:'DETERMINISTIC_ENTRY_PAUSED'};
