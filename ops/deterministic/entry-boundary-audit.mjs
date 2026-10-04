@@ -12,7 +12,7 @@ const snap=await sql("select now() observed_at,public.v17_account_recovery_state
 const oldIds=[['ATHUSDT','tb-v11e-96aa6af9cdc5483e9b2fe4d0'],['WLDUSDT','tb-v11e-758216c88025465d9c4f56a1'],['BERAUSDT','tb-v11e-c5befe98981045b8897ba288'],['OPUSDT','tb-v11e-139458733f1b4b95ab5dbd0e']];
 const venue=[];for(const [market,identifier] of oldIds)venue.push({market,identifier,proof:await gateway({action:'v18_entry_never_placed_proof',market,identifier})});
 const [portfolio,openOrders]=await Promise.all([gateway({action:'p10_portfolio'}),gateway({action:'v18_open_orders'})]);
-const gtcOrder=await gateway({action:'get_order',market:'GTCUSDT',exchange_order_id:'4634347872'});
+const gtcOrder=await gateway({action:'get_order',market:'GTCUSDT',identifier:'manual-read-4634347872',exchange_order_id:'4634347872'});
 console.log(JSON.stringify({gtc_order_http_status:gtcOrder.http_status,gtc_order:gtcOrder.result,
  current_positions:(portfolio.result?.positions??[]).map(p=>({market:p.market,side:p.side,quantity:p.quantity,entry_price:p.average_entry_price??p.entry_price,leverage:p.leverage}))}));
 // Reproduce the gateway's watch reads without persisting credentials or headers.
