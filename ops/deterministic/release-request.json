@@ -6,7 +6,7 @@
   },
   "gateway_commit": "1bd5e3bf76bfb55f9df749818e325f91b5c6ab02",
   "gateway_commits": {
-    "trading-booooo": "79165cd39f9c8a4dbfeef7bd24e6db27b859c441",
+    "trading-booooo": "c56db61e33f8498465bef399772ddbe970934b57",
     "trading-booooo-sanbital-gateway": "1bd5e3bf76bfb55f9df749818e325f91b5c6ab02"
   },
   "runtime_region": "ap-northeast-1",
@@ -185,5 +185,25 @@
     "sql_definitions_unchanged": true,
     "target_margin_usdt": 150,
     "minimum_funded_slot_usdt": 152.121375
+  },
+  "production_execution_quote_bridge_repair": {
+    "gateway_source_commit": "c56db61e33f8498465bef399772ddbe970934b57",
+    "gateway_workflow_run": 37194107916,
+    "readiness_verified_at_utc": "2026-10-04T10:04:40.340Z",
+    "readiness_http_status": 200,
+    "readiness_ok": true,
+    "gateway_tests_passed": 159,
+    "deterministic_tests_passed": 78,
+    "max_quote_readiness_wait_ms": 250,
+    "original_book_freshness_ms": 1500,
+    "watched_books": 22,
+    "synced_books": 22,
+    "fresh_books": 22,
+    "native_stop_enabled": true,
+    "hard_stop_pct": 0.025,
+    "target_margin_usdt": 150,
+    "leverage": 3,
+    "sql_definitions_unchanged": true,
+    "strategy_contract_unchanged": true
   }
 }
