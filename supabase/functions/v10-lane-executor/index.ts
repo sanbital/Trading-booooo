@@ -1098,7 +1098,7 @@ async function openBull(db,s,openPositions,manual=null,attempt={},managementFail
    const currentQuote=await gw({action:'quote',market:s.symbol},2000),plan=no===1?sizeEntry(Number(currentQuote.best_ask),filters.quantityStep,filters):planAggressiveIocRetry({quote:currentQuote,quantityStep:filters.quantityStep,priceTick:filters.priceTick,targetQuantity:targetQuantity,filledQuantity:filled,leverage:LEV,maxTotalMarginUsdt:MAX_ORDER_MARGIN_USDT,currentPositionNotionalUsdt:position?N(position.original_quantity)*N(position.entry_price):0,minNotionalUsdt:filters.minNotionalUsdt,minQuantity:filters.minQuantity});
    if(no>1&&!plan.ok)break;
    if(no===1)targetQuantity=plan.amount;
-   const quantity=no===1?plan.amount:plan.quantity,limitPrice=plan.limitPrice;
+   const quantity=no===1?plan.amount:plan.remainingQuantity,limitPrice=plan.limitPrice;
    const payload={price_tick:filters.priceTick,quantity_step:filters.quantityStep,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION},deterministic:{version:ENGINE,seed:seed.decision},entry_latency:timing,
     ...(firstIntent?{retry_of_order_id:firstIntent}:{}),entry_ioc:{attempt:no,target_quantity:targetQuantity,filled_before:filled}};
    await requireEntryAuthority(db,s,{refresh:true});const market=await entryReadTiming(timing,'market_revalidation',()=>currentMarket(db,s.symbol,{return24h:seed.return24h,rank:seed.rank}));

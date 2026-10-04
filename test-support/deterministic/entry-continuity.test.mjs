@@ -70,7 +70,7 @@ test('expired queued signals retire before any account, quote or authority RPC',
  assert.equal(result.reason,'ENTRY_SIGNAL_EXPIRED');assert.equal(writes.length,0);
 });
 
-test('the complete entry path sends the retained execution state to SQL and reaches exactly one create_order',async()=>{
+async function dispatchPausedEntry({retry=false}={}){
  const h=await evaluateModule(),at=Date.now(),initial=classifyMarket(scenario({at:at-8000})),market=pause(at),
   quote=executableQuote({at,price:market.price,depth:40000,askDepth:10000}),actions=[],submitted=[];
  const {db,writes}=mockDb(q=>{
@@ -83,9 +83,9 @@ test('the complete entry path sends the retained execution state to SQL and reac
  h.ctx.requireEntryAuthority=async()=>({allowed:true});h.ctx.requireLeaderEntryControls=async()=>{};h.ctx.verifyExecutionLease=async()=>{};
  h.ctx.withAccountMutation=async(db,operation)=>operation();h.ctx.readOpsPair=async()=>pair;h.ctx.opsControls=async()=>({});
  h.ctx.currentMarket=async()=>market;h.ctx.gatewayTakerFeeRate=()=>.0005;h.ctx.supportedFuturesMode=()=>true;
- h.ctx.symbolFilters=()=>({quantityStep:.1});h.ctx.sizeEntry=()=>({amount:4.5,limitPrice:quote.best_ask,sizedMargin:150});
+ h.ctx.symbolFilters=()=>({quantityStep:.1,priceTick:.01,minQuantity:.1,minNotionalUsdt:5});h.ctx.sizeEntry=()=>({amount:4.5,limitPrice:quote.best_ask,sizedMargin:150});
  h.ctx.decideEntryWith=()=>({allowed:true});h.ctx.persistDecisionRisk=async()=>{};
- h.ctx.plannedEntryRiskView=()=>({allowed:true,pair});h.ctx.planAggressiveIocRetry=()=>({ok:false});h.ctx.settleKnownEntry=async()=>null;
+ h.ctx.plannedEntryRiskView=()=>({allowed:true,pair});if(!retry)h.ctx.planAggressiveIocRetry=()=>({ok:false});h.ctx.settleKnownEntry=async()=>null;
  const raw={order:{exchange_order_id:'123',market:'TESTUSDT',side:'BUY',reduce_only:false,status:'EXPIRED',
   executed_volume:0,requested_volume:4.5,average_price:0,raw:{positionSide:'BOTH',status:'EXPIRED',origQty:'4.5',executedQty:'0'}}};
  h.ctx.opsGateway=()=>async(command,timeout,options)=>{
@@ -99,9 +99,26 @@ test('the complete entry path sends the retained execution state to SQL and reac
  const signal={id:'signal',symbol:'TESTUSDT',features:{sizingContractVersion:h.value('SLOT_SIZING_CONTRACT.version'),
   targetMarginUsdt:150,leverage:3,exitPolicy:{stopPct:.025},deterministic:{version:initial.version,decision:initial}}};
  await h.ctx.openBull(db,signal,[],[],{});
+ return {submitted,actions,writes};
+}
+
+test('the complete entry path sends the retained execution state to SQL and reaches exactly one create_order',async()=>{
+ const {submitted,actions,writes}=await dispatchPausedEntry();
  assert.equal(submitted.length,1);assert.equal(submitted[0].decision,'BUY');
  assert.equal(submitted[0].entry_authority.mode,'RETAINED_INITIAL_BUY');
  assert.equal(submitted[0].entry_authority.market_decision,'WAIT');
  assert.equal(actions.filter(x=>x==='create_order').length,1);assert.ok(actions.includes('get_order'));
  assert.ok(writes.some(x=>x.table==='v11_long_regime_orders'&&x.op==='insert'));
+});
+
+test('a confirmed zero-fill IOC retries the real planner remaining quantity through the SQL boundary',async()=>{
+ const {submitted,actions,writes}=await dispatchPausedEntry({retry:true});
+ const intents=writes.filter(x=>x.table==='v11_long_regime_orders'&&x.op==='insert');
+ assert.equal(intents.length,2);assert.equal(submitted.length,2);
+ assert.deepEqual(intents.map(x=>x.patch.requested_quantity),[4.5,4.5]);
+ assert.ok(intents.every(x=>Number.isFinite(x.patch.requested_quantity)&&x.patch.requested_quantity>0));
+ assert.equal(intents[1].patch.request_payload.entry_ioc.filled_before,0);
+ assert.equal(intents[1].patch.request_payload.retry_of_order_id,'intent');
+ assert.deepEqual(actions.filter(x=>['create_order','get_order'].includes(x)),['create_order','get_order','create_order','get_order']);
+ assert.ok(submitted.every(x=>x.entry_authority.mode==='RETAINED_INITIAL_BUY'));
 });

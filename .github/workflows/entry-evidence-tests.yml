@@ -49,12 +49,14 @@ jobs:
             --import-map test-support/v19-ops/deno-import-map.json \
             supabase/functions/v10-lane-executor/index.ts \
             supabase/functions/v10-lane-signal-generator/index.ts
-      - name: Build exact gateway image and verify imports without networking or credentials
+      - name: Build exact gateway image and verify imports in an isolated runtime
         shell: bash
         run: |
           set -euo pipefail
           node gateway/stage-engine.mjs
-          docker build --network=none --tag gateway-entry-evidence-ci gateway
+          # The locked ws dependency must be installed while building. Runtime
+          # import verification below still has no network or trading credentials.
+          docker build --tag gateway-entry-evidence-ci gateway
           docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges \
             -e SCHEDULER_ENABLED=false -e V17_SHADOW_ENABLED=false \
