@@ -1,0 +1,50 @@
+{
+  "project": "etaajwpernzrcdrifdnw",
+  "function": "v10-lane-executor",
+  "version": 203,
+  "baseline_version": 202,
+  "bundle_sha256": "06a1dbc649eba0166848360c9fbf275ea5c1eebd2381a501c86658194bac27c4",
+  "source_commit": "df0687e8dd0cbb3d5abe22e6999ab1ce8f18dbf7",
+  "updated_at": "2026-10-04T10:21:54.704Z",
+  "changed_files": [
+    "functions/v10-lane-executor/index.ts",
+    "functions/_shared/deterministic/market-state.mjs",
+    "functions/_shared/deterministic/entry-evidence.mjs"
+  ],
+  "file_count": 35,
+  "readback_exact": true,
+  "verification": {
+    "deterministic": 88,
+    "writer_fences": 39,
+    "native_stop_and_settlement": 70
+  },
+  "policy": {
+    "version": "INITIAL_BUY_CONTINUATION_1",
+    "approval_max_age_ms": 30000
+  },
+  "source_scope": "changed_files only; remaining deployed bundle retained from v202",
+  "analysis_lease_cleanup": {
+    "introduced_in_version": 201,
+    "retained_in_version": 203,
+    "attempts": 3,
+    "per_attempt_timeout_ms": 700,
+    "lease_ttl_seconds": 150,
+    "final_failure": "cleanup_warning"
+  },
+  "live_account_check": {
+    "observed_at_utc": "2026-10-04T10:34:15.857Z",
+    "live_enabled": true,
+    "circuit_open": false,
+    "last_error": null,
+    "entry_block_reason": "NO_DETERMINISTIC_BUY"
+  },
+  "pre_deployment_fill": {
+    "symbol": "AKTUSDT",
+    "exchange_order_id": "908375043",
+    "filled_at_utc": "2026-10-04T10:21:46.535Z",
+    "predates_v203": true,
+    "subsequently_settled": true,
+    "position_closed_at_utc": "2026-10-04T10:28:12.324Z",
+    "does_not_prove_retained_initial_buy_execution": true
+  }
+}

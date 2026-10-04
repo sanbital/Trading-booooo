@@ -53,9 +53,11 @@ test('post-fill capacity proof has a separate read-only budget, never a write es
 
 test('every deterministic order attempt gets a current market and executable-book validation',async()=>{
   const src=await read('supabase/functions/v10-lane-executor/index.ts');
-  assert.ok(src.includes('const validated=await validateOrder(db,s,initialQuote)'));
+  assert.ok(src.includes('const validated=validatePreparedOrder(s,initialMarket,initialQuote)'));
   assert.ok(src.includes("if(!validated.allowed)return {entered:false,reason:validated.reason}"));
-  assert.ok(src.includes('check=await validateOrder(db,s,quote)'));
+  assert.ok(src.includes('check=validatePreparedOrder(s,market,quote)'));
+  assert.ok(src.includes("market=await entryReadTiming(timing,'market_revalidation',()=>currentMarket(db,s.symbol"));
   assert.ok(src.includes('book=normalizeEntryBook(quote,1500,Date.now())'));
   assert.ok(src.includes("if(!check.allowed||!book.health.bookHealthy)return {allowed:false"));
+  assert.ok(src.includes('deterministic:check.execution_state??check.latest'));
 });

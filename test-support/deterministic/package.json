@@ -1,1 +1,1 @@
-{"name":"trading-deterministic-verification","private":true,"type":"module","scripts":{"test":"node --test ./*.test.mjs"},"devDependencies":{"@electric-sql/pglite":"0.3.14","@types/node":"22.18.6","acorn":"8.15.0"}}
+{"name":"trading-deterministic-verification","private":true,"type":"module","scripts":{"test":"node --test ./*.test.mjs"},"devDependencies":{"@electric-sql/pglite":"0.3.14","@supabase/supabase-js":"2.57.4","@types/node":"22.18.6","acorn":"8.15.0"}}

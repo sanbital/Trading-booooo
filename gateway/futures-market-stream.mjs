@@ -1,5 +1,5 @@
 // Book integrity has one committed implementation, also used by the 120s collector.
-import {Book,BOOK_STATE,normalizeSymbol,transportFresh} from './capture-book-core.mjs';
+import {Book,BOOK_STATE,normalizeSymbol,transportFresh,invalidateUnusableBook} from './capture-book-core.mjs';
 const failure=reason=>Object.assign(Error(reason),{code:reason,status:503});
 
 export function createExecutionMarkets({fetchDepth,now=Date.now}={}){
@@ -56,6 +56,9 @@ export function createExecutionMarkets({fetchDepth,now=Date.now}={}){
    if(!m.book_complete||t-s.book.received>1500||t-s.book.at>1500){
     lastQuoteUnavailable={symbol,at_ms:t,reason:m.reason??'EXECUTION_FRESHNESS_BOUNDARY',state:s.book.state,
      event_age_ms:t-s.book.at,received_age_ms:t-s.book.received,recovery_in_flight:!!s.flight};
+    // A continuous update ID does not prove a usable finite book. Retire the
+    // crossed/empty book so quoteReady's existing bounded recovery can resync it.
+    invalidateUnusableBook(s.book,m,t);
     throw failure('EXECUTION_STREAM_BOOK_UNAVAILABLE');
    }
    const bids=[...s.book.bids].sort((a,b)=>b[0]-a[0]).map(([price,size])=>({price,size}));

@@ -36,6 +36,8 @@ jobs:
         with:
           deno-version: v2.x
       - run: npm ci --prefix test-support/deterministic
+      - name: Stage shared engines before gateway import verification
+        run: node gateway/stage-engine.mjs
       - name: Current deterministic entry, submit fence, settlement and gateway tests
         run: |
           npm test --prefix test-support/deterministic

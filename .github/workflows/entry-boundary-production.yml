@@ -8,7 +8,7 @@ on:
       operation:
         type: choice
         required: true
-        options: [audit, deploy-gateway, stream-audit, attribute-manual-gtc]
+        options: [audit, deploy-gateway, stream-audit, attribute-manual-gtc, resume-after-entry-repair]
 permissions:
   contents: read
 concurrency:
@@ -54,8 +54,15 @@ jobs:
           const r=await fetch('https://trading-booooo.fly.dev/health');const h=await r.json();
           if(!r.ok||h.deployment_commit!==process.env.GITHUB_SHA||h.build!=='2026-10-04-stream-reads-2'||h.order_writer.required!==true||h.scheduler_enabled!==false||!h.futures_rest_budget||h.futures_stream_reads?.enabled!==true)throw Error('PRODUCTION_GATEWAY_MISMATCH');
           JS
+      - name: Restore automatic entry pause through existing independently reconciled endpoint
+        if: inputs.operation == 'resume-after-entry-repair'
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: node ops/execution-infra/resume-after-entry-repair.mjs
       - name: Audit exact orders and current venue evidence without orders
-        if: inputs.operation == 'audit' || inputs.operation == 'deploy-gateway'
+        if: inputs.operation == 'audit' || inputs.operation == 'deploy-gateway' || inputs.operation == 'resume-after-entry-repair'
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
