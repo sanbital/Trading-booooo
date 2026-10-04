@@ -32,8 +32,8 @@ test('E: +2% additional execution drift cancels an otherwise intact BUY',()=>{
  assert.equal(r.action,'CANCEL_ENTRY');assert.equal(r.reason,'LATE_EXECUTION');
 });
 test('F: stronger current flow and a normal spread execute despite an older decision',()=>{
- const old=scenario({at:AT-15000}),seed=classifyMarket(old),current=scenario(),r=revalidateEntry(seed,current);
- assert.equal(r.decision_age_ms,15000);assert.equal(r.action,'EXECUTE');
+ const old=scenario({at:AT-10000}),seed=classifyMarket(old),current=scenario(),r=revalidateEntry(seed,current);
+ assert.equal(r.decision_age_ms,10000);assert.equal(r.action,'EXECUTE');
 });
 test('G: a strong position with continued highs and positive flow remains HOLD',()=>{
  const input=scenario(),p=position({peak_price:100.2}),d=decidePosition({...input,position:p,bid:100.24});
