@@ -2,6 +2,22 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import {evaluateModule,mockDb} from './harness.mjs';
 const flat=()=>({positions:[],manual:[],orders:[],quarantines:[],match:{ok:true,safe:[],issues:[],accounting:[]},pf:{observation:{requested_at_ms:Date.now()}}});
 const short=(h,db)=>{h.value('shortWriterModes').set(db,true);};
+test('an aborted entry read preserves its dependency stage and completed timing',async()=>{
+ const h=await evaluateModule(),timing={},failure=Object.assign(new Error('The signal has been aborted'),{name:'AbortError'});
+ await assert.rejects(h.ctx.entryReadTiming(timing,'account_mode',async()=>{throw failure;}),e=>e===failure&&e.entryStage==='account_mode');
+ assert.ok(timing.account_mode_started>0);assert.ok(timing.account_mode_completed>=timing.account_mode_started);
+});
+test('an unsent aborted candidate retires with data evidence and never creates an order',async()=>{
+ const row={id:'signal',symbol:'TESTUSDT',features:{deterministic:{version:'DETERMINISTIC_DYNAMIC_STATE_1'}}};
+ const {db,writes}=mockDb(q=>q.op==='update'&&q.patch.status==='CLAIMED'?{data:row}:q.table==='v11_long_regime_signals'&&q.op==='select'?{data:[row]}:{data:true}),h=await evaluateModule();
+ h.ctx.control=async()=>({enabled:true});h.ctx.withAccountMutation=async(db,fn)=>fn();h.ctx.admissionCapacity=()=>({capacity:1});
+ h.value('cycleBudgets').set(db,{remaining:()=>90000});
+ h.ctx.openBull=async(db,row,positions,manual,attempt)=>{attempt.evidence={timing:{account_mode_started:1,account_mode_completed:2}};throw Object.assign(new Error('The signal has been aborted'),{name:'AbortError',entryStage:'account_mode',gatewayAction:'futures_position_mode',transportStartedAt:1,transportFailedAt:2,transportTimeoutMs:2000});};
+ await h.ctx.runEntryQueue(db,flat(),null);
+ const rejected=writes.find(w=>w.patch.status==='REJECTED');assert.ok(rejected);assert.equal(rejected.patch.features.entryExecution.category,'DATA_UNAVAILABLE');
+ assert.equal(rejected.patch.features.entryExecution.failure.stage,'account_mode');assert.equal(rejected.patch.features.entryExecution.failure.gateway_action,'futures_position_mode');
+ assert.equal(rejected.patch.features.entryExecution.failure.transport_timeout_ms,2000);assert.equal(writes.some(w=>w.table==='v11_long_regime_orders'),false);
+});
 test('healthy flat cycle takes no recovery writer and keeps a fresh final account read',async()=>{
  const h=await evaluateModule(),db={},pair=flat();short(h,db);let writers=0,reads=0,entries=0,telemetry=0;
  h.ctx.withAccountMutation=async()=>{writers++;assert.fail('idle recovery acquired a writer');};

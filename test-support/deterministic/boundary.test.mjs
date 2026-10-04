@@ -4,7 +4,8 @@ import {scenario} from './fixtures.mjs';
 import {classifyMarket,revalidateEntry} from '../../supabase/functions/_shared/deterministic/market-state.mjs';
 import {entryEvidence,cancellationCategory} from '../../supabase/functions/_shared/deterministic/entry-evidence.mjs';
 test('exchange dependency failures remain distinct from healthy market cancellations',()=>{
- for(const reason of ['GW_429:Too many requests','GW_418:IP banned','GW_503:exchange unavailable','GW_504:timed out'])assert.equal(cancellationCategory(reason,{decision:'WAIT',gates:{data:true}}),'DATA_UNAVAILABLE');
+ for(const reason of ['GW_429:Too many requests','GW_418:IP banned','GW_503:exchange unavailable','GW_504:timed out','The signal has been aborted','GW_400:This operation was aborted'])assert.equal(cancellationCategory(reason,{decision:'WAIT',gates:{data:true}}),'DATA_UNAVAILABLE');
+ assert.equal(cancellationCategory('ANALYSIS_HEARTBEAT_FAILED'),'AUTHORITY_OR_STATE');
  assert.equal(cancellationCategory('GW_503:WRITER_FENCED'),'AUTHORITY_OR_STATE');
  assert.equal(cancellationCategory('CURRENT_MARKET_THESIS_CANCELLED',{decision:'WAIT',gates:{data:true}}),'MARKET_CANCEL');
 });

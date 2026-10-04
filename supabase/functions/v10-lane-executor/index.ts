@@ -495,8 +495,10 @@ function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
     }
     let coalescer=analysisGatewayReads.get(db);
     if(!coalescer){coalescer=createAnalysisReadCoalescer();analysisGatewayReads.set(db,coalescer);}
-    const result=await coalescer(outgoing,()=>exchangeGateway(outgoing,Math.max(1,Math.min(timeout,left,write&&cmd.action!=="cancel_order"?12000:2500))),
-      {kind:shortAccountWriter(db)?currentExecutionContext(db)?.kind:null});
+    let result;const transportStarted=Date.now(),transportTimeout=Math.max(1,Math.min(timeout,left,write&&cmd.action!=="cancel_order"?12000:2500));
+    try{result=await coalescer(outgoing,()=>exchangeGateway(outgoing,transportTimeout),
+      {kind:shortAccountWriter(db)?currentExecutionContext(db)?.kind:null});}
+    catch(error){throw Object.assign(error,{gatewayAction:cmd.action,transportStartedAt:transportStarted,transportFailedAt:Date.now(),transportTimeoutMs:transportTimeout});}
     await verifyExecutionLease(db,allowCycleBudgetExceeded);return result;
   };
 }
@@ -1061,17 +1063,18 @@ async function manageLeader(db,p,ctx={}){
  return {action:decision.action,reason:decision.reason,position:nativeStop?.position??write.data,nativeStop,state};
 }
 async function entryReadTiming(timing,stage,operation){
- timing[stage+'_started']=Date.now();try{return await operation();}finally{timing[stage+'_completed']=Date.now();}
+ timing[stage+'_started']=Date.now();try{return await operation();}catch(error){throw Object.assign(error,{entryStage:stage});}finally{timing[stage+'_completed']=Date.now();}
 }
 async function openBull(db,s,openPositions,manual=null,attempt={},managementFailures=[]){
  const executorStarted=s.features?.executionClaim?.claimed_at_ms??Date.now();
  const universeAuthority=await requireEntryAuthority(db,s,{refresh:true});await requireLeaderEntryControls(db);
  attempt.evidence=entryEvidence(s,{authority:universeAuthority,timing:{candidate_started:Date.now()}});
  const f=s.features,seed=f.deterministic,gw=opsGateway(db),start=Date.now(),timing={...seed.timing,executor_started:executorStarted,candidate_started:start};
+ attempt.evidence.timing=timing;
  if(f.sizingContractVersion!==SLOT_SIZING_CONTRACT.version||Number(f.targetMarginUsdt)!==MARGIN||Number(f.leverage)!==LEV||Number(f.exitPolicy?.stopPct)!==POLICY.stopPct)throw Error('SIZING_OR_STOP_CONTRACT_CHANGED');
  let [pair,openOrders,info,fees,mode,controls,initialMarket]=await Promise.all([
   entryReadTiming(timing,'initial_account',()=>readOpsPair(db,gw,s.symbol)),entryReadTiming(timing,'initial_open_orders',()=>gw({action:'v18_open_orders'},2500)),
-  gw({action:'symbol_info',market:s.symbol},2500),gw({action:'fees',market:s.symbol},2500),gw({action:'futures_position_mode'},2000),opsControls(db),
+  entryReadTiming(timing,'symbol_filters',()=>gw({action:'symbol_info',market:s.symbol},2500)),entryReadTiming(timing,'account_fees',()=>gw({action:'fees',market:s.symbol},2500)),entryReadTiming(timing,'account_mode',()=>gw({action:'futures_position_mode'},2000)),opsControls(db),
   entryReadTiming(timing,'initial_market',()=>currentMarket(db,s.symbol,{return24h:seed.return24h,rank:seed.rank}))]);
  if(shortAccountWriter(db)&&!freshPortfolio(pair.pf)){pair=await readOpsPair(db,gw,s.symbol);openOrders=await gw({action:'v18_open_orders'},5000);}
  const fee=gatewayTakerFeeRate(fees,s.symbol);if(!Number.isFinite(fee)||fee>0.0005||!supportedFuturesMode(mode,Date.now(),5000))return {entered:false,reason:'ACCOUNT_FEE_OR_POSITION_MODE_UNVERIFIED'};
@@ -1146,7 +1149,10 @@ async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComp
  const claim=await withAccountMutation(db,()=>db.from('v11_long_regime_signals').update({status:'CLAIMED',features:{...row.features,executionClaim:claimContext},updated_at:new Date().toISOString()}).eq('id',row.id).eq('status','NEW').select('*').maybeSingle());if(claim.error)throw Error('SIGNAL_CLAIM_FAILED');if(!claim.data)return null;
   const attempt={dispatched:false};let result;
   try{result=await openBull(db,claim.data,pair.positions,manual,attempt,pair.managementFailures??[]);}
-  catch(e){if(classifyFailure(e).fatal||attempt.dispatched)throw e;const reason=String(e.message??e),rateLimited=/GW_(418|429)|BINANCE_(IP_BANNED|RATE_LIMITED|WEIGHT_BUDGET)|LOCAL_RATE_GUARD/.test(reason);result={entered:false,reason,releaseScope:rateLimited?RELEASE_SCOPE.ACCOUNT:RELEASE_SCOPE.SYMBOL};attempt.evidence??=entryEvidence(row,{authority:e.authority,reason:result.reason});}
+  catch(e){if(classifyFailure(e).fatal||attempt.dispatched)throw e;const context=currentExecutionContext(db),cause=context?.signal?.aborted?String(context.signal.reason?.message??context.signal.reason):null;
+   const reason=cause??String(e.message??e),rateLimited=/GW_(418|429)|BINANCE_(IP_BANNED|RATE_LIMITED|WEIGHT_BUDGET)|LOCAL_RATE_GUARD/.test(reason);result={entered:false,reason,releaseScope:rateLimited?RELEASE_SCOPE.ACCOUNT:RELEASE_SCOPE.SYMBOL};attempt.evidence??=entryEvidence(row,{authority:e.authority,reason:result.reason});
+   attempt.evidence.failure={name:e.name??'Error',message:String(e.message??e).slice(0,500),cause,stage:e.entryStage??null,gateway_action:e.gatewayAction??null,
+    transport_started_at_ms:e.transportStartedAt??null,transport_failed_at_ms:e.transportFailedAt??null,transport_timeout_ms:e.transportTimeoutMs??null,at_ms:Date.now()};}
   if(!result.entered){
    const reason=result.reason??'ENTRY_CANCELLED';const evidence={...attempt.evidence,reason,category:cancellationCategory(reason,attempt.evidence?.latest),cancelled_at_ms:Date.now()};
    const retire=await withAccountMutation(db,()=>db.from('v11_long_regime_signals').update({status:'REJECTED',reject_reason:reason.slice(0,500),features:{...row.features,entryExecution:evidence},updated_at:new Date().toISOString()}).eq('id',row.id).eq('status','CLAIMED'));if(retire.error)throw Error('NO_ORDER_TERMINAL_WRITE');
