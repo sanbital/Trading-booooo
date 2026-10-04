@@ -14,6 +14,7 @@ on:
       - 'tests/deterministic-platform-health.test.mjs'
       - 'tests/deterministic-runtime-proof.test.mjs'
       - 'tests/deterministic-quote-repair.test.mjs'
+      - 'tests/deterministic-short-squeeze.test.mjs'
       - '.github/workflows/deterministic-platform-health.yml'
       - '.github/workflows/deterministic-runtime-proof.yml'
       - '.github/workflows/deterministic-quote-repair.yml'
@@ -40,6 +41,7 @@ jobs:
           node --test tests/deterministic-platform-health.test.mjs
           node --test tests/deterministic-runtime-proof.test.mjs
           node --test tests/deterministic-quote-repair.test.mjs
+          node --test tests/deterministic-short-squeeze.test.mjs
           node --test ops/dynamic-flow/retired-production-suites.test.mjs \
             tests/leader20-generator.test.mjs tests/signal-generator-production-baseline.test.mjs \
             tests/leader20-multislot-continuity-hotfix.test.mjs
