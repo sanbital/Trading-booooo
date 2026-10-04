@@ -1,3 +1,11 @@
+## 2026-10-04 00:14 UTC — concurrent work confirmed, final repair not applied
+
+The operator confirmed another task is also changing this repository and production. No migration, service deployment, source metadata update or resume has been performed by this repair task. Production mutation ownership must be coordinated before using the protected repair workflow.
+
+Executor is now **v195**, bundle SHA256 `618ffbcc6a0d7b5c05c312aa83da8a1e5859f7436083174b045d6882f536afc0`; all34 normalized reachable files match `abf8d0b59054423f16a8401582be6af2f6faaf7b`. Its change adds independent read/intent timings; trading policy is unchanged. Current control metadata still points at prior v194 source `bdd47f4a8eb12b383ee72e4ec85bf957a7c7612b`, so ordinary resume proof must fail until actual service identity is attested. The reviewed repair admits that exact prior metadata only after proving current v195 bytes and signed account truth, then records current source while still paused. Old v194 is not a current deployment claim.
+
+At00:10:49 UTC pause remained true, OP generation190 circuit remained open, and actual submit MD5 still `50bfd0b4738d9fc70e68f1758ee9f564` (NULL persistence bug). Proposed migration20261004000400 remains unapplied. Preserve entry pause until the coordinated production owner applies the reviewed repair, completes independent paused recovery and all resume gates. This is a blocked handoff state, not completed cutover or fill verification.
+
 ## 2026-10-04 00:05 UTC — current boundary integrated, repair still pending
 
 Production changed during preparation: executor **v194** (bundle SHA256 `d9d96af7c877458ef571c496863e7c640ed7800428b470b01a1dd25472e495b1`) matches all 34 normalized reachable files of `bdd47f4a8eb12b383ee72e4ec85bf957a7c7612b`. Generator remains **v53**, pinned to `5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4`. Paris gateway health reports `d3f9bffd00153af2fd9a5d9f4cc29f146a2b3f0c`, writer required, scheduler off; Tokyo remains the existing external clock. These concurrent changes were observed, not deployed by this repair runner.

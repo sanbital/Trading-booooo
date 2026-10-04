@@ -18,12 +18,12 @@ test('latency deployment pins executor separately and refuses unrelated service 
  assert.throws(()=>serviceIdentity(request,'f'.repeat(40)),/UNREVIEWED_SERVICE_IDENTITY/);
  assert.throws(()=>serviceIdentity({...request,executor_latency_repair:{...r,expected_versions:{'v10-lane-executor':194}}},r.source_commit),/UNREVIEWED_SERVICE_IDENTITY/);
 });
-test('already deployed boundary identity pins only observed executor 194 and original generator 53',()=>{
+test('already deployed boundary identity pins only observed executor 195 and original generator 53',()=>{
  const request=JSON.parse(fs.readFileSync(new URL('../ops/deterministic/release-request.json',import.meta.url))),b=request.production_entry_boundary,identity=serviceIdentity(request,b.source_commit);
- assert.deepEqual(identity.versions,{'v10-lane-executor':194,'v10-lane-signal-generator':53});
- assert.equal(identity.sources['v10-lane-executor'],'bdd47f4a8eb12b383ee72e4ec85bf957a7c7612b');
+ assert.deepEqual(identity.versions,{'v10-lane-executor':195,'v10-lane-signal-generator':53});
+ assert.equal(identity.sources['v10-lane-executor'],'abf8d0b59054423f16a8401582be6af2f6faaf7b');
  assert.equal(identity.sources['v10-lane-signal-generator'],request.staged_source_commit);
- for(const change of [{source_commit:'f'.repeat(40)},{expected_versions:{...b.expected_versions,'v10-lane-executor':195}},{baseline_source_commit:'f'.repeat(40)}]){
+ for(const change of [{source_commit:'f'.repeat(40)},{expected_versions:{...b.expected_versions,'v10-lane-executor':194}},{baseline_source_commit:'f'.repeat(40)}]){
   const drift={...request,production_entry_boundary:{...b,...change}};
   assert.throws(()=>serviceIdentity(drift,drift.production_entry_boundary.source_commit),/UNREVIEWED_SERVICE_IDENTITY/);
  }

@@ -269,10 +269,10 @@ async function repairLatency(){
 }
 async function repairSubmitProof(){
  const repair=request.submit_proof_repair;
- if(!repair||repair.expected_submit_md5!=='50bfd0b4738d9fc70e68f1758ee9f564'||repair.generation!==190||
+ if(!repair||repair.expected_submit_md5!=='50bfd0b4738d9fc70e68f1758ee9f564'||repair.previous_source_commit!=='bdd47f4a8eb12b383ee72e4ec85bf957a7c7612b'||repair.generation!==190||
  repair.incident_id!=='b28c890b-0191-49d9-a2aa-fe826cf6f708'||repair.order_id!=='ad65e821-1ce1-482e-b8fc-615ebb3d8c7f')throw Error('SUBMIT_PROOF_EXACT_INCIDENT_REQUIRED');
  const before=await value(stateSQL),ctl=await value('select to_jsonb(c) evidence from deterministic_control c where singleton'),services=serviceIdentity(request,request.production_entry_boundary?.source_commit),needsRecovery=before.runtime.circuit_open===true;
- if(!ctl.enabled||ctl.generation!==2||![sourceSha,services.sourceCommit].includes(ctl.source_commit)||!before.settings.pause_new_entries||
+ if(!ctl.enabled||ctl.generation!==2||![sourceSha,repair.previous_source_commit,services.sourceCommit].includes(ctl.source_commit)||!before.settings.pause_new_entries||
  before.runtime.incident_id!==repair.incident_id||before.runtime.incident_generation!==repair.generation||
  before.runtime.incident_kind!=='KNOWN_ORDER_PENDING_RECONCILIATION'||(!needsRecovery&&!before.runtime.incident_resolved_at)||before.runtime.protection_health!=='FLAT'||before.orders.length||before.positions.some(p=>p.state==='OPEN')||
  before.gpt.mode!=='OFF'||before.batch.enabled||before.settings.emergency_liquidation||before.settings.manual_intervention_required||before.settings.withdrawal_mode||before.settings.scalp_kill_switch||before.settings.pause_lock_reason)throw Error('SUBMIT_PROOF_PAUSED_FLAT_BASELINE_REQUIRED');
@@ -337,7 +337,7 @@ async function repairSubmitProof(){
  await query(`begin;set local lock_timeout='750ms';
  lock table deterministic_control,trading_settings,v11_long_regime_runtime,v18_ops_incidents,v11_long_regime_positions,v11_long_regime_orders in share row exclusive mode;
  do $$ begin
- if not exists(select 1 from deterministic_control where singleton and enabled and generation=2 and source_commit in ('${sourceSha}','${services.sourceCommit}'))
+ if not exists(select 1 from deterministic_control where singleton and enabled and generation=2 and source_commit in ('${sourceSha}','${repair.previous_source_commit}','${services.sourceCommit}'))
  or not exists(select 1 from trading_settings where id=1 and pause_new_entries and not manual_intervention_required and not emergency_liquidation)
  or not exists(select 1 from v11_long_regime_runtime where singleton and not circuit_open and protection_health='FLAT' and incident_id='${repair.incident_id}' and incident_generation=${repair.generation} and incident_resolved_at is not null)
  or exists(select 1 from v18_ops_incidents where exchange='binance_futures' and account_scope='futures' and resolved_at is null and status in ('OPEN','VERIFYING'))

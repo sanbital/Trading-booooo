@@ -819,6 +819,7 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
       request_payload:{...rp,...payload,quantity_step:step,entry_ioc_attempt:attemptNo,
         entry_ioc_max_attempts:IOC_RETRY_POLICY.maxAttempts,executor_patch:PATCH}}).select("*").single();
   if(oi.error)throw Error(`ORDER_INTENT:${oi.error.message}`);
+  payload.entry_latency.order_intent_completed=Date.now();
   try{
     await verifyExecutionLease(db);
     // Re-evaluate after durable intent/lease I/O. A slow database must not spend the
@@ -864,7 +865,7 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
     const msg=String(error?.message??error);await verifyExecutionLease(db);
     if(error?.submissionPhase==='PRE_SEND'&&error.exchangeSubmissionAttempted===false){
       attempt.dispatched=false;
-      const stopped=await db.from('v11_long_regime_orders').update({state:'REJECTED',reject_reason:msg,response_payload:{...oi.data.response_payload,notDispatched:true,submissionPhase:'PRE_SEND',exchangeSubmissionAttempted:false,entryEvidence:{...attempt.evidence,order_id:oi.data.id,reason:msg,category:cancellationCategory(msg)},writerEvidence:error.writerEvidence,writerValidation:error.writerValidation},updated_at:new Date().toISOString()}).eq('id',oi.data.id);
+      const stopped=await db.from('v11_long_regime_orders').update({state:'REJECTED',reject_reason:msg,response_payload:{...oi.data.response_payload,notDispatched:true,submissionPhase:'PRE_SEND',exchangeSubmissionAttempted:false,entryLatency:{...payload.entry_latency},entryEvidence:{...attempt.evidence,order_id:oi.data.id,reason:msg,category:cancellationCategory(msg)},writerEvidence:error.writerEvidence,writerValidation:error.writerValidation},updated_at:new Date().toISOString()}).eq('id',oi.data.id);
       if(stopped.error)throw Error('PRE_SEND_REFUSAL_WRITE');return {blocked:true,reason:msg,oi:oi.data};
     }
     await db.from("v11_long_regime_orders").update({state:"RECONCILIATION_FAILED",reject_reason:msg.slice(0,500),response_payload:{...oi.data.response_payload,entryEvidence:{...attempt.evidence,order_id:oi.data.id,phase:'RESULT_UNCERTAIN',reason:msg},writerEvidence:error.writerEvidence},
@@ -1056,12 +1057,19 @@ async function manageLeader(db,p,ctx={}){
  if(previous?.state!==decision.state||decision.action==='PROTECT')detachAudit(db,{symbol:p.symbol,position_id:p.id,kind:'POSITION',state:decision.state,decision:decision.action,evidence:decision,timing:{market_deterioration:decision.market_deterioration_at??null,state_change:state.state_changed_at,decision:decision.at}});
  return {action:decision.action,reason:decision.reason,position:nativeStop?.position??write.data,nativeStop,state};
 }
+async function entryReadTiming(timing,stage,operation){
+ timing[stage+'_started']=Date.now();try{return await operation();}finally{timing[stage+'_completed']=Date.now();}
+}
 async function openBull(db,s,openPositions,manual=null,attempt={},managementFailures=[]){
+ const executorStarted=s.features?.executionClaim?.claimed_at_ms??Date.now();
  const universeAuthority=await requireEntryAuthority(db,s,{refresh:true});await requireLeaderEntryControls(db);
  attempt.evidence=entryEvidence(s,{authority:universeAuthority,timing:{candidate_started:Date.now()}});
- const f=s.features,seed=f.deterministic,gw=opsGateway(db),start=Date.now(),timing={...seed.timing,candidate_started:start};
+ const f=s.features,seed=f.deterministic,gw=opsGateway(db),start=Date.now(),timing={...seed.timing,executor_started:executorStarted,candidate_started:start};
  if(f.sizingContractVersion!==SLOT_SIZING_CONTRACT.version||Number(f.targetMarginUsdt)!==MARGIN||Number(f.leverage)!==LEV||Number(f.exitPolicy?.stopPct)!==POLICY.stopPct)throw Error('SIZING_OR_STOP_CONTRACT_CHANGED');
- let [pair,openOrders,info,fees,mode,controls,initialMarket]=await Promise.all([readOpsPair(db,gw,s.symbol),gw({action:'v18_open_orders'},2500),gw({action:'symbol_info',market:s.symbol},2500),gw({action:'fees',market:s.symbol},2500),gw({action:'futures_position_mode'},2000),opsControls(db),currentMarket(db,s.symbol,{return24h:seed.return24h,rank:seed.rank})]);
+ let [pair,openOrders,info,fees,mode,controls,initialMarket]=await Promise.all([
+  entryReadTiming(timing,'initial_account',()=>readOpsPair(db,gw,s.symbol)),entryReadTiming(timing,'initial_open_orders',()=>gw({action:'v18_open_orders'},2500)),
+  gw({action:'symbol_info',market:s.symbol},2500),gw({action:'fees',market:s.symbol},2500),gw({action:'futures_position_mode'},2000),opsControls(db),
+  entryReadTiming(timing,'initial_market',()=>currentMarket(db,s.symbol,{return24h:seed.return24h,rank:seed.rank}))]);
  if(shortAccountWriter(db)&&!freshPortfolio(pair.pf)){pair=await readOpsPair(db,gw,s.symbol);openOrders=await gw({action:'v18_open_orders'},5000);}
  const fee=gatewayTakerFeeRate(fees,s.symbol);if(!Number.isFinite(fee)||fee>0.0005||!supportedFuturesMode(mode,Date.now(),5000))return {entered:false,reason:'ACCOUNT_FEE_OR_POSITION_MODE_UNVERIFIED'};
  timing.account_reads_completed=Date.now();
@@ -1085,11 +1093,12 @@ async function openBull(db,s,openPositions,manual=null,attempt={},managementFail
    const quantity=no===1?plan.amount:plan.quantity,limitPrice=plan.limitPrice;
    const payload={price_tick:filters.priceTick,quantity_step:filters.quantityStep,entry_execution_policy:{version:ENTRY_EXECUTION_POLICY_VERSION},deterministic:{version:ENGINE,seed:seed.decision},entry_latency:timing,
     ...(firstIntent?{retry_of_order_id:firstIntent}:{}),entry_ioc:{attempt:no,target_quantity:targetQuantity,filled_before:filled}};
-   await requireEntryAuthority(db,s,{refresh:true});const market=await currentMarket(db,s.symbol,{return24h:seed.return24h,rank:seed.rank});timing.market_revalidation_completed=Date.now();
+   await requireEntryAuthority(db,s,{refresh:true});const market=await entryReadTiming(timing,'market_revalidation',()=>currentMarket(db,s.symbol,{return24h:seed.return24h,rank:seed.rank}));
    const sent=await withAccountMutation(db,()=>dispatchEntryIocAttempt(db,s,gw,{attemptNo:no,quantity,limitPrice,step:filters.quantityStep,payload,attempt,
     authorize:async intent=>{
      await requireLeaderEntryControls(db);
-     const [fresh,orders,c,authority]=await Promise.all([readOpsPair(db,gw,s.symbol),gw({action:'v18_open_orders'},2500),opsControls(db),requireEntryAuthority(db,s)]);timing.final_account_reads_completed=Date.now();
+     const [fresh,orders,c,authority]=await Promise.all([entryReadTiming(timing,'final_account',()=>readOpsPair(db,gw,s.symbol)),
+      entryReadTiming(timing,'final_open_orders',()=>gw({action:'v18_open_orders'},2500)),opsControls(db),requireEntryAuthority(db,s)]);timing.final_account_reads_completed=Date.now();
      const scoped=plannedEntryRiskView(fresh,intent);
      if(!scoped.allowed)return {allowed:false,reason:scoped.reason};
      const risk=decideEntryWith(c,scoped.pair,s.symbol,orders,{proposedMargin:Math.max(0,quantity*limitPrice/LEV),cashBuffer:ENTRY_CASH_BUFFER_USDT,existingPositionId:position?.id??null,managementFailures});
