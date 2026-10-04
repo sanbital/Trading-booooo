@@ -1,3 +1,4 @@
+import {shortSqueezeSignal} from './squeeze.mjs';
 /** Production decision model. Pure: no providers, network, database or orders. */
 export const ENGINE = 'DETERMINISTIC_DYNAMIC_STATE_1';
 export const HORIZONS = Object.freeze([5,15,30,60,120]);
@@ -74,13 +75,17 @@ export function classifyMarket({facts,capture,profile,at,price=null,return24h=nu
  const volatility=v.atr_1m_14_normalized<=bands.atr_1m_14_normalized?.block;
  const gates={data:data.ok,calibrated:!!calibrated,technical,execution:exec,volatility,market:!shock,structure:structural!=='WEAK',exhaustion:exhaustion!=='BLOCK'};
  const setup=Object.values(gates).every(Boolean)?'PASS':'REJECT';
+ const squeeze=shortSqueezeSignal({values:v,capture,profile});
  const previousHigh=Math.max(...recent.slice(0,-3).map(x=>x.mid));
  const breakout=pricePositive&&b.return>0&&late.length===3&&late.every(x=>x.mid>=previousHigh)&&a.sampled_high_renewals>0;
  const lowAt=recent.length?recent.reduce((best,x,i)=>x.mid<recent[best].mid?i:best,0):-1;
  const pullback=lowAt>0&&lowAt<recent.length-2&&flowRecovering&&pricePositive&&a.recovery_velocity_bps_s>older.recovery_velocity_bps_s;
  const reclaim=recent.length>3&&pricePositive&&flowRecovering&&late.at(-1).mid>Math.max(...prior.map(x=>x.mid));
  const continuation=structural==='STRONG'&&propulsion==='STRONG'&&a.sampled_high_renewals>0&&b.net_taker_flow>0;
- const trigger=breakout?'BREAKOUT':pullback?'PULLBACK_RECOVERY':reclaim?'LOCAL_HIGH_RECLAIM':continuation?'MOMENTUM_REACCELERATION':null;
+ const standardTrigger=breakout?'BREAKOUT':pullback?'PULLBACK_RECOVERY':reclaim?'LOCAL_HIGH_RECLAIM':continuation?'MOMENTUM_REACCELERATION':null;
+ // A funding anomaly routes the symbol into squeeze review. It cannot bypass that
+ // review through the ordinary trend trigger while the anomaly remains active.
+ const trigger=squeeze.watch?(squeeze.confirmed?'MOMENTUM_REACCELERATION':null):standardTrigger;
  // Confirmation is phase specific: a pullback recovery need not exceed the preceding
  // 60s expansion's trade rate; continuation needs sustained participation, not a climax.
  const recentCandles=facts?.technical_context?.recent_1m_candles??[];
@@ -88,18 +93,23 @@ export function classifyMarket({facts,capture,profile,at,price=null,return24h=nu
  const confirmationVolume=trigger==='BREAKOUT'?activity&&volumeHealthy:volumeHealthy&&(activity||a.trade_count>0&&b.net_taker_flow>0);
  const confirmationCandle=trigger==='PULLBACK_RECOVERY'||trigger==='LOCAL_HIGH_RECLAIM'?
   candleSupport||!candleRejection&&v.last_lower_wick>v.last_upper_wick&&flowRecovering&&activity:candleSupport;
- const confirm=!!trigger&&flowPositive&&pricePositive&&bookSupport&&confirmationVolume&&confirmationCandle&&exec&&(!extension||flowRecovering||breakout);
+ const standardConfirm=!!trigger&&flowPositive&&pricePositive&&bookSupport&&confirmationVolume&&confirmationCandle&&exec&&(!extension||flowRecovering||breakout);
+ const squeezeConfirm=squeeze.confirmed&&flowPositive&&pricePositive&&bookSupport&&exec&&!candleRejection;
+ const confirm=squeeze.watch?squeezeConfirm:standardConfirm;
  const failedBreakout=v.failed_breakout_candle===true&&priceWeak&&(flowCollapsing||bookWeak);
- let phase=exhaustion==='BLOCK'?'EXHAUSTION':failedBreakout?'FAILED_BREAKOUT':flowCollapsing&&bookWeak?'DISTRIBUTION':breakout&&confirm?'BREAKOUT_CONFIRMATION':breakout?'BREAKOUT':
+ let phase=exhaustion==='BLOCK'?'EXHAUSTION':failedBreakout?'FAILED_BREAKOUT':flowCollapsing&&bookWeak?'DISTRIBUTION':squeeze.confirmed&&confirm?'SHORT_SQUEEZE_CONFIRMATION':squeeze.watch?'SHORT_SQUEEZE_WATCH':breakout&&confirm?'BREAKOUT_CONFIRMATION':breakout?'BREAKOUT':
   pullback?'PULLBACK_RECOVERY':propulsion==='STRONG'&&continuation?'MOMENTUM_CONTINUATION':extension&&propulsion==='WEAK'?'LATE_EXTENSION':
   structural!=='WEAK'&&priceWeak&&!flowCollapsing&&!bookWeak&&!candleRejection?'HEALTHY_PULLBACK':priceWeak&&flowCollapsing?'REVERSAL_RISK':
   structural!=='WEAK'&&propulsion==='WEAK'?'MOMENTUM_DECAY':'NO_TRADE';
  const decision=setup==='REJECT'?'REJECT':trigger&&confirm?'BUY':'WAIT';
+ const tradeMode=decision==='BUY'&&squeeze.confirmed?'SHORT_SQUEEZE_LONG':'TREND_LONG';
  const reasons=Object.entries(gates).filter(([,ok])=>!ok).map(([k])=>k.toUpperCase());
+ if(squeeze.watch&&!squeeze.confirmed)reasons.push('SHORT_SQUEEZE_REVIEW_PENDING');
  if(!trigger)reasons.push('TRIGGER_NOT_READY');if(!confirm)reasons.push('CONFIRMATION_NOT_READY');
  return {version:ENGINE,at,capture_end_ms:capture?.end_ms??null,reference_price:priceNow,structural_strength:structural,current_propulsion:propulsion,
-  phase,exhaustion:{state:exhaustion,families:exhaustionFamilies},setup,trigger:trigger??'WAIT',confirmation:confirm?'PASS':'WAIT',decision,reasons,gates,
+  phase,trade_mode:tradeMode,squeeze,exhaustion:{state:exhaustion,families:exhaustionFamilies},setup,trigger:trigger??'WAIT',confirmation:confirm?'PASS':'WAIT',decision,reasons,gates,
   families:{TREND:{structural},MOMENTUM:{intact:momentumIntact,pricePositive,priceWeak},FLOW:{positive:flowPositive,recovering:flowRecovering,collapsing:flowCollapsing},
+   DERIVATIVES:{funding_rate:squeeze.funding_rate,funding_drop:squeeze.funding_drop,basis_bps:squeeze.basis_bps,oi_change_120s:squeeze.oi_change_120s,oi_mode:squeeze.oi_mode,score:squeeze.score,watch:squeeze.watch,confirmed:squeeze.confirmed},
    LIQUIDITY:{support:bookSupport,weak:bookWeak},VOLUME:{healthy:volumeHealthy,activity,climax:volumeClimax},CANDLE:{bullish:candleBull,bearish:candleBear,rejection:candleRejection},
    PRICE_STRUCTURE:{breakout,pullback,reclaim,renewals:a.sampled_high_renewals??null},EXECUTION:{acceptable:exec},VOLATILITY:{acceptable:volatility},EXHAUSTION:{state:exhaustion}},
   trigger_reference:breakout?previousHigh:pullback?recent[lowAt].mid:reclaim?Math.max(...prior.map(x=>x.mid)):priceNow,

@@ -9,9 +9,21 @@ export const features=createFeatureCache();
 const memory=new Map();
 export async function control(db){const r=await db.from('deterministic_control').select('*').eq('singleton',true).single();if(r.error||r.data?.version!==ENGINE)throw Error('DETERMINISTIC_CONTROL_INVALID');return r.data;}
 export async function captures(db,symbols,at,positionId=null){
- const r=await db.rpc('deterministic_market_context',{p_symbols:symbols,p_as_of:new Date(at).toISOString(),p_position_id:positionId});
+ const asOf=new Date(at).toISOString();
+ const [r,d]=await Promise.all([
+  db.rpc('deterministic_market_context',{p_symbols:symbols,p_as_of:asOf,p_position_id:positionId}),
+  db.rpc('deterministic_derivative_context',{p_symbols:symbols,p_as_of:asOf})
+ ]);
  if(r.error)throw Error('MARKET_CONTEXT_UNAVAILABLE');
- return Object.fromEntries(symbols.map(s=>[s,normalizeCapture(r.data?.[s],at)]));
+ const derivatives=d.error?{}:(d.data??{});
+ return Object.fromEntries(symbols.map(s=>{
+  const raw=r.data?.[s],extra=derivatives?.[s];
+  if(raw?.status==='AVAILABLE'&&Array.isArray(raw.trajectory)&&extra?.status==='AVAILABLE'&&Array.isArray(extra.trajectory)){
+   const byBucket=new Map(extra.trajectory.map(p=>[Number(p.bucket_ms),p]));
+   return [s,normalizeCapture({...raw,trajectory:raw.trajectory.map(p=>({...p,...(byBucket.get(Number(p.bucket_ms))??{})}))},at)];
+  }
+  return [s,normalizeCapture(raw,at)];
+ }));
 }
 export function overlayExecutableBook(input,quote,at=Date.now()){
  const normalized=normalizeEntryBook(quote,1500,at),bids=normalized.bids,asks=normalized.asks,bid=Number(quote.best_bid),ask=Number(quote.best_ask),mid=(bid+ask)/2;
