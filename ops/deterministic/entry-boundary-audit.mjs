@@ -12,6 +12,15 @@ const snap=await sql("select now() observed_at,public.v17_account_recovery_state
 const oldIds=[['ATHUSDT','tb-v11e-96aa6af9cdc5483e9b2fe4d0'],['WLDUSDT','tb-v11e-758216c88025465d9c4f56a1'],['BERAUSDT','tb-v11e-c5befe98981045b8897ba288'],['OPUSDT','tb-v11e-139458733f1b4b95ab5dbd0e']];
 const venue=[];for(const [market,identifier] of oldIds)venue.push({market,identifier,proof:await gateway({action:'v18_entry_never_placed_proof',market,identifier})});
 const [portfolio,openOrders]=await Promise.all([gateway({action:'p10_portfolio'}),gateway({action:'v18_open_orders'})]);
-const report={observed_at:new Date().toISOString(),commit:process.env.GITHUB_SHA,snap,signals,orders,venue,portfolio,openOrders};
+// Existing internal credential stays in memory for this read-only endpoint. Never
+// emit or persist the token query, token, request headers or credential material.
+const [{token}]=await sql("select token from public.edge_internal_tokens where name='v10-lane-executor'");
+if(!token)throw Error('READINESS_CREDENTIAL_UNAVAILABLE');
+const readinessResponse=await fetch(`https://${project}.supabase.co/functions/v1/v10-lane-executor`,{method:'POST',
+ headers:{'content-type':'application/json','x-v10-executor-token':token,'x-region':'ap-northeast-1'},
+ body:JSON.stringify({mode:'ops-readiness'}),signal:AbortSignal.timeout(25000)});
+const readiness={http_status:readinessResponse.status,...await readinessResponse.json()};
+const report={observed_at:new Date().toISOString(),commit:process.env.GITHUB_SHA,snap,signals,orders,venue,portfolio,openOrders,readiness};
 fs.writeFileSync(`${out}/audit.json`,JSON.stringify(report,null,2));
-console.log(JSON.stringify({observed_at:report.observed_at,orders:orders.length,signals:signals.length,venue:venue.map(x=>({symbol:x.market,http_status:x.proof.http_status,proven:x.proof.result?.proven})),portfolio_ok:portfolio.ok,open_orders_ok:openOrders.ok}));
+console.log(JSON.stringify({observed_at:report.observed_at,orders:orders.length,signals:signals.length,venue:venue.map(x=>({symbol:x.market,http_status:x.proof.http_status,proven:x.proof.result?.proven})),portfolio_ok:portfolio.ok,open_orders_ok:openOrders.ok,
+ readiness_ok:readiness.ok,native_stop_enabled:readiness.native_stop_enabled,hard_stop_pct:readiness.hard_stop_pct,maxSlots:readiness.maxSlots,targetMarginUsdt:readiness.sizingContract?.targetMarginUsdt,leverage:readiness.sizingContract?.leverage}));

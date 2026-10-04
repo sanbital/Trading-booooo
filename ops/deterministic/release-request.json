@@ -42,7 +42,7 @@
     },
     "executor_bundle_sha256": "618ffbcc6a0d7b5c05c312aa83da8a1e5859f7436083174b045d6882f536afc0",
     "gateway_source_commit": "d3f9bffd00153af2fd9a5d9f4cc29f146a2b3f0c",
-    "deployed_at_kst": "2026-10-04T09:11:00.067+09:00",
+    "deployed_at_kst": "2026-10-04T09:11:00.067000+09:00",
     "sql_definition_md5": {
       "deterministic_begin_submit": "ed49383c21644eba06dca0a2e04354d0",
       "deterministic_entry_authority": "583cbcc8fcc8b66cdeb4543da16df96f",
