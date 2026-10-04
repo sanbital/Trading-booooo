@@ -269,7 +269,7 @@ async function repairLatency(){
 }
 async function repairSubmitProof(){
  const repair=request.submit_proof_repair;
- if(!repair||repair.expected_submit_md5!=='50bfd0b4738d9fc70e68f1758ee9f564'||repair.previous_source_commit!=='bdd47f4a8eb12b383ee72e4ec85bf957a7c7612b'||repair.generation!==190||
+ if(!repair||repair.expected_submit_md5!=='b9dadf9c57ec33edb972283fba4d0d26'||repair.previous_source_commit!=='abf8d0b59054423f16a8401582be6af2f6faaf7b'||repair.generation!==190||
  repair.incident_id!=='b28c890b-0191-49d9-a2aa-fe826cf6f708'||repair.order_id!=='ad65e821-1ce1-482e-b8fc-615ebb3d8c7f')throw Error('SUBMIT_PROOF_EXACT_INCIDENT_REQUIRED');
  const before=await value(stateSQL),ctl=await value('select to_jsonb(c) evidence from deterministic_control c where singleton'),services=serviceIdentity(request,request.production_entry_boundary?.source_commit),needsRecovery=before.runtime.circuit_open===true;
  if(!ctl.enabled||ctl.generation!==2||![sourceSha,repair.previous_source_commit,services.sourceCommit].includes(ctl.source_commit)||!before.settings.pause_new_entries||
@@ -291,8 +291,8 @@ async function repairSubmitProof(){
  const authDefinition=await value("select md5(pg_get_functiondef('public.v17_gateway_authorize_evidence(text,text,uuid,bigint,jsonb)'::regprocedure)) evidence");
  if(authDefinition!==request.production_entry_boundary.sql_definition_md5.v17_gateway_authorize_evidence)throw Error('SUBMIT_PROOF_GATEWAY_AUTH_CHANGED');
  const identity=await value(`select jsonb_build_object('definition_md5',md5(pg_get_functiondef('public.deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure)),
- 'installed',(select count(*) from supabase_migrations.schema_migrations where version='20261004000400'),
- 'migration_statement',(select statements[1] from supabase_migrations.schema_migrations where version='20261004000400'),
+ 'installed',(select count(*) from supabase_migrations.schema_migrations where version='20261004002600'),
+ 'migration_statement',(select statements[1] from supabase_migrations.schema_migrations where version='20261004002600'),
  'recovery_md5',md5(pg_get_functiondef(to_regprocedure('public.deterministic_paused_never_placed_recovery(uuid,uuid,bigint,uuid,jsonb)'))),
  'order',(select jsonb_build_object('id',id,'symbol',symbol,'client_order_id',client_order_id,'state',state,'exchange_order_id',exchange_order_id,'proof',response_payload->'v18EntryNeverPlaced') from v11_long_regime_orders where id='${repair.order_id}')) evidence`);
  const baseline=identity.installed===0&&identity.definition_md5===repair.expected_submit_md5&&identity.recovery_md5==null;
@@ -301,14 +301,14 @@ async function repairSubmitProof(){
  const config=await venueConfig(),command={action:'v18_entry_never_placed_proof',market:identity.order.symbol,identifier:identity.order.client_order_id};
  const proof=await readVenue({...config,command});evidence.neverPlacedProof=proof;save();
  if(proof.proven!==true||proof.found!==false||proof.lookup_code!==-2013||proof.position_quantity!==0||proof.recent_trade_count!==0||!proof.position_read_ok||!proof.trade_read_ok)throw Error('SUBMIT_PROOF_SIGNED_NEVER_PLACED_REQUIRED');
- const migration=fs.readFileSync('supabase/migrations/20261004000400_deterministic_submission_null_proof.sql','utf8');
+ const migration=fs.readFileSync('supabase/migrations/20261004002600_deterministic_submission_null_proof.sql','utf8');
  if(createHash('sha256').update(migration).digest('hex')!==repair.migration_sha256)throw Error('SUBMIT_PROOF_MIGRATION_HASH_CHANGED');
- const path=process.env.RUNNER_TEMP+'/deterministic-submit-proof.sql';fs.writeFileSync(path,`set local lock_timeout='750ms';set local statement_timeout='20000ms';\n${migration}\ninsert into supabase_migrations.schema_migrations(version,name,statements) values('20261004000400','deterministic_submission_null_proof',ARRAY['reviewed sha256 ${repair.migration_sha256}']);`);
+ const path=process.env.RUNNER_TEMP+'/deterministic-submit-proof.sql';fs.writeFileSync(path,`set local lock_timeout='750ms';set local statement_timeout='20000ms';\n${migration}\ninsert into supabase_migrations.schema_migrations(version,name,statements) values('20261004002600','deterministic_submission_null_proof',ARRAY['reviewed sha256 ${repair.migration_sha256}']);`);
  const check=await value(stateSQL);if(check.postmaster!==before.postmaster||!check.settings.pause_new_entries||JSON.stringify(protectedSettings(check))!==protectedBefore||check.orders.length||check.runtime.incident_id!==repair.incident_id)throw Error('SUBMIT_PROOF_TRUTH_CHANGED');
  if(baseline)run('psql',[process.env.SUPABASE_DB_URL,'-X','--set=ON_ERROR_STOP=1','--single-transaction','-f',path]);
  const patched=await value("select jsonb_build_object('definition_md5',md5(pg_get_functiondef('public.deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure)),'recovery_md5',md5(pg_get_functiondef('public.deterministic_paused_never_placed_recovery(uuid,uuid,bigint,uuid,jsonb)'::regprocedure))) evidence");
  if(patched.definition_md5!==repair.expected_repaired_submit_md5||patched.recovery_md5!==repair.expected_paused_recovery_md5)throw Error('SUBMIT_PROOF_DEFINITION_UNPROVEN');
- note(baseline?'SUBMIT_NULL_PROOF_MIGRATION_APPLIED_ENTRIES_PAUSED':'SUBMIT_NULL_PROOF_MIGRATION_ALREADY_VERIFIED_ENTRIES_PAUSED',{version:'20261004000400',migration_sha256:repair.migration_sha256,definition_md5:patched.definition_md5,services_unchanged:true});
+ note(baseline?'SUBMIT_NULL_PROOF_MIGRATION_APPLIED_ENTRIES_PAUSED':'SUBMIT_NULL_PROOF_MIGRATION_ALREADY_VERIFIED_ENTRIES_PAUSED',{version:'20261004002600',migration_sha256:repair.migration_sha256,definition_md5:patched.definition_md5,services_unchanged:true});
  const literal=x=>"'"+JSON.stringify(x).replaceAll("'","''")+"'::jsonb";
  let resolved=!needsRecovery;
  for(let observation=0;needsRecovery&&observation<4;observation++){

@@ -35,16 +35,16 @@
   },
   "production_entry_boundary": {
     "baseline_source_commit": "5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4",
-    "source_commit": "abf8d0b59054423f16a8401582be6af2f6faaf7b",
+    "source_commit": "091b990aa0e17b24932b0e632784c522796cacf5",
     "expected_versions": {
-      "v10-lane-executor": 195,
+      "v10-lane-executor": 196,
       "v10-lane-signal-generator": 53
     },
-    "executor_bundle_sha256": "618ffbcc6a0d7b5c05c312aa83da8a1e5859f7436083174b045d6882f536afc0",
+    "executor_bundle_sha256": "f17eff24b44af0dfa3e1a7d9e0e4e876d83d9c9a9ecc5664eab2cddf96dc688b",
     "gateway_source_commit": "d3f9bffd00153af2fd9a5d9f4cc29f146a2b3f0c",
-    "deployed_at_kst": "2026-10-04T09:11:00.067000+09:00",
+    "deployed_at_kst": "2026-10-04T09:23:19.707000+09:00",
     "sql_definition_md5": {
-      "deterministic_begin_submit": "ed49383c21644eba06dca0a2e04354d0",
+      "deterministic_begin_submit": "d099c89b0dce086c65c3534d81d28a1f",
       "deterministic_entry_authority": "583cbcc8fcc8b66cdeb4543da16df96f",
       "deterministic_order_key": "a68e3320a4666d8b2b643d9336d1953d",
       "deterministic_publish_universe": "34dd218613533652ca195a4abea550aa",
@@ -56,17 +56,18 @@
     },
     "migrations": {
       "20261003234245": "a7fec82055b01a1d0dbe8f85d72040a9af58dc2d4858804164ea00dfe9e0dcf8",
-      "20261003235907": "8a233f32a8e57e5413cf0d13696297936895b5af722bda83f040d4620d96f66c"
+      "20261003235907": "8a233f32a8e57e5413cf0d13696297936895b5af722bda83f040d4620d96f66c",
+      "20261004002313": "968424eda25d72413a41241df7fedade19316fa5c560df35715d96b9679fbdcd"
     }
   },
   "submit_proof_repair": {
-    "expected_submit_md5": "50bfd0b4738d9fc70e68f1758ee9f564",
-    "expected_repaired_submit_md5": "ed49383c21644eba06dca0a2e04354d0",
-    "migration_sha256": "b7fd7b89e01a04936757b47ad657e25087d8f5b9c849daef2c16fa5bcad73c7f",
+    "expected_submit_md5": "b9dadf9c57ec33edb972283fba4d0d26",
+    "expected_repaired_submit_md5": "d099c89b0dce086c65c3534d81d28a1f",
+    "migration_sha256": "44d35c1e6684570ed0a2ec5e1c2d0ed5d69e5d3ecdccd91b574a2ea77d11aed4",
     "incident_id": "b28c890b-0191-49d9-a2aa-fe826cf6f708",
     "generation": 190,
     "order_id": "ad65e821-1ce1-482e-b8fc-615ebb3d8c7f",
     "expected_paused_recovery_md5": "46324d009443a01ebfa5af751745de69",
-    "previous_source_commit": "bdd47f4a8eb12b383ee72e4ec85bf957a7c7612b"
+    "previous_source_commit": "abf8d0b59054423f16a8401582be6af2f6faaf7b"
   }
 }

@@ -6,7 +6,7 @@ export function serviceIdentity(request,sourceCommit=request.staged_source_commi
  if(!/^[a-f0-9]{40}$/.test(sourceCommit??''))throw Error('SERVICE_SOURCE_PIN_REQUIRED');
  const boundary=request.production_entry_boundary;
  if(boundary&&sourceCommit===boundary.source_commit){
-  if(boundary.source_commit!=='abf8d0b59054423f16a8401582be6af2f6faaf7b'||boundary.baseline_source_commit!==baseline||boundary.expected_versions?.['v10-lane-executor']!==195||
+  if(boundary.source_commit!=='091b990aa0e17b24932b0e632784c522796cacf5'||boundary.baseline_source_commit!==baseline||boundary.expected_versions?.['v10-lane-executor']!==196||
     boundary.expected_versions?.['v10-lane-signal-generator']!==53||!/^[a-f0-9]{64}$/.test(boundary.executor_bundle_sha256??'')||
     boundary.gateway_source_commit!==request.gateway_commits?.['trading-booooo'])throw Error('UNREVIEWED_SERVICE_IDENTITY');
   return {sourceCommit,versions:boundary.expected_versions,sources:{'v10-lane-executor':sourceCommit,'v10-lane-signal-generator':baseline}};

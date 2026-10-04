@@ -11,7 +11,8 @@ async function fixture({repaired=true}={}){
  await pg.exec(fs.readFileSync(new URL('../../supabase/migrations/20261002102500_deterministic_dynamic_state.sql',import.meta.url),'utf8'));
  await pg.exec('alter table v11_long_regime_positions add column signal_id uuid;alter table v11_long_regime_signals add column reject_reason text');
  await pg.exec('create table v17_analysis_lease(singleton boolean,owner uuid,expires_at timestamptz,postmaster_started_at timestamptz)');await pg.exec(sql);await pg.exec(fs.readFileSync(new URL('../../supabase/migrations/20261003235907_deterministic_terminal_claim_cleanup.sql',import.meta.url),'utf8'));
- if(repaired)await pg.exec(fs.readFileSync(new URL('../../supabase/migrations/20261004000400_deterministic_submission_null_proof.sql',import.meta.url),'utf8'));
+ await pg.exec(fs.readFileSync(new URL('../../supabase/migrations/20261004002313_deterministic_submit_refusal_evidence.sql',import.meta.url),'utf8'));
+ if(repaired)await pg.exec(fs.readFileSync(new URL('../../supabase/migrations/20261004002600_deterministic_submission_null_proof.sql',import.meta.url),'utf8'));
  await pg.exec('update deterministic_control set enabled=true');
  const publish=async(symbol='TESTUSDT')=>{const t=Date.now(),members=Array.from({length:20},(_,i)=>({symbol:i===0?symbol:'S'+i+'USDT',rank:i+1,price_change_percent:20-i,quote_volume:1e8}));return (await pg.query('select deterministic_publish_universe($1,$2) r',[{members,requested_at:new Date(t).toISOString(),observed_at:new Date(t).toISOString(),next_refresh_at:new Date(t+60000).toISOString()},'a'.repeat(64)])).rows[0].r;};
  await publish();const t=Date.now(),state={version:'DETERMINISTIC_DYNAMIC_STATE_1',decision:'BUY',setup:'PASS',confirmation:'PASS',trigger:'BREAKOUT',at:t,capture_end_ms:t};
@@ -30,7 +31,7 @@ test('production boundary NULL proof refuses before repair and persists exact wr
   assert.equal((await f.pg.query('select response_payload from v11_long_regime_orders where id=$1',[f.order])).rows[0].response_payload,null);
   assert.equal((await f.auth()).reason,'SUBMISSION_OWNER_OR_GENERATION_MISMATCH');
   const before=(await f.pg.query("select pg_get_functiondef('deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure) definition,proacl from pg_proc where oid='deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure")).rows[0];
-  await f.pg.exec(fs.readFileSync(new URL('../../supabase/migrations/20261004000400_deterministic_submission_null_proof.sql',import.meta.url),'utf8'));
+  await f.pg.exec(fs.readFileSync(new URL('../../supabase/migrations/20261004002600_deterministic_submission_null_proof.sql',import.meta.url),'utf8'));
   const after=(await f.pg.query("select pg_get_functiondef('deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure) definition,proacl from pg_proc where oid='deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure")).rows[0];
   assert.equal(after.definition,before.definition.replace('response_payload=response_payload||jsonb_build_object',"response_payload=coalesce(response_payload,'{}'::jsonb)||jsonb_build_object"));assert.deepEqual(after.proacl,before.proacl);
   f.setProof(await f.submit());assert.equal((await f.auth()).allowed,true);
@@ -92,5 +93,13 @@ test('terminal no-fill claim is recovered only with final venue exposure proof',
   await f.pg.query("update v11_long_regime_orders set response_payload=$2 where id=$1",[f.order,{v18ExposureFinal:true,orderStateEvidence:{executedQty:0},positionReconciliation:{actualPositionQty:0,positionsComplete:true}}]);
   assert.deepEqual((await f.pg.query('select deterministic_recover_claims() r')).rows[0].r.recovered,[f.sig]);
   assert.equal((await f.pg.query('select state from leader20_entry_reservations')).rows[0].state,'RELEASED');
+ }finally{await f.pg.close();}
+});
+
+test('Top20 refusal at the submit boundary retains the exact authority snapshot and validation instant',async()=>{
+ const f=await fixture();try{
+  await f.publish('LEFTUSDT');const refused=await f.submit();
+  assert.equal(refused.updated,false);assert.equal(refused.reason,'TOP20_LEFT_UNIVERSE');
+  assert.equal(refused.authority.member,null);assert.ok(refused.authority.epoch_id);assert.ok(refused.authority.validated_at);
  }finally{await f.pg.close();}
 });

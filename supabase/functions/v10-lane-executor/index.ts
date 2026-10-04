@@ -825,7 +825,7 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
     // Re-evaluate after durable intent/lease I/O. A slow database must not spend the
     // approval or quote budget and then send a stale order. No venue call on refusal.
     let generationError=null;
-    try{await requireEntryAuthority(db,s);}catch(error){generationError=String(error.message);}
+    try{await requireEntryAuthority(db,s);}catch(error){generationError=String(error.message);attempt.evidence={...attempt.evidence,universe:error.authority??null};}
     const authority=generationError?{allowed:false,reason:generationError}:await authorize?.({order:oi.data,signal:s,attemptNo,request:rp});
     if(authority?.allowed!==true){
       const reason=authority?.reason??"IOC_DISPATCH_AUTHORITY_MISSING";
@@ -839,6 +839,7 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
       payload.entry_latency.submission_started=Date.now();
       const submit=await db.rpc('deterministic_begin_submit',{p_order_id:oi.data.id,p_owner:leaseOwners.get(db),p_state:authority.deterministic});
       payload.entry_latency.submission_completed=Date.now();
+      attempt.evidence={...attempt.evidence,submission:submit.data?.proof??submit.data??{updated:false,reason:submit.error?.code??'ACKNOWLEDGEMENT_MISSING'}};
       if(submit.error||submit.data?.updated!==true||String(submit.data?.order_id)!==String(oi.data.id))throw Object.assign(Error('DETERMINISTIC_SUBMIT_FENCE:'+String(submit.error?.code??submit.data?.reason??'ACKNOWLEDGEMENT_MISSING')),{exchangeSubmissionAttempted:false,submissionPhase:'PRE_SEND'});
       attempt.evidence={...attempt.evidence,submission:submit.data.proof};return submit.data.proof;
     };
