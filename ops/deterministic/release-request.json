@@ -6,7 +6,7 @@
   },
   "gateway_commit": "1bd5e3bf76bfb55f9df749818e325f91b5c6ab02",
   "gateway_commits": {
-    "trading-booooo": "c56db61e33f8498465bef399772ddbe970934b57",
+    "trading-booooo": "51a35cf22e94dc96b86d9c58b08513f56b8e18c8",
     "trading-booooo-sanbital-gateway": "1bd5e3bf76bfb55f9df749818e325f91b5c6ab02"
   },
   "runtime_region": "ap-northeast-1",
@@ -262,5 +262,33 @@
     "leverage": 3,
     "sql_definitions_unchanged": true,
     "strategy_contract_unchanged": true
+  },
+  "production_unusable_execution_book_recovery": {
+    "gateway_source_commit": "51a35cf22e94dc96b86d9c58b08513f56b8e18c8",
+    "gateway_workflow_run": 37195822869,
+    "gateway_workflow_conclusion": "success",
+    "readiness_verified_at_utc": "2026-10-04T10:36:27.747Z",
+    "readiness_http_status": 200,
+    "readiness_ok": true,
+    "watched_books": 21,
+    "synced_books": 21,
+    "fresh_books": 21,
+    "deterministic_tests_passed": 82,
+    "gateway_tests_passed": 161,
+    "same_native_exit_order_confirmed_at_utc": "2026-10-04T10:36:18.988Z",
+    "same_native_exit_order_http_status": 200,
+    "same_native_exit_order_status": "FILLED",
+    "original_sequence_and_freshness_guards_unchanged": true,
+    "strategy_contract_unchanged": true,
+    "target_margin_usdt": 150,
+    "leverage": 3,
+    "runtime_verified_at_utc": "2026-10-04T10:37:07.871726Z",
+    "live_enabled": true,
+    "circuit_open": false,
+    "pause_new_entries": false,
+    "last_error": null,
+    "open_positions": 0,
+    "pending_orders": 0,
+    "available_quote_usdt": 230.06608605
   }
 }
