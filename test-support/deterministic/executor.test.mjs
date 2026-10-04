@@ -79,3 +79,17 @@ test('legacy account lease mode also sends a current fenced writer envelope',asy
  h.ctx.__db=db;h.value("leaseOwners.set(__db,'fixture-owner')");await h.ctx.opsGateway(db)({action:'v17_create_stop'});
  assert.equal(commands.length,1);assert.equal(commands[0].writer.owner,'fixture-owner');assert.equal(commands[0].writer.fence,7);
 });
+
+
+test('fresh crossed-stop evidence immediately enters software close without waiting for another quote cycle',async()=>{
+ const h=await evaluateModule(),at=Date.now(),p={id:'p-cross',symbol:'AKEUSDT',entry_at:new Date(at-60000).toISOString(),state:'OPEN',
+  remaining_quantity:10,entry_price:100,peak_price:101,hard_stop_price:97.5,metadata:{}};
+ h.ctx.verifyExecutionLease=async()=>{};h.ctx.detachAudit=()=>{};
+ let seen=null;
+ h.ctx.closePos=async(db,pos,fraction,reason,ctx)=>{seen={pos,fraction,reason,ctx};return {closed:true,position:{...pos,state:'CLOSED',closed_at:new Date().toISOString()}}};
+ const crossing={kind:'EXCHANGE_STOP_ALREADY_CROSSED',at,triggerPrice:100.2,exitClass:'SOFT_PROTECTION',protectionReason:'DETERMINISTIC_PROFIT_PROTECTION'};
+ const result=await h.ctx.manageLeader({},p,{residentCrossingEvidence:crossing,gateway:async()=>{throw Error('QUOTE_MUST_NOT_BE_REQUIRED')}});
+ assert.equal(result.action,'CLOSE');assert.equal(result.reason,'DETERMINISTIC_RESIDENT_STOP');
+ assert.equal(seen.reason,'DETERMINISTIC_RESIDENT_STOP');assert.equal(seen.fraction,1);
+ const recheck=await seen.ctx.revalidateExit(p);assert.equal(recheck.allowed,true);
+});
