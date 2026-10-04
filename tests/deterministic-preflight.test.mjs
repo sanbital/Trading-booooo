@@ -1,11 +1,15 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {createHash,createHmac} from 'node:crypto';
-import {readVenue,reconcileHoldings,reconcileTrades} from '../ops/deterministic/preflight-read.mjs';
+import {readVenue,reconcileHoldings,reconcileTrades,validateReadCommand} from '../ops/deterministic/preflight-read.mjs';
 const now=1790980000000,commit='a'.repeat(40),token='t'.repeat(32);
 const proof=()=>({db:{positions:[],orders:[]},now,
  portfolio:{exchange:'binance_futures',account_scope:'futures',positions_complete:true,positions:[],observation:{id:'account',source:'BINANCE_ACCOUNT_REST',requested_at_ms:now-200,received_at_ms:now-100}},
  openOrders:{complete:true,orders:[],algos:[],observed_at_ms:now-100},
  mode:{exchange:'binance_futures',account_scope:'futures',position_mode:'ONE_WAY',dual_side_position:false,observation:{id:'mode',source:'BINANCE_POSITION_MODE_REST',requested_at_ms:now-200,received_at_ms:now-100}}});
+test('never-placed proof reads bind the original bot identity and cannot include a mutation',()=>{
+ const command={action:'v18_entry_never_placed_proof',market:'OPUSDT',identifier:'tb-v11e-'+'a'.repeat(24)};assert.doesNotThrow(()=>validateReadCommand(command));
+ for(const invalid of [{...command,order:{}},{...command,writer:{}},{...command,identifier:'other'},{...command,market:'OP/USDT'}])assert.throws(()=>validateReadCommand(invalid),/ALLOWLIST/);
+});
 test('preflight admits signed allowlisted venue reads and uses the configured identity',async()=>{
  let commands=0;
  const result=await readVenue({app:'trading-booooo',token,commit,command:{action:'p10_portfolio'},now:()=>now,fetchImpl:async(url,opt)=>{

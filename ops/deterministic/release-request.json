@@ -44,7 +44,7 @@
     "gateway_source_commit": "d3f9bffd00153af2fd9a5d9f4cc29f146a2b3f0c",
     "deployed_at_kst": "2026-10-04T09:23:19.707000+09:00",
     "sql_definition_md5": {
-      "deterministic_begin_submit": "b9dadf9c57ec33edb972283fba4d0d26",
+      "deterministic_begin_submit": "d099c89b0dce086c65c3534d81d28a1f",
       "deterministic_entry_authority": "583cbcc8fcc8b66cdeb4543da16df96f",
       "deterministic_order_key": "a68e3320a4666d8b2b643d9336d1953d",
       "deterministic_publish_universe": "34dd218613533652ca195a4abea550aa",
@@ -53,6 +53,21 @@
       "v17_gateway_authorize_evidence": "efe41e62a7ffb13fc588c2cf71864bd9",
       "v17_release_writer": "5cfaadffd929d07d4ff8dc7c20348f85",
       "v17_verify_writer": "e02de33501bf03dd5f2ee4118c840a53"
+    },
+    "migrations": {
+      "20261003234245": "a7fec82055b01a1d0dbe8f85d72040a9af58dc2d4858804164ea00dfe9e0dcf8",
+      "20261003235907": "8a233f32a8e57e5413cf0d13696297936895b5af722bda83f040d4620d96f66c",
+      "20261004002313": "968424eda25d72413a41241df7fedade19316fa5c560df35715d96b9679fbdcd"
     }
+  },
+  "submit_proof_repair": {
+    "expected_submit_md5": "b9dadf9c57ec33edb972283fba4d0d26",
+    "expected_repaired_submit_md5": "d099c89b0dce086c65c3534d81d28a1f",
+    "migration_sha256": "44d35c1e6684570ed0a2ec5e1c2d0ed5d69e5d3ecdccd91b574a2ea77d11aed4",
+    "incident_id": "b28c890b-0191-49d9-a2aa-fe826cf6f708",
+    "generation": 190,
+    "order_id": "ad65e821-1ce1-482e-b8fc-615ebb3d8c7f",
+    "expected_paused_recovery_md5": "46324d009443a01ebfa5af751745de69",
+    "previous_source_commit": "abf8d0b59054423f16a8401582be6af2f6faaf7b"
   }
 }

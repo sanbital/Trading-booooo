@@ -1,3 +1,73 @@
+## 2026-10-04 00:26 UTC — v196 and new DB generation observed; final repair still blocked
+
+Concurrent work deployed executor **v196** from `091b990aa0e17b24932b0e632784c522796cacf5`, bundle SHA256 `f17eff24b44af0dfa3e1a7d9e0e4e876d83d9c9a9ecc5664eab2cddf96dc688b`, and applied refusal-evidence migration **20261004002313**, SQL SHA256 `968424eda25d72413a41241df7fedade19316fa5c560df35715d96b9679fbdcd`. The source and migration add exact refusal evidence without changing trading rules. Repository migration filenames match actual applied history. Actual submit MD5 is now `b9dadf9c57ec33edb972283fba4d0d26`; the NULL concatenation bug remains. Additive **20261004002600** replaces only that expression, yielding MD5 `d099c89b0dce086c65c3534d81d28a1f`, and retains the reviewed paused recovery RPC. This task has not applied it or resumed entries. v195/v194 entries below are historical observations.
+
+DB connections briefly failed57P03, then recovered with new postmaster **2026-10-04T00:21:04.804839Z**. Scheduler recovery_complete and recovered_postmaster matched that new generation at00:22:53. Pause remained true and OP incident190 stayed open. The00:16:51 signed account proof matched flat venue/DB positions, ordinary/protective orders and wallet but predates this restart; fresh signed proof is required again. A read-only preflight dispatched with prior main expected SHA correctly refused when another task advanced main. Never bypass the exact source gate.
+
+Full local active regression1570/1570 and all requiredCI passed the v195 repair head51db805e. The latest v196/source/SQL integration is under fresh targeted andCI validation; do not claim old checks certify an unknown newer production artifact. Production ownership is still pending the operator's coordination choice. Preserve entry pause; after one owner is established, recheck service/SQL/postmaster identities and signed account truth, use the normal protected paused repair, complete all verify-resume gates, then normal resume and natural fill observation. No validation order, forced close or AI fallback.
+
+## 2026-10-04 00:14 UTC — concurrent work confirmed, final repair not applied
+
+The operator confirmed another task is also changing this repository and production. No migration, service deployment, source metadata update or resume has been performed by this repair task. Production mutation ownership must be coordinated before using the protected repair workflow.
+
+Executor is now **v195**, bundle SHA256 `618ffbcc6a0d7b5c05c312aa83da8a1e5859f7436083174b045d6882f536afc0`; all34 normalized reachable files match `abf8d0b59054423f16a8401582be6af2f6faaf7b`. Its change adds independent read/intent timings; trading policy is unchanged. Current control metadata still points at prior v194 source `bdd47f4a8eb12b383ee72e4ec85bf957a7c7612b`, so ordinary resume proof must fail until actual service identity is attested. The reviewed repair admits that exact prior metadata only after proving current v195 bytes and signed account truth, then records current source while still paused. Old v194 is not a current deployment claim.
+
+At00:10:49 UTC pause remained true, OP generation190 circuit remained open, and actual submit MD5 still `50bfd0b4738d9fc70e68f1758ee9f564` (NULL persistence bug). Proposed migration20261004000400 remains unapplied. Preserve entry pause until the coordinated production owner applies the reviewed repair, completes independent paused recovery and all resume gates. This is a blocked handoff state, not completed cutover or fill verification.
+
+## 2026-10-04 00:05 UTC — current boundary integrated, repair still pending
+
+Production changed during preparation: executor **v194** (bundle SHA256 `d9d96af7c877458ef571c496863e7c640ed7800428b470b01a1dd25472e495b1`) matches all 34 normalized reachable files of `bdd47f4a8eb12b383ee72e4ec85bf957a7c7612b`. Generator remains **v53**, pinned to `5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4`. Paris gateway health reports `d3f9bffd00153af2fd9a5d9f4cc29f146a2b3f0c`, writer required, scheduler off; Tokyo remains the existing external clock. These concurrent changes were observed, not deployed by this repair runner.
+
+Actual migration rows are `20261003234245` (boundary SHA256 `a7fec82055b01a1d0dbe8f85d72040a9af58dc2d4858804164ea00dfe9e0dcf8`) and `20261003235907` (terminal cleanup SHA256 `8a233f32a8e57e5413cf0d13696297936895b5af722bda83f040d4620d96f66c`). Repository filenames now match actual migration versions; SQL bytes are unchanged. Actual `deterministic_begin_submit` MD5 is `50bfd0b4738d9fc70e68f1758ee9f564` and still writes NULL || proof. The reviewed additive `20261004000400` repair preserves all its deadlines and gates, producing MD5 `ed49383c21644eba06dca0a2e04354d0`. It has **not been applied yet**.
+
+Entries remain paused. OP incident `b28c890b-0191-49d9-a2aa-fe826cf6f708` generation190 remains open; its original order is REJECTED with signed never-placed evidence. Fresh DB shows zero OPEN positions and unresolved orders; this does not replace a new signed exchange reconciliation. `repair-submit-proof` now verifies the exact deployed v194/v53 bundles, gateway and applied migration hashes before DDL. It uses three independent signed observations across at least110 seconds while paused, then attests the already deployed source metadata and runs every resume gate. It performs no service deployment or venue mutation. Any concurrent version, postmaster or account truth change refuses. The superseded v192→v193 latency deploy must not be rerun over current v194.
+
+The 23:47–00:01 log sample measured executor v193 p50 **4680ms**, p95 **5755ms**, max6882ms (n116, HTTP errors0); v194 initial sample p50 **4527ms**, p95/max5715ms (n13, errors0). These paused/flat samples cannot establish filled-order latency or profitability. Before resume require normal protected repair success, full bundle/market/account/capture/authority verification, then normal trading-control resume and natural fill observation. Never create a validation order.
+
+# 2026-10-03 23:34 UTC: latency PR345 merged, submission proof defect reproduced, entries paused
+
+PR345 merged a8e8a7a434c6f3fa034466f12ce00c8f92841477 with seven required CI
+checks successful and local1556/1556 regression. Its executor source017c7f0012cd867a01658eee6192475d6cea64a1 is prepared but NOT deployed: production remains192/53,
+control generation2 / source5ccc46fa. Normal pause run37161800932 succeeded.
+The CLI briefly returned401 then normal workflow invocation recovered; this is
+not evidence that the production deployment completed.
+
+Natural OPUSDT intentad65e821-1ce1-482e-b8fc-615ebb3d8c7f at23:25:42 was refused
+GW_503:WRITER_FENCED. The existing reconciler proved the same identity absent
+(-2013), signed symbol quantity0, recent trades0 at23:26:17 and settled REJECTED,
+exchange idnull, exposure-finaltrue. Incidentb28c890b-0191-49d9-a2aa-fe826cf6f708
+generation190 remains held pending independent recovery. Do not unpause to clear it.
+
+Actual production response_payload is nullable with NO default. The deployed
+submission RPC used NULL||proof, acknowledged updated=true while storing NULL,
+and gateway authorization returned NULL/false. The test schema had an incorrect
+{} default and hid this defect. The production-shaped SQL regression reproduces
+NULL!=true before the additive repair, then proves stored submission/gateway
+approval afterward; every stale-state/capacity/generation/fence refusal remains.
+
+Prepared migration20261003233500 changes only the exact submission function's
+JSON concatenation to coalesce(response_payload,'{}'::jsonb)||proof; existing
+proof/audit fields, grants and deadlines remain. It adds a restricted, fenced
+paused-never-placed recovery RPC. That RPC admits only the same known incident,
+terminal rejected original identity, no live/uncertain orders or holdings, no
+pending closed protection, fresh complete signed zero-position/order/algo truth,
+and current never-placed read. The existing50s independent interval, three
+observations and110s elapsed gate remain. It never changes entry permission,
+financial rows, native orders or AI authority. Other recovery protocols remain.
+
+Normal protected repair-submit-proof / markerSUBMIT_NULL_PROOF_REPAIR_1 applies
+the exact hashed migration and collects actual signed observations while entries
+stay paused. A verified partially applied migration can resume observation after
+a fresh gate; it cannot be reapplied or replaced by a guessed function. Failure
+keeps management authority and paused entries. After incident resolution, use
+normal repair-latency / EXECUTOR_LATENCY_REPAIR_1, full verify-resume, and separate
+normal resume. Compare runtime latency and observe only natural fills.
+
+23:26 capture: BTC strict24 available; Top20 17/20 strict24 available. COLLECTUSDT,
+IOUSDT and MEGAUSDT incomplete trajectories fail closed. Collector98f272cc,
+DOA-CAPTURE-10-BOOK-INTEGRITY: watched/synced/queue21, heartbeat fresh. No new fill
+or post-repair protection/accounting/latency proof has yet been established.
+
 # 2026-10-03 23:08 UTC: executor latency repair prepared, not yet deployed
 
 Fresh read-only preflight run37160771205 / job111313557566 passed at23:08:26Z:

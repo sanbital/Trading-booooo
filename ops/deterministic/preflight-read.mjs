@@ -2,12 +2,13 @@ import {createHash,createHmac,randomUUID} from 'node:crypto';
 import {freshPortfolio,confirmedLiveProtection,sameQuantity} from '../../supabase/functions/_shared/leader-ops-isolation.mjs';
 import {supportedFuturesMode} from '../../supabase/functions/v10-lane-executor/entry-evidence.mjs';
 
-const READS=new Set(['p10_portfolio','v18_open_orders','futures_position_mode','trade_history','quote','v17_query_stop']);
+const READS=new Set(['p10_portfolio','v18_open_orders','futures_position_mode','trade_history','quote','v17_query_stop','v18_entry_never_placed_proof']);
 export function validateReadCommand(command){
- const fields=command?.action==='trade_history'?['action','market','limit']:command?.action==='quote'?['action','market']:command?.action==='v17_query_stop'?['action','symbol','clientAlgoId']:['action'];
+ const fields=command?.action==='trade_history'?['action','market','limit']:command?.action==='quote'?['action','market']:command?.action==='v17_query_stop'?['action','symbol','clientAlgoId']:command?.action==='v18_entry_never_placed_proof'?['action','market','identifier']:['action'];
  if(!READS.has(command?.action)||Object.keys(command).some(k=>!fields.includes(k))||
    (['quote','trade_history'].includes(command.action)&&(!/^[\p{L}\p{N}]+USDT$/u.test(command.market)||command.action==='trade_history'&&command.limit!==1000))||
-   (command.action==='v17_query_stop'&&(!/^[\p{L}\p{N}]+USDT$/u.test(command.symbol)||!/^tb-v17s-[a-f0-9]{27}$/.test(command.clientAlgoId))))throw Error('PREFLIGHT_READ_ALLOWLIST');
+   (command.action==='v17_query_stop'&&(!/^[\p{L}\p{N}]+USDT$/u.test(command.symbol)||!/^tb-v17s-[a-f0-9]{27}$/.test(command.clientAlgoId)))||
+   (command.action==='v18_entry_never_placed_proof'&&(!/^[\p{L}\p{N}]+USDT$/u.test(command.market)||!/^tb-v11e-[a-f0-9]{24}$/.test(command.identifier))))throw Error('PREFLIGHT_READ_ALLOWLIST');
 }
 export async function readVenue({app,token,commit,command,fetchImpl=fetch,now=Date.now}){
  if(!['trading-booooo','trading-booooo-sanbital-gateway'].includes(app)||typeof token!=='string'||token.length<32||!/^[a-f0-9]{40}$/.test(commit))throw Error('PREFLIGHT_READ_CONFIG');

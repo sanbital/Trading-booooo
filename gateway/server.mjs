@@ -479,7 +479,7 @@ async function binanceRequest(
     // Sign BEFORE the DB gate: if this process is suspended afterwards the venue's
     // unchanged 5s recvWindow rejects that old signed request on resume.
     await beforeExchangeMutation({ required: ORDER_WRITER_REQUIRED, venue, method, path });
-    markExchangeMutationAttempt({venue,method,path});
+    markExchangeMutationAttempt({ venue, method, path });
     const response = await fetch(
       `${binanceHost(venue)}${path}?${payload}&signature=${signature}`,
       {
@@ -1536,7 +1536,10 @@ async function binanceFuturesGetOrder(
 }
 
 async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverage = null) {
-  const [info,dual] = await Promise.all([binanceFuturesExchangeInfo(payload.market),futuresPositionSideDual()]);
+  const [info, dual] = await Promise.all([
+    binanceFuturesExchangeInfo(payload.market),
+    futuresPositionSideDual(),
+  ]);
   const intent = resolveFuturesIntent(payload);
   const openingLeverage = intent.effect === "OPEN"
     ? validateFuturesLeverage(leverage ?? payload.leverage ?? DEFAULT_FUTURES_LEVERAGE)
@@ -1559,7 +1562,9 @@ async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverag
       timeoutMs: 12_000,
     })).data;
   } catch (error) {
-    if(error?.submissionPhase==='PRE_SEND'&&error.exchangeSubmissionAttempted===false)throw error;
+    if (error?.submissionPhase === "PRE_SEND" && error.exchangeSubmissionAttempted === false) {
+      throw error;
+    }
     if (
       ["AbortError", "TypeError"].includes(error?.name) || Number(error?.status) >= 500 ||
       Number(error?.code) === -1007
@@ -2533,10 +2538,20 @@ async function handleCommand(command) {
         ? binanceExchangeInfo(command.market)
         : { market: validateUpbitMarket(command.market), quote_asset: "KRW" };
     case "prepare_entry": {
-      if(!futures||Number(command.leverage)!==3)throw Error("PREPARATION_CONTRACT_INVALID");
-      const [info,dual]=await Promise.all([binanceFuturesExchangeInfo(command.market),futuresPositionSideDual(),syncBinanceTime(false)]);
-      const applied=await ensureFuturesLeverage(info.symbol,3);
-      return {prepared:true,market:info.symbol,leverage:applied.leverage,dual,prepared_at_ms:Date.now()};
+      if (!futures || Number(command.leverage) !== 3) throw Error("PREPARATION_CONTRACT_INVALID");
+      const [info, dual] = await Promise.all([
+        binanceFuturesExchangeInfo(command.market),
+        futuresPositionSideDual(),
+        syncBinanceTime(false),
+      ]);
+      const applied = await ensureFuturesLeverage(info.symbol, 3);
+      return {
+        prepared: true,
+        market: info.symbol,
+        leverage: applied.leverage,
+        dual,
+        prepared_at_ms: Date.now(),
+      };
     }
     case "set_leverage":
       if (!futures) throw new Error("leverage is only settable on binance_futures");
@@ -2820,7 +2835,14 @@ export function createServer() {
         ok: false,
         error: error.message,
         code: error.code || "GATEWAY_ERROR",
-        ...(error.submissionPhase?{submissionPhase:error.submissionPhase,exchangeSubmissionAttempted:error.exchangeSubmissionAttempted,writerEvidence:error.writerEvidence,writerValidation:error.writerValidation}:{}),
+        ...(error.submissionPhase
+          ? {
+            submissionPhase: error.submissionPhase,
+            exchangeSubmissionAttempted: error.exchangeSubmissionAttempted,
+            writerEvidence: error.writerEvidence,
+            writerValidation: error.writerValidation,
+          }
+          : {}),
       });
     }
   });

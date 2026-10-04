@@ -18,11 +18,15 @@ test('latency deployment pins executor separately and refuses unrelated service 
  assert.throws(()=>serviceIdentity(request,'f'.repeat(40)),/UNREVIEWED_SERVICE_IDENTITY/);
  assert.throws(()=>serviceIdentity({...request,executor_latency_repair:{...r,expected_versions:{'v10-lane-executor':194}}},r.source_commit),/UNREVIEWED_SERVICE_IDENTITY/);
 });
-test('production entry boundary pins the deployed executor without replacing generator or accepting old versions',()=>{
- const request=JSON.parse(fs.readFileSync(new URL('../ops/deterministic/release-request.json',import.meta.url))),b=request.production_entry_boundary;
- const identity=serviceIdentity(request,b.source_commit);assert.equal(identity.versions['v10-lane-executor'],196);
+test('already deployed boundary identity pins only observed executor 196 and original generator 53',()=>{
+ const request=JSON.parse(fs.readFileSync(new URL('../ops/deterministic/release-request.json',import.meta.url))),b=request.production_entry_boundary,identity=serviceIdentity(request,b.source_commit);
+ assert.deepEqual(identity.versions,{'v10-lane-executor':196,'v10-lane-signal-generator':53});
+ assert.equal(identity.sources['v10-lane-executor'],'091b990aa0e17b24932b0e632784c522796cacf5');
  assert.equal(identity.sources['v10-lane-signal-generator'],request.staged_source_commit);
- assert.throws(()=>serviceIdentity({...request,production_entry_boundary:{...b,expected_versions:{'v10-lane-executor':193,'v10-lane-signal-generator':53}}},b.source_commit),/UNREVIEWED_SERVICE_IDENTITY/);
+ for(const change of [{source_commit:'f'.repeat(40)},{expected_versions:{...b.expected_versions,'v10-lane-executor':194}},{baseline_source_commit:'f'.repeat(40)}]){
+  const drift={...request,production_entry_boundary:{...b,...change}};
+  assert.throws(()=>serviceIdentity(drift,drift.production_entry_boundary.source_commit),/UNREVIEWED_SERVICE_IDENTITY/);
+ }
 });
 test('latency source proof refuses any strategy dependency change or different runner bytes',()=>{
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'latency-source-test-')),file='supabase/functions/v10-lane-executor/index.ts';
@@ -40,6 +44,10 @@ test('latency source proof refuses any strategy dependency change or different r
 test('latency repair requires its explicit reviewed marker before production access',()=>{
  const r=spawnSync(process.execPath,['ops/deterministic/release.mjs'],{cwd:root,encoding:'utf8',env:{PATH:process.env.PATH,GITHUB_REPOSITORY:'sanbital/Trading-booooo',GITHUB_REF:'refs/heads/main',GITHUB_SHA:'a'.repeat(40),EXPECTED_COMMIT:'a'.repeat(40),CUTOVER_OPERATION:'repair-latency'}});
  assert.notEqual(r.status,0);assert.match(r.stderr,/LATENCY_REPAIR_EXACT_BASELINE_REQUIRED/);assert.doesNotMatch(r.stdout,/DEPLOYED|SOURCE_RECORDED/);
+});
+test('submit proof repair refuses missing exact marker before credentials, migration or recovery',()=>{
+ const r=spawnSync(process.execPath,['ops/deterministic/release.mjs'],{cwd:root,encoding:'utf8',env:{PATH:process.env.PATH,GITHUB_REPOSITORY:'sanbital/Trading-booooo',GITHUB_REF:'refs/heads/main',GITHUB_SHA:'a'.repeat(40),EXPECTED_COMMIT:'a'.repeat(40),CUTOVER_OPERATION:'repair-submit-proof'}});
+ assert.notEqual(r.status,0);assert.match(r.stderr,/SUBMIT_PROOF_REPAIR_EXACT_BASELINE_REQUIRED/);assert.doesNotMatch(r.stdout,/APPLIED|OBSERVATION|COMPLETED/);
 });
 test('deployed source parity uses the pinned commit even when the runner has repaired service bytes',()=>{
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'source-pin-test-'));
