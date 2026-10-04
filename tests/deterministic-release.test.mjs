@@ -20,7 +20,7 @@ test('latency deployment pins executor separately and refuses unrelated service 
 });
 test('production entry boundary pins the deployed executor without replacing generator or accepting old versions',()=>{
  const request=JSON.parse(fs.readFileSync(new URL('../ops/deterministic/release-request.json',import.meta.url))),b=request.production_entry_boundary;
- const identity=serviceIdentity(request,b.source_commit);assert.equal(identity.versions['v10-lane-executor'],194);
+ const identity=serviceIdentity(request,b.source_commit);assert.equal(identity.versions['v10-lane-executor'],195);
  assert.equal(identity.sources['v10-lane-signal-generator'],request.staged_source_commit);
  assert.throws(()=>serviceIdentity({...request,production_entry_boundary:{...b,expected_versions:{'v10-lane-executor':193,'v10-lane-signal-generator':53}}},b.source_commit),/UNREVIEWED_SERVICE_IDENTITY/);
 });
