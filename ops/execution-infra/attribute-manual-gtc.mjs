@@ -17,7 +17,7 @@ if(fn.version!==457||fn.status!=='ACTIVE')throw Error('MANUAL_REVIEW_MAINTENANCE
 const health=await request('https://trading-booooo.fly.dev/health');
 if(health.deployment_commit!=='79165cd39f9c8a4dbfeef7bd24e6db27b859c441'||health.order_writer.required!==true)throw Error('MANUAL_REVIEW_GATEWAY_VERSION');
 const [{postmaster}]=await sql('select pg_postmaster_start_time() postmaster');
-const order=await gateway({action:'get_order',market:'GTCUSDT',identifier:'manual-read-4634347872',exchange_order_id:'4634347872'});
+const order=await gateway({action:'get_order',market:'GTCUSDT',identifier:'tb-manual-read-4634347872',exchange_order_id:'4634347872'});
 const [portfolio,openOrders]=await Promise.all([gateway({action:'p10_portfolio',force_rest:true}),gateway({action:'v18_open_orders',force_rest:true})]);
 const a={version:'USER_CONFIRMED_GTC_20261004_1',attestation:'USER_CONFIRMED_DIRECT_ORDER',commit:process.env.GITHUB_SHA,postmaster,owner:crypto.randomUUID(),evidence:{order,portfolio,openOrders}};
 const query=fs.readFileSync('ops/execution-infra/attribute-manual-gtc.sql','utf8').replace('__REVIEW_JSON__',"'"+JSON.stringify(a).replaceAll("'","''")+"'");
