@@ -209,7 +209,7 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
     }
     const p=state.position;
     // Validate ownership even when an existing order already covers the stop.
-    protectiveStopSpec({...request,symbol:p.symbol,positionId:id,
+    const desired=protectiveStopSpec({...request,symbol:p.symbol,positionId:id,
       ownedQuantity:p.remainingQuantity,clientAlgoId:'tb-check'});
     const outstanding=state.protection.orders.filter(x=>!x.terminal);
     // Reconcile every ambiguous attempt before a distinct attempt is created.
@@ -226,7 +226,7 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
     const hardOrders=outstanding;
     const current=hardOrders.filter(x=>eq(x.spec.params.quantity,p.remainingQuantity))
       .sort((a,b)=>b.spec.params.triggerPrice-a.spec.params.triggerPrice)[0];
-    if(current&&current.spec.params.triggerPrice>=request.stopPrice) {
+    if(current&&current.spec.params.triggerPrice>=desired.params.triggerPrice) {
       if(request.exitClass===EXIT_CLASS.HARD_SAFETY&&!current.exitClass&&current.spec.params.triggerPrice<p.entryPrice){
         const annotated=copy(state),item=annotated.protection.orders.find(x=>x.clientId===current.clientId);
         item.exitClass=EXIT_CLASS.HARD_SAFETY;item.authorityVersion=EXIT_AUTHORITY_VERSION;

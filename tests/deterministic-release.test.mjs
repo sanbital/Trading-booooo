@@ -19,10 +19,14 @@ test('latency deployment pins executor separately and refuses unrelated service 
  assert.throws(()=>serviceIdentity({...request,executor_latency_repair:{...r,expected_versions:{'v10-lane-executor':194}}},r.source_commit),/UNREVIEWED_SERVICE_IDENTITY/);
 });
 test('production entry boundary pins the deployed executor without replacing generator or accepting old versions',()=>{
- const request=JSON.parse(fs.readFileSync(new URL('../ops/deterministic/release-request.json',import.meta.url))),b=request.production_entry_boundary;
+ const current=JSON.parse(fs.readFileSync(new URL('../ops/deterministic/release-request.json',import.meta.url))),b=current.production_entry_boundary;
+ // Verify the historical boundary against its own gateway pin. Later gateway
+ // repairs do not become authorization to reuse this historical deployment.
+ const request={...current,gateway_commits:{...current.gateway_commits,'trading-booooo':b.gateway_source_commit}};
  const identity=serviceIdentity(request,b.source_commit);assert.equal(identity.versions['v10-lane-executor'],200);
  assert.equal(identity.sources['v10-lane-signal-generator'],request.staged_source_commit);
  assert.throws(()=>serviceIdentity({...request,production_entry_boundary:{...b,expected_versions:{'v10-lane-executor':193,'v10-lane-signal-generator':53}}},b.source_commit),/UNREVIEWED_SERVICE_IDENTITY/);
+ assert.throws(()=>serviceIdentity({...request,gateway_commits:{...request.gateway_commits,'trading-booooo':'f'.repeat(40)}},b.source_commit),/UNREVIEWED_SERVICE_IDENTITY/);
 });
 test('latency source proof refuses any strategy dependency change or different runner bytes',()=>{
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'latency-source-test-')),file='supabase/functions/v10-lane-executor/index.ts';

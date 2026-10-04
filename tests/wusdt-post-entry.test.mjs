@@ -10,7 +10,9 @@ import {exitReceipt} from '../supabase/functions/_shared/leader-exit-settlement.
 const source=readFileSync(new URL('../gateway/server.mjs',import.meta.url),'utf8');
 const symbol='WUSDT',clientAlgoId='tb-v17s-'+'a'.repeat(27);
 test('venue existence, product/status and filters remain separate from symbol format',async()=>{
- const ctx={futuresExchangeInfoFlight:createInFlightRead(),publicBinanceFutures:async()=>({symbols:ctx.rows}),FUTURES_MAX_LEVERAGE:3};vm.createContext(ctx);
+ const ctx={futuresExchangeInfoFlight:createInFlightRead(),futuresReadCache:{read:async(key,ttl,work)=>{
+  assert.equal(key,'exchange-info');assert.equal(ttl,15*60000);return work();
+ }},publicBinanceFutures:async()=>({symbols:ctx.rows}),FUTURES_MAX_LEVERAGE:3};vm.createContext(ctx);
  vm.runInContext(source.match(/function validateBinanceSymbol\(symbol\) \{[\s\S]*?\n\}/)[0]+source.match(/async function binanceFuturesExchangeInfo\(symbol\) \{[\s\S]*?\n\}/)[0],ctx);
  ctx.rows=[];await assert.rejects(()=>ctx.binanceFuturesExchangeInfo('NOTLISTEDUSDT'),/not an active perpetual/);
  const listed={symbol,status:'TRADING',contractType:'PERPETUAL',baseAsset:'W',quoteAsset:'USDT',filters:[

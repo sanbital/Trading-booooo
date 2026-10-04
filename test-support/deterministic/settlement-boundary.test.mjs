@@ -44,7 +44,7 @@ test('terminal no-fill settlement releases the reservation; an unresolved receip
   h.ctx.dispatchEntryIocAttempt=async(db,s,gw,options)=>{options.attempt.dispatched=true;return {oi:{id:'intent'},receipt:{status:'EXPIRED'},settledRaw:{}};};
   h.ctx.settleKnownEntry=async()=>{if(uncertain)throw Error('ENTRY_POSITION_RECONCILIATION_STALE');return null;};
   const s={id:'signal',symbol:'TESTUSDT',features:{sizingContractVersion:h.value('SLOT_SIZING_CONTRACT.version'),targetMarginUsdt:150,leverage:3,
-   exitPolicy:{stopPct:.025},deterministic:{decision:{capture_end_ms:Date.now()}}}},attempt={dispatched:false};
+   exitPolicy:{stopPct:.025},deterministic:{decision:{at:Date.now(),capture_end_ms:Date.now()}}}},attempt={dispatched:false};
   if(uncertain)await assert.rejects(()=>h.ctx.openBull(db,s,[],[],attempt),/RECONCILIATION_STALE/);
   else assert.equal((await h.ctx.openBull(db,s,[],[],attempt)).reason,'IOC_NO_FILL');
   assert.equal(writes.find(x=>x.table==='leader20_entry_reservations').patch.state,uncertain?'ORDER_PENDING':'RELEASED');
