@@ -14,6 +14,7 @@ const eq=(a,b)=>Math.abs(a-b)<=Math.max(1e-10,Math.abs(b)*1e-8);
 // Only these errors prove that createStop did not leave an exchange order behind.
 // Timeouts, disconnects and generic lookup failures remain ambiguous forever until
 // an exact exchange receipt resolves them.
+const IMMEDIATE_TRIGGER_REJECTION=/^GW_400:Order would immediately trigger\.?$/;
 const DEFINITIVE_CREATE_REJECTION=/^(?:V18_STOP_OWNERSHIP_CHANGED|GW_400:Order would immediately trigger\.?)$/;
 const definitiveRejectedSubmission=o=>o?.terminal!==true&&!o?.ackAt&&!o?.algoId&&!o?.actualOrderId&&
   (o?.submissionEvidence?.phase==='NOT_SENT'||DEFINITIVE_CREATE_REJECTION.test(String(o?.submitError??'')));
@@ -241,7 +242,7 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
     const spec=protectiveStopSpec({...request,stopPrice:Math.max(request.stopPrice,...hardOrders.map(x=>x.spec.params.triggerPrice)),symbol:p.symbol,positionId:id,
       ownedQuantity:p.remainingQuantity,clientAlgoId:clientId});
     if(request.lastPrice!=null&&spec.params.triggerPrice>=request.lastPrice)
-      return {status:'STOP_ALREADY_CROSSED',state,softwareMonitorRequired:true};
+      return {status:'STOP_ALREADY_CROSSED',state,softwareMonitorRequired:true,crossingEvidence:{kind:'LOCAL_STOP_ALREADY_CROSSED',at:clock(),triggerPrice:Number(spec.params.triggerPrice),exitClass:request.exitClass??null,protectionReason:request.protectionReason??null}};
     const next=copy(state);next.protection.generation=generation;
     next.protection.orders.push({clientId,spec,...(request.exitClass?{exitClass:request.exitClass,authorityVersion:request.authorityVersion}:{}),
       ...(request.protectionReason?{protectionReason:String(request.protectionReason)}:{}),
@@ -265,7 +266,9 @@ export function createNativeProtection({store,exchange,clock=Date.now}) {
         after.protection.health=protectionHealth(after);
       }else after.protection.health='RECONCILIATION_PENDING';
       state=await save(state,after);
-      return {status:item.terminal?'REJECTED':'RECONCILIATION_PENDING',state,softwareMonitorRequired:true};
+      const crossed=IMMEDIATE_TRIGGER_REJECTION.test(item.submitError);
+      return {status:crossed?'STOP_ALREADY_CROSSED':item.terminal?'REJECTED':'RECONCILIATION_PENDING',state,softwareMonitorRequired:true,
+        ...(crossed?{crossingEvidence:{kind:'EXCHANGE_STOP_ALREADY_CROSSED',at:clock(),triggerPrice:Number(spec.params.triggerPrice),exitClass:request.exitClass??null,protectionReason:request.protectionReason??null}}:{})};
     }
     const accepted=copy(state),record=accepted.protection.orders.find(x=>x.clientId===clientId);
     record.algoId=String(ack.algoId);record.status=ack.algoStatus==='NEW'?'ACTIVE':String(ack.algoStatus);

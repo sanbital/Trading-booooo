@@ -117,17 +117,19 @@ test('Top20 refusal at the submit boundary retains the exact authority snapshot 
  }finally{await f.pg.close();}
 });
 
-test('retained BUY authority passes the real SQL submit and gateway fences while raw WAIT remains refused',async()=>{
+test('weak WAIT is refused at the real SQL boundary while a current BUY passes all fences',async()=>{
  const f=await fixture();try{
   const at=Date.now(),initial=classifyMarket(scenario({at:at-8000})),prices=Array.from({length:24},(_,i)=>100+.01*(i+1));
   prices[23]=prices[22]-.001;
-  const check=revalidateEntry(initial,scenario({prices,at}));
-  assert.equal(check.latest.decision,'WAIT');assert.equal(check.allowed,true);
+  const weak=revalidateEntry(initial,scenario({prices,at}));
+  assert.equal(weak.latest.decision,'WAIT');assert.equal(weak.allowed,false);assert.equal(weak.execution_state,null);
   await f.pg.query("update v11_long_regime_signals set features=jsonb_set(features,'{deterministic,decision}',$2) where id=$1",[f.sig,initial]);
   await f.pg.query('update v11_long_regime_orders set response_payload=null where id=$1',[f.order]);
-  assert.equal((await f.submit(check.latest)).reason,'CURRENT_STATE_NOT_EXECUTABLE');
-  const proof=await f.submit(check.execution_state);assert.equal(proof.updated,true);f.setProof(proof);
+  assert.equal((await f.submit(weak.latest)).reason,'CURRENT_STATE_NOT_EXECUTABLE');
+  const current=revalidateEntry(initial,scenario({at}));
+  assert.equal(current.latest.decision,'BUY');assert.equal(current.allowed,true);
+  const proof=await f.submit(current.execution_state);assert.equal(proof.updated,true);f.setProof(proof);
   assert.equal((await f.auth()).allowed,true);
-  assert.equal(check.latest.decision,'WAIT','execution authority never rewrites the raw market observation');
+  assert.equal(weak.latest.decision,'WAIT','refused WAIT never becomes executable authority');
  }finally{await f.pg.close();}
 });

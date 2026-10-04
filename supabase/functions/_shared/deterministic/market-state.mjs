@@ -144,7 +144,7 @@ export function evaluateEntryRescue(initial,input,latest,drift){
  if(score<p.strongMinScore)return {allowed:false,reason:'RESCUE_STRENGTH_INSUFFICIENT',age_ms:age,strength_score:score,strengths};
  return {allowed:true,reason:'STRONG_CONTINUATION_RESCUE',age_ms:age,strength_score:score,strengths};
 }
-export const ENTRY_SIGNAL_POLICY=Object.freeze({version:'INITIAL_BUY_CONTINUATION_1',maxAgeMs:30000});
+export const ENTRY_SIGNAL_POLICY=Object.freeze({version:'INITIAL_BUY_CONTINUATION_2',maxAgeMs:15000});
 const ENTRY_TRIGGERS=new Set(['BREAKOUT','PULLBACK_RECOVERY','LOCAL_HIGH_RECLAIM','MOMENTUM_REACCELERATION']);
 export function entrySignalWindow(initial,at){
  const age=at-initial?.at;
@@ -163,6 +163,8 @@ export function revalidateEntry(initial,input){
  const hardInvalidation=['REVERSAL_RISK','DISTRIBUTION','EXHAUSTION','FAILED_BREAKOUT'].includes(latest.phase)||
   latest.families.FLOW.collapsing||latest.families.LIQUIDITY.weak||input.facts?.values?.sell_volume_expansion===true||
   input.facts?.values?.volume_climax_decline===true;
+ const retainedStrong=latest.decision==='WAIT'&&latest.structural_strength==='STRONG'&&latest.current_propulsion==='STRONG'&&
+  latest.exhaustion?.state==='NORMAL'&&latest.families?.MOMENTUM?.intact===true&&latest.families?.FLOW?.positive===true&&latest.families?.LIQUIDITY?.support===true;
  const gateFailure=input.capture?.reason==='CURRENT_EXECUTABLE_DEPTH_INSUFFICIENT'?'CURRENT_EXECUTION_COST_INVALID':
   !latest.gates.data||!latest.gates.technical?'CURRENT_DATA_INCOMPLETE_OR_STALE':
   !latest.gates.execution?'CURRENT_EXECUTION_COST_INVALID':'CURRENT_MARKET_THESIS_CANCELLED';
@@ -175,7 +177,7 @@ export function revalidateEntry(initial,input){
   price<initial.trigger_reference&&initial.trigger==='PULLBACK_RECOVERY'?'PULLBACK_LOW_BROKEN':
   drift< -limit?'ENTRY_PRICE_DETERIORATED':
   hardInvalidation?'CURRENT_MARKET_THESIS_CANCELLED':
-  latest.decision!=='BUY'&&(latest.decision!=='WAIT'||latest.structural_strength!=='STRONG')?'CURRENT_MARKET_THESIS_CANCELLED':null;
+  latest.decision!=='BUY'&&!retainedStrong?'CURRENT_MARKET_THESIS_CANCELLED':null;
  const retained=failure===null&&latest.decision!=='BUY',authority={version:ENTRY_SIGNAL_POLICY.version,allowed:failure===null,
   mode:failure?'CANCELLED':retained?'RETAINED_INITIAL_BUY':'CURRENT_BUY',reason:failure??(retained?'INITIAL_BUY_STILL_VALID':'CURRENT_BUY_VALID'),
   initial_at_ms:initial?.at??null,valid_until_ms:window.valid_until_ms,age_ms:window.age_ms,market_decision:latest.decision};
@@ -190,20 +192,26 @@ export function decidePosition({position,facts,capture,profile,at,bid,previous=n
  if(f.MOMENTUM.priceWeak)weak.push('PRICE');if(f.FLOW.collapsing)weak.push('FLOW');if(f.LIQUIDITY.weak)weak.push('BOOK');
  if(f.CANDLE.bearish||f.CANDLE.rejection)weak.push('CANDLE');if(!f.VOLUME.activity&&!f.VOLUME.healthy)weak.push('VOLUME');
  const multi=weak.length>=2,collapse=weak.includes('PRICE')&&weak.includes('FLOW')&&(weak.includes('BOOK')||weak.includes('CANDLE'));
+ const previousWeak=new Set(previous?.weak_families??[]),overlap=weak.filter(x=>previousWeak.has(x)).length;
+ const deteriorationAt=Number(previous?.market_deterioration_at),captureEnd=Number(capture?.end_ms);
+ const persistentCollapse=collapse&&overlap>=2&&Number.isSafeInteger(deteriorationAt)&&Number.isSafeInteger(captureEnd)&&captureEnd-deteriorationAt>=10000;
  const lastHigh=bid>=Number(position.peak_price)?at:previous?.last_high_ms??Date.parse(position.metadata?.leaderLastHighAt??position.entry_at);
  const protection=Number(position.hard_stop_price),resident=Math.max(Number.isFinite(protection)?protection:0,...(position.metadata?.exitProtection?.orders??[]).filter(o=>!o.terminal&&['ACTIVE','NEW'].includes(o.status)).map(o=>Number(o.spec?.params?.triggerPrice)||0));
  let action='HOLD',state='THESIS_INTACT',reason='DETERMINISTIC_HOLD',level=resident;
  if(bid<=resident){action='EXIT';state='HARD_STOP';reason='DETERMINISTIC_RESIDENT_STOP';}
  else if(!valid){state='DATA_DEGRADED';reason='NO_NEW_THESIS_DATA_INVALID';}
- else if(collapse||facts.values.market_shock&&weak.includes('FLOW')&&weak.includes('PRICE')){action='EXIT';state=mfe>0&&multi?'PROFIT_PROTECTION':'FAILED_CONTINUATION';reason='DETERMINISTIC_THESIS_FAILURE';}
- else if(multi){state='MOMENTUM_WEAKENING';
+ else if(persistentCollapse||facts.values.market_shock&&weak.includes('FLOW')&&weak.includes('PRICE')){action='EXIT';state=mfe>0&&multi?'PROFIT_PROTECTION':'FAILED_CONTINUATION';reason='DETERMINISTIC_THESIS_FAILURE';}
+ else if(multi){state=collapse?'FAILED_CONTINUATION_PENDING':'MOMENTUM_WEAKENING';
   if(mfe>profile.bands.mfe.caution&&drawdown<0&&weak.includes('FLOW')){
    action='PROTECT';state=weak.length>=3?'TIGHT_PROTECT':'PROTECT';reason='DETERMINISTIC_PROFIT_PROTECTION';
    // Structure/ATR adaptive protection, evaluated only after independent deterioration.
    const lows=capture.trajectory.slice(-6).map(x=>x.mid),atr=facts.values.atr_1m_14_normalized*bid;
    const structural=Math.min(...lows),cost=entry*(1+2*(position.entry_fee_usdt!=null?Number(position.entry_fee_usdt)/(Number(position.original_quantity)*entry):0.0005));
-   level=Math.max(resident,Math.min(bid-Number(position.metadata?.entryMarketRules?.priceTick||entry*1e-8),Math.max(cost,structural-atr)));
-   if(bid<=level){action='EXIT';reason='DETERMINISTIC_PROFIT_PROTECTION';}
+   const tick=Number(position.metadata?.entryMarketRules?.priceTick||entry*1e-8);
+   if(bid>cost+tick){
+    level=Math.max(resident,Math.min(bid-tick,Math.max(cost,structural-atr)));
+    if(bid<=level){action='EXIT';reason='DETERMINISTIC_PROFIT_PROTECTION';}
+   }else{action='HOLD';state=collapse?'FAILED_CONTINUATION_PENDING':'MOMENTUM_WEAKENING';reason='DETERMINISTIC_HOLD';level=resident;}
   }
  }
  return {version:ENGINE,at,action,state,reason,level,peak,mfe,mae:Math.min(previous?.mae??0,pnl),pnl,drawdown,giveback:mfe>0?(peak-bid)/(peak-entry):0,

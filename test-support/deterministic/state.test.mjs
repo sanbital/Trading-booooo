@@ -32,8 +32,8 @@ test('E: +2% additional execution drift cancels an otherwise intact BUY',()=>{
  assert.equal(r.action,'CANCEL_ENTRY');assert.equal(r.reason,'LATE_EXECUTION');
 });
 test('F: stronger current flow and a normal spread execute despite an older decision',()=>{
- const old=scenario({at:AT-15000}),seed=classifyMarket(old),current=scenario(),r=revalidateEntry(seed,current);
- assert.equal(r.decision_age_ms,15000);assert.equal(r.action,'EXECUTE');
+ const old=scenario({at:AT-10000}),seed=classifyMarket(old),current=scenario(),r=revalidateEntry(seed,current);
+ assert.equal(r.decision_age_ms,10000);assert.equal(r.action,'EXECUTE');
 });
 test('G: a strong position with continued highs and positive flow remains HOLD',()=>{
  const input=scenario(),p=position({peak_price:100.2}),d=decidePosition({...input,position:p,bid:100.24});
@@ -43,9 +43,15 @@ test('H: +1% MFE then +0.2% with flow reversal and failed highs protects or exit
  const input=bearish(),d=decidePosition({...input,position:position(),bid:100.2});
  assert.ok(['PROTECT','EXIT'].includes(d.action));assert.ok(d.weak_families.includes('FLOW'));assert.ok(Math.abs(d.mfe-.01)<1e-12);
 });
-test('I: immediate thesis collapse exits before the unchanged 2.5% hard stop',()=>{
- const input=bearish(),p=position({peak_price:100}),d=decidePosition({...input,position:p,bid:99.5});
- assert.equal(d.action,'EXIT');assert.equal(d.reason,'DETERMINISTIC_THESIS_FAILURE');assert.ok(99.5>p.hard_stop_price);
+test('I: thesis collapse needs persistent independent deterioration before soft exit',()=>{
+ const input=bearish(),p=position({peak_price:100}),first=decidePosition({...input,position:p,bid:99.5});
+ assert.equal(first.action,'HOLD');assert.equal(first.state,'FAILED_CONTINUATION_PENDING');assert.ok(99.5>p.hard_stop_price);
+ const later=bearish({at:AT+10000}),d=decidePosition({...later,position:p,bid:99.4,previous:first});
+ assert.equal(d.action,'EXIT');assert.equal(d.reason,'DETERMINISTIC_THESIS_FAILURE');assert.ok(99.4>p.hard_stop_price);
+});
+test('profit protection never installs a soft stop below fee-adjusted break-even',()=>{
+ const input=bearish(),p=position(),d=decidePosition({...input,position:p,bid:100.05});
+ assert.equal(d.action,'HOLD');assert.equal(d.reason,'DETERMINISTIC_HOLD');assert.equal(d.level,p.hard_stop_price);
 });
 test('J/K/L: absent keys, OpenAI outage and DeepSeek 402 have no decision effect',()=>{
  const before=classifyMarket(scenario());

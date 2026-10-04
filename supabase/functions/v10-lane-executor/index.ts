@@ -27,6 +27,7 @@ import {ENTRY_CONTROL_VERSION,CONTROL_SCOPE,evaluateEntryDecision,symbolRecovery
 import {IOC_RETRY_POLICY,planAggressiveIocRetry} from './entry-ioc-retry.mjs';
 import {RETRY_RECONCILIATION_VERSION,retryProofCandidate,parentTradeStart,proveUnplacedPartialRetry} from './entry-retry-reconciliation.mjs';
 import {entryCapacity,slotCostUsdt,ledgerEntry} from '../_shared/deterministic/capacity.mjs';
+import {LOSS_LOOP_POLICY,evaluateAccountLossCircuit,evaluateSymbolReentry} from '../_shared/deterministic/loss-loop-guard.mjs';
 const REVISION='V11-LONG-REGIME-1.0.1',PATCH=ENGINE,OBSERVER_REVISION='MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET',PROTOCOL='8.0.0-P10-DONCHIAN-SLOW4R';
 const MARGIN=SLOT_SIZING_CONTRACT.targetMarginUsdt,LEV=SLOT_SIZING_CONTRACT.leverage,NOTIONAL=MARGIN*LEV;
 const SLOT_BOUNDS=slotSizingBounds(SLOT_SIZING_CONTRACT),MAX_ORDER_MARGIN_USDT=SLOT_BOUNDS.maxOrderMarginUsdt;
@@ -1017,10 +1018,19 @@ async function installEntryNativeProtection(db,p,gw,manualSymbols=[]){
  if(approved.crossed)return {status:'RESIDENT_EXIT_REQUIRED',position:p};
  const result=await createGatewayProtection(db,gw,()=>verifyExecutionLease(db)).ensure(p.id,{exitClass:approved.exitClass,authorityVersion:EXIT_AUTHORITY_VERSION,
   legacySoftOrderIds:[],protectionReason:approved.reason,stopPrice:approved.level,priceTick:tick,quantityStep:step,exchangeQuantity:N(p.remaining_quantity),positionMode:'ONE_WAY',manualSymbols,lastPrice:q.bid});
- const latest=await db.from('v11_long_regime_positions').select('*').eq('id',p.id).single();if(latest.error)throw Error('PROTECTION_POST_READ');return {...result,position:latest.data};
+ const latest=await db.from('v11_long_regime_positions').select('*').eq('id',p.id).single();if(latest.error)throw Error('PROTECTION_POST_READ');
+ return {...result,status:result.status==='STOP_ALREADY_CROSSED'?'RESIDENT_EXIT_REQUIRED':result.status,position:latest.data};
 }
 async function manageLeader(db,p,ctx={}){
- await verifyExecutionLease(db);const gw=ctx.gateway??opsGateway(db);let q=await leaderQuote(p,{...ctx,gateway:gw});
+ await verifyExecutionLease(db);const gw=ctx.gateway??opsGateway(db),cross=ctx.residentCrossingEvidence;
+ if(cross&&['EXCHANGE_STOP_ALREADY_CROSSED','LOCAL_STOP_ALREADY_CROSSED'].includes(cross.kind)&&Number.isSafeInteger(Number(cross.at))&&Date.now()-Number(cross.at)>=0&&Date.now()-Number(cross.at)<=10000){
+  const proof={authority:ENGINE,positionId:String(p.id),generation:positionGeneration(p),at:Number(cross.at),input:{capture:{trajectory:[]}}};
+  const result=await closePos(db,p,1,'DETERMINISTIC_RESIDENT_STOP',{...ctx,gateway:gw,finalApproval:proof,
+   revalidateExit:async latest=>({allowed:true,proof:{...proof,positionId:String(latest.id),generation:positionGeneration(latest),at:Date.now()}})});
+  detachAudit(db,{symbol:p.symbol,position_id:p.id,kind:'POSITION',state:'PROTECTION_CROSSED',decision:'EXIT',evidence:{reason:cross.kind,crossing:cross},timing:{decision:Date.now(),fill:result?.position?.closed_at??null}});
+  return {action:result.strategyDeferred?'HOLD':'CLOSE',reason:'DETERMINISTIC_RESIDENT_STOP',result,nativeStop:null,crossingEvidence:cross};
+ }
+ let q=await leaderQuote(p,{...ctx,gateway:gw});
  const at=q.detectedAtMs,meta=rec(p.metadata),previous=meta.deterministicPosition??null;
  const hard=hardSafetyState(p,{bid:q.bid,now:at,peak:Math.max(N(p.peak_price),q.bid),policy:POLICY,priceTick:N(meta.entryMarketRules?.priceTick)});
  const resident=Math.max(N(p.hard_stop_price),...(meta.exitProtection?.orders??[]).filter(o=>!o.terminal&&['ACTIVE','NEW'].includes(o.status)).map(o=>N(o.spec?.params?.triggerPrice)));
@@ -1060,6 +1070,8 @@ async function manageLeader(db,p,ctx={}){
  const nativeStop=NATIVE_STOP_ENABLED?await installEntryNativeProtection(db,write.data,gw,ctx.manualSymbols??[]):null;return {write,nativeStop};
  });
  if(previous?.state!==decision.state||decision.action==='PROTECT')detachAudit(db,{symbol:p.symbol,position_id:p.id,kind:'POSITION',state:decision.state,decision:decision.action,evidence:decision,timing:{market_deterioration:decision.market_deterioration_at??null,state_change:state.state_changed_at,decision:decision.at}});
+ if(nativeStop?.status==='RESIDENT_EXIT_REQUIRED'&&nativeStop.crossingEvidence)
+  return manageLeader(db,nativeStop.position??write.data,{...ctx,gateway:gw,residentCrossingEvidence:nativeStop.crossingEvidence});
  return {action:decision.action,reason:decision.reason,position:nativeStop?.position??write.data,nativeStop,state};
 }
 async function entryReadTiming(timing,stage,operation){
@@ -1138,14 +1150,31 @@ async function openBull(db,s,openPositions,manual=null,attempt={},managementFail
   await withAccountMutation(db,()=>db.from('leader20_entry_reservations').update({state:position?'FILLED':attempt.dispatched?'ORDER_PENDING':'RELEASED',updated_at:new Date().toISOString()}).eq('id',reservationId).in('state',['RESERVED','ORDER_PENDING']));
  }
 }
+async function readLossLoopHistory(db,now=Date.now()){
+ const since=new Date(now-LOSS_LOOP_POLICY.historyWindowMs).toISOString();
+ const r=await db.from('v11_long_regime_positions')
+  .select('symbol,state,closed_at,exit_reason,realized_pnl_usdt,entry_price,peak_price,metadata')
+  .eq('state','CLOSED').gte('closed_at',since).order('closed_at',{ascending:false}).limit(80);
+ if(r.error)throw Error('LOSS_LOOP_HISTORY_UNAVAILABLE');
+ return Array.isArray(r.data)?r.data:[];
+}
 async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComplete=true){
  const ctl=await control(db);if(!ctl.enabled)return {entered:false,reason:'DETERMINISTIC_ENTRY_PAUSED'};
  if(!backlogComplete)return {entered:false,reason:'CLOSED_PROTECTION_BACKLOG_INCOMPLETE'};
+ const lossHistory=await readLossLoopHistory(db),accountLossGuard=evaluateAccountLossCircuit(lossHistory);
+ if(!accountLossGuard.allowed)return {entered:false,reason:accountLossGuard.reason,lossLoopGuard:accountLossGuard};
  await withAccountMutation(db,()=>db.rpc('deterministic_recover_claims')).then(r=>{if(r.error)throw Error('CLAIM_RECOVERY_UNAVAILABLE');});
  const rows=await db.from('v11_long_regime_signals').select('*').eq('status','NEW').eq('features->deterministic->>version',ENGINE).order('created_at',{ascending:false}).limit(30);
  if(rows.error)throw Error('CANDIDATE_QUEUE_UNAVAILABLE');let cap=admissionCapacity(capacityInputs(pair,null),[]),ledger=[],entries=[];const seen=new Set();
  for(const row of rows.data??[]){
   if(cap.capacity<1||cycleBudgets.get(db).remaining()<24000)break;if(seen.has(row.symbol)||blockedSymbols.has(row.symbol))continue;seen.add(row.symbol);
+  const reentryGuard=evaluateSymbolReentry(row,lossHistory);
+  if(!reentryGuard.allowed){
+   const reason=reentryGuard.reason??'REENTRY_LOSS_LOOP_GUARD';
+   const retired=await withAccountMutation(db,()=>db.from('v11_long_regime_signals').update({status:'REJECTED',reject_reason:reason,features:{...row.features,lossLoopGuard:reentryGuard},updated_at:new Date().toISOString()}).eq('id',row.id).eq('status','NEW'));
+   if(retired.error)throw Error('REENTRY_GUARD_TERMINAL_WRITE');
+   entries.push({entered:false,symbol:row.symbol,reason,lossLoopGuard:reentryGuard});continue;
+  }
  const result=await (async()=>{
  const claimContext={analysis_owner:currentExecutionContext(db)?.owner,claimed_at_ms:Date.now()};
  const claim=await withAccountMutation(db,()=>db.from('v11_long_regime_signals').update({status:'CLAIMED',features:{...row.features,executionClaim:claimContext},updated_at:new Date().toISOString()}).eq('id',row.id).eq('status','NEW').select('*').maybeSingle());if(claim.error)throw Error('SIGNAL_CLAIM_FAILED');if(!claim.data)return null;
@@ -1266,7 +1295,8 @@ async function ensureShortWriterRecovery(db){
   for(const p of pair.match.safe){
     const protectedNow=await installEntryNativeProtection(db,p,gw,pair.manual.map(x=>x.symbol));
     if(protectedNow.status==="RESIDENT_EXIT_REQUIRED")await manageLeader(db,protectedNow.position,
-      {gateway:gw,recoveryOnly:true,evaluateQv3:false,exchangeQuantity:new Map([[p.symbol,Number(p.remaining_quantity)]]),manualSymbols:pair.manual.map(x=>x.symbol)});
+      {gateway:gw,recoveryOnly:true,evaluateQv3:false,residentCrossingEvidence:protectedNow.crossingEvidence,
+       exchangeQuantity:new Map([[p.symbol,Number(p.remaining_quantity)]]),manualSymbols:pair.manual.map(x=>x.symbol)});
   }
   pair=await readOpsPair(db,gw);const live=await gw({action:"v18_open_orders"},5000);
   if(!pair.match.ok||riskOrders(pair.orders).length||!confirmedLiveProtection(live,pair.positions,Date.now(),{manual:pair.manual,exchangePositions:pair.pf.positions}))return false;
