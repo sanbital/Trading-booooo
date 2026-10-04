@@ -64,6 +64,11 @@ test('writer changing after HTTP admission refuses the final signed order with z
  assert.equal(r.status,503);assert.equal(r.body.code,'WRITER_FENCED');assert.equal(checks,2);
  assert.equal(f.calls.filter(c=>c.method==='POST'&&c.path.startsWith('/fapi/')).length,0);
 });
+test('unavailable account stream proof is a final PRE_SEND refusal with no venue order request',async t=>{
+ const f=await fixture(t,()=>true);const r=await f.send({...order,account_stream:{required:true,observation:{source:'BINANCE_ACCOUNT_REST'}}});
+ assert.equal(r.status,503);assert.equal(r.body.submissionPhase,'PRE_SEND');assert.equal(r.body.exchangeSubmissionAttempted,false);
+ assert.equal(r.body.error,'ACCOUNT_STREAM_STARTING');assert.equal(f.calls.filter(c=>c.path==='/fapi/v1/order'&&c.method==='POST').length,0);
+});
 
 test('preparation latency can expire a valid proof; warmed preparation occurs before refreshed submission',async t=>{
  let elapsed=0,published=0;

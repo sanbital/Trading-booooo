@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {readFuturesModeEvidence} from './futures-mode-evidence.mjs';
+import {createVenueReadCache} from './venue-read-cache.mjs';
 const T=Date.parse('2026-09-18T00:00:00Z');
 for(const dual of [true,false]) test(`mode reader uses GET only, dual=${dual}`,async()=>{
   const calls=[];let clock=T;
@@ -30,12 +31,14 @@ test('actual dispatcher sends exactly one mode GET and refuses a spot account',a
   const next=source.slice(start+1).search(/\n(?:async function |function |export |const )/);
   assert.ok(start>=0 && next>=0);
   const calls=[];
-  const ctx={validateExchange:x=>x,isBinanceFutures:x=>x==='binance_futures',readFuturesModeEvidence,
+  const ctx={validateExchange:x=>x,isBinanceFutures:x=>x==='binance_futures',readFuturesModeEvidence,futuresReadCache:createVenueReadCache(),
     futuresRequest:async(...args)=>{calls.push(args);return {data:{dualSidePosition:false}};}};
   vm.createContext(ctx);vm.runInContext(source.slice(start,start+1+next),ctx);
   const r=await ctx.handleCommand({exchange:'binance_futures',action:'futures_position_mode'});
   assert.equal(r.position_mode,'ONE_WAY');assert.equal(calls.length,1);
   assert.equal(calls[0][0],'GET');assert.equal(calls[0][1],'/fapi/v1/positionSide/dual');
+  const repeated=await ctx.handleCommand({exchange:'binance_futures',action:'futures_position_mode'});
+  assert.equal(calls.length,1);assert.deepEqual(repeated.observation,r.observation);
   await assert.rejects(ctx.handleCommand({exchange:'binance',action:'futures_position_mode'}),/FUTURES_MODE_FUTURES_ONLY/);
   assert.equal(calls.length,1);
 });

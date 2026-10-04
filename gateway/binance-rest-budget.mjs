@@ -13,7 +13,7 @@ export function requestWeight(path, params={}) {
  if(path.endsWith('/ticker/bookTicker'))return params.symbol?2:5;
  if(path.endsWith('/ticker/price'))return params.symbol?1:2;
  if(path.endsWith('/klines')){const n=Number(params.limit)||500;return n<100?1:n<500?2:n<=1000?5:10;}
- if(path.endsWith('/exchangeInfo')||path.endsWith('/time')||path.endsWith('/order')||path.endsWith('/leverage'))return 1;
+ if(path.endsWith('/exchangeInfo')||path.endsWith('/time')||path.endsWith('/order')||path.endsWith('/leverage')||path.endsWith('/listenKey'))return 1;
  return 50; // Unknown routes consume conservative headroom, never zero weight.
 }
 export function createBinanceRestBudget({now=Date.now,limit=2400,reserve=300,blockedUntil=0}={}) {

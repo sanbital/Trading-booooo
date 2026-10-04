@@ -1,3 +1,4 @@
+import {freshAccountStream} from './account-stream-evidence.mjs';
 /**
  * Scope-aware operational entry control.
  *
@@ -75,13 +76,14 @@ export function freshAccountEvidence(portfolio,now=Date.now(),maxAgeMs=3000) {
   const o=portfolio?.observation;
   return portfolio?.exchange==='binance_futures'&&portfolio?.account_scope==='futures'&&
     portfolio?.positions_complete===true&&Array.isArray(portfolio.positions)&&!!o?.id&&
-    o.source==='BINANCE_ACCOUNT_REST'&&finite(o.requested_at_ms)&&finite(o.received_at_ms)&&
+    (freshAccountStream(o,now,maxAgeMs)||o.source==='BINANCE_ACCOUNT_REST'&&finite(o.requested_at_ms)&&finite(o.received_at_ms)&&
     number(o.requested_at_ms)<=number(o.received_at_ms)&&now-number(o.requested_at_ms)<=maxAgeMs&&
-    now-number(o.received_at_ms)>=-1000;
+    now-number(o.received_at_ms)>=-1000);
 }
 
 export function freshOpenOrderEvidence(openOrders,now=Date.now(),maxAgeMs=5000) {
   return openOrders?.complete===true&&Array.isArray(openOrders.orders)&&Array.isArray(openOrders.algos)&&
+    (openOrders.observation?.source!=='BINANCE_ACCOUNT_STREAM'||freshAccountStream(openOrders.observation,now,Math.min(maxAgeMs,3000)))&&
     finite(openOrders.observed_at_ms)&&now-number(openOrders.observed_at_ms)<=maxAgeMs&&
     now-number(openOrders.observed_at_ms)>=-1000;
 }

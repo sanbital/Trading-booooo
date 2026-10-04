@@ -1,5 +1,6 @@
 /** Operational isolation only. No strategy parameters, startup or exchange side effects. */
 import {accountingIssue,operationalIssue} from './leader-entry-control.mjs';
+import {freshAccountStream} from './account-stream-evidence.mjs';
 export const OPS_PATCH = 'V19-SCOPE-AWARE-ENTRY-1';
 export const SCOPE = Object.freeze({exchange:'binance_futures',account_scope:'futures'});
 export const RECOVERABLE = new Set(['KNOWN_EXIT_PENDING_RECONCILIATION','KNOWN_ORDER_PENDING_RECONCILIATION','INCOMPLETE_OR_STALE_SNAPSHOT','TRANSIENT_DEPENDENCY','ACCOUNTING_DETAILS_PENDING','DB_CAS_CONFLICT']);
@@ -16,9 +17,9 @@ export function freshPortfolio(pf,now=Date.now(),maxAge=3000) {
   const t=pf?.observation;
   return pf?.exchange===SCOPE.exchange&&pf?.account_scope===SCOPE.account_scope&&
     pf?.positions_complete===true&&Array.isArray(pf.positions)&&!!t?.id&&
-    t.source==='BINANCE_ACCOUNT_REST'&&Number.isFinite(t.requested_at_ms)&&
+    (freshAccountStream(t,now,maxAge)||t.source==='BINANCE_ACCOUNT_REST'&&Number.isFinite(t.requested_at_ms)&&
     Number.isFinite(t.received_at_ms)&&t.requested_at_ms<=t.received_at_ms&&
-    now-t.requested_at_ms<=maxAge&&now-t.received_at_ms>=-1000;
+    now-t.requested_at_ms<=maxAge&&now-t.received_at_ms>=-1000);
 }
 export function ownedEntry(p,orders) {
   if(p.state!=='OPEN'||p.side!=='LONG'||p.active_lane!=='BULL'||

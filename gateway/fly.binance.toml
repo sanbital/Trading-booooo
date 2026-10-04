@@ -11,6 +11,7 @@ primary_region = "cdg"
 [env]
   PORT = "8080"
   SCHEDULER_ENABLED = "false"
+  BINANCE_FUTURES_STREAM_READS = "true"
   # Actual venue ban observed 2026-10-04 00:41 UTC; retain it across this repair.
   BINANCE_FUTURES_REST_BLOCK_UNTIL_MS = "1791075179872"
   AUTO_SCAN_INTERVAL_SECONDS = "12"

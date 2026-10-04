@@ -126,8 +126,8 @@ async function requireLeaderEntryControls(db){
 }
 async function readOpsPair(db,gw=opsGateway(db),candidateSymbol=null) {
   const candidate=candidateSymbol==null?null:String(candidateSymbol).toUpperCase();
-  // Independent signed venue and DB reads share no snapshot cache. Orders still
-  // depend on the current position manifest; the final BUY checks remain serial.
+  // The gateway serves a live, generation-bound user-stream observation. DB order
+  // ownership remains independently fresh; final BUY rechecks both under its writer.
   const [pf,positions,manual,quarantines,candidateOrders]=await Promise.all([gw({action:"p10_portfolio"},3000),readOpsPositions(db),manualPositionAllowances(db),
     db.from("v18_ops_incidents").select("id,generation,kind,reason,symbol,status,control_scope,exposure_state,accounting_state,order_source,evidence_version,recheck_conditions,last_checked_at,evidence")
       .eq("exchange","binance_futures").eq("account_scope","futures").eq("control_scope","SYMBOL_QUARANTINE")
@@ -268,8 +268,8 @@ async function reconcileOps(db,pair,budget=createBudget({ms:8000,calls:18})) {
 }
 async function attemptSymbolRecoveries(db,pair) {
   if(!pair.quarantines.length)return[];
-  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,async()=>attemptSymbolRecoveries(db,await readOpsPair(db)));
-  const live=await opsGateway(db)({action:"v18_open_orders"},5000),results=[];
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,async()=>attemptSymbolRecoveries(db,await readOpsPair(db,recoveryGateway(db))));
+  const live=await recoveryGateway(db)({action:"v18_open_orders"},5000),results=[];
   for(const active of pair.quarantines.slice(0,5)){
     const evidence=symbolRecoveryEvidence({incident:active,classification:pair.match,portfolio:pair.pf,
       openOrders:live,positions:pair.positions,orders:pair.orders});
@@ -286,7 +286,7 @@ async function attemptOpsRecovery(db,pair,protectedIds) {
   // A healthy account has no recovery mutation. Eligible recovery rereads all
   // controls and execution truth after acquiring its writer, exactly as before.
   if(!c.runtime.circuit_open)return {resolved:false,reason:"EVIDENCE_INCOMPLETE"};
-  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,async()=>attemptOpsRecovery(db,await readOpsPair(db),protectedIds));
+  if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,async()=>attemptOpsRecovery(db,await readOpsPair(db,recoveryGateway(db)),protectedIds));
   let incidentResolution=null;
   if(c.runtime.incident_id){
     const ir=await db.from("v18_ops_incidents").select("id,generation,resolution_evidence").eq("id",c.runtime.incident_id).maybeSingle();
@@ -296,11 +296,11 @@ async function attemptOpsRecovery(db,pair,protectedIds) {
   if(!evidence.eligible)return {resolved:false,reason:"EVIDENCE_INCOMPLETE"};
   // The gateway independently fetches all ordinary AND algo orders; ACTIVE owned stops
   // are allowed. Unknown entry/close/algo orders are not a clean recovery observation.
-  const live=await opsGateway(db)({action:"v18_open_orders"},5000);
+  const live=await recoveryGateway(db)({action:"v18_open_orders"},5000);
   if(!confirmedLiveProtection(live,pair.positions))return {resolved:false,reason:"LIVE_ORDER_RISK"};
   // Changes during the read invalidate the proof. SQL validates this exact DB manifest
   // and locks the same incident generation + operator rows before the CAS.
-  const after=await readOpsPair(db),again=await opsControls(db);
+  const after=await readOpsPair(db,recoveryGateway(db)),again=await opsControls(db);
   if(!after.match.ok||JSON.stringify(after.positions.map(p=>[p.id,p.updated_at]))!==JSON.stringify(pair.positions.map(p=>[p.id,p.updated_at]))||
     again.runtime.incident_id!==evidence.incidentId||again.runtime.incident_generation!==evidence.generation)return {resolved:false,reason:"RECOVERY_CHANGED"};
   await verifyExecutionLease(db);
@@ -501,6 +501,7 @@ function scopedGateway(db,budget,{allowCycleBudgetExceeded=false}={}) {
   };
 }
 function opsGateway(db){return scopedGateway(db,cycleBudgets.get(db)??createBudget({ms:55000,calls:160}));}
+function recoveryGateway(db){const read=opsGateway(db);return(cmd,tm,options)=>read(['p10_portfolio','v18_open_orders'].includes(cmd.action)?{...cmd,force_rest:true}:cmd,tm,options);}
 function controlReleaseScope(decision){
   return decision?.scope===CONTROL_SCOPE.SYMBOL_QUARANTINE?RELEASE_SCOPE.SYMBOL:RELEASE_SCOPE.ACCOUNT;
 }
@@ -579,7 +580,7 @@ function qty(p){return Math.abs(N(p?.quantity??p?.positionAmt??p?.position_amoun
 async function market(db){const o=await db.from("market_regime_observations").select("id,observed_at,predicted_regime,bull_score,confidence").eq("model_revision",OBSERVER_REVISION).eq("trading_influence",true).order("observed_at",{ascending:false}).limit(1).maybeSingle();if(o.error)throw new Error(`OBSERVER:${o.error.message}`);const age=o.data?Date.now()-Date.parse(o.data.observed_at):Infinity;return{route:age<=12*60000?route(o.data?.predicted_regime):"CASH",ageMs:age,observer:o.data||null}}
 function eq(a,b){if(a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a.charCodeAt(i)^b.charCodeAt(i);return d===0}
 function route(v){const x=String(v||"").toUpperCase();return x==="RISK_OFF"?"BEAR":x==="NEUTRAL"?"RANGE":x==="BULL"||x==="STRONG_BULL"?"BULL":"CASH"}
-async function gateway(cmd,tm=20000){if(!GW||!SEC)throw new Error("GATEWAY_CONFIG");const x=["create_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action)?{...cmd,engine_version:PROTOCOL}:cmd,raw=JSON.stringify({exchange:"binance_futures",...x}),ts=String(Date.now()),nonce=crypto.randomUUID(),sig=await hmac(SEC,`${ts}\n${nonce}\n${raw}`),c=new AbortController,t=setTimeout(()=>c.abort(),tm);try{const r=await fetch(`${GW}/v1/command`,{method:"POST",signal:c.signal,headers:{"content-type":"application/json","x-gateway-ts":ts,"x-gateway-nonce":nonce,"x-gateway-signature":sig},body:raw}),txt=await r.text();let d;try{d=txt?JSON.parse(txt):null}catch{d={raw:txt}}if(!r.ok||!d?.ok)throw Object.assign(new Error(`GW_${r.status}:${d?.error||txt}`),d?.submissionPhase?{submissionPhase:d.submissionPhase,exchangeSubmissionAttempted:d.exchangeSubmissionAttempted,writerEvidence:d.writerEvidence,writerValidation:d.writerValidation}:{});return d.result}finally{clearTimeout(t)}}
+async function gateway(cmd,tm=20000){if(!GW||!SEC)throw new Error("GATEWAY_CONFIG");const x=["create_order","v17_create_stop","v17_cancel_stop"].includes(cmd.action)?{...cmd,engine_version:PROTOCOL}:["p10_portfolio","v18_open_orders","quote","p10_quotes"].includes(cmd.action)?{...cmd,accept_stream:true}:cmd,raw=JSON.stringify({exchange:"binance_futures",...x}),ts=String(Date.now()),nonce=crypto.randomUUID(),sig=await hmac(SEC,`${ts}\n${nonce}\n${raw}`),c=new AbortController,t=setTimeout(()=>c.abort(),tm);try{const r=await fetch(`${GW}/v1/command`,{method:"POST",signal:c.signal,headers:{"content-type":"application/json","x-gateway-ts":ts,"x-gateway-nonce":nonce,"x-gateway-signature":sig},body:raw}),txt=await r.text();let d;try{d=txt?JSON.parse(txt):null}catch{d={raw:txt}}if(!r.ok||!d?.ok)throw Object.assign(new Error(`GW_${r.status}:${d?.error||txt}`),d?.submissionPhase?{submissionPhase:d.submissionPhase,exchangeSubmissionAttempted:d.exchangeSubmissionAttempted,writerEvidence:d.writerEvidence,writerValidation:d.writerValidation}:{});return d.result}finally{clearTimeout(t)}}
 async function hmac(s,m){const k=await crypto.subtle.importKey("raw",new TextEncoder().encode(s),{name:"HMAC",hash:"SHA-256"},false,["sign"]),g=await crypto.subtle.sign("HMAC",k,new TextEncoder().encode(m));return[...new Uint8Array(g)].map(x=>x.toString(16).padStart(2,"0")).join("")}
 function capacityRefreshGateway(db){
   return scopedGateway(db,createBudget(CAPACITY_REFRESH_BUDGET),{allowCycleBudgetExceeded:true});
@@ -835,6 +836,7 @@ async function dispatchEntryIocAttempt(db,s,gw,{attemptNo,quantity,limitPrice,st
       if(wr.error)throw Error("IOC_NO_DISPATCH_WRITE");
       return {blocked:true,reason,oi:oi.data};
     }
+    if(authority.accountEvidence)rp.account_stream={required:true,observation:authority.accountEvidence};
     const beforeTransport=async()=>{
       payload.entry_latency.submission_started=Date.now();
       const submit=await db.rpc('deterministic_begin_submit',{p_order_id:oi.data.id,p_owner:leaseOwners.get(db),p_state:authority.deterministic});
@@ -1106,11 +1108,13 @@ async function openBull(db,s,openPositions,manual=null,attempt={},managementFail
      if(!risk.allowed)return {allowed:false,reason:'ENTRY_CONTROL:'+risk.reasons.join(',')};
      const quote=await gw({action:'quote',market:s.symbol},1500),check=validatePreparedOrder(s,market,quote),book=normalizeEntryBook(quote,1500,Date.now());
      attempt.evidence=entryEvidence(s,{check,quote,authority,timing,orderId:intent.order.id,writer:{owner:currentAccountOwner(db),fence:currentExecutionContext(db)?.fence}});
+     attempt.evidence.account={observation:fresh.pf.observation,capacity_basis:fresh.pf.capacity_basis??null,available_quote:fresh.pf.available_quote,
+      open_orders_observation:orders.observation??{source:'BINANCE_OPEN_ORDERS_REST',observed_at_ms:orders.observed_at_ms}};
      if(!check.allowed||!book.health.bookHealthy)return {allowed:false,reason:check.reason??'STALE_EXECUTION_BOOK'};
      if(limitPrice<Number(quote.best_ask))return {allowed:false,reason:'LATEST_PRICE_MOVED_ABOVE_LIMIT'};
      if(limitPrice>Number(quote.best_ask)*(1+IOC_MAX_BPS/10000))return {allowed:false,reason:'LATEST_PRICE_CHASE_INVALID'};
      if(quantity*limitPrice/LEV+(position?N(position.original_quantity)*N(position.entry_price)/LEV:0)>MAX_ORDER_MARGIN_USDT+1e-9)return {allowed:false,reason:'ACCOUNT_MARGIN_LIMIT'};
-     timing.pre_order_validation=Date.now();return {allowed:true,deterministic:check.latest};
+     timing.pre_order_validation=Date.now();return {allowed:true,deterministic:check.latest,accountEvidence:fresh.pf.observation};
     }}),{correlationId:String(s.id)});
    if(sent.blocked){if(!position)return {entered:false,reason:sent.reason};break;}
    firstIntent??=sent.oi.id;lastAttempt=sent;
@@ -1244,7 +1248,7 @@ async function ensureShortWriterRecovery(db){
   if(readiness.error)throw Error("ACCOUNT_RECOVERY_READINESS_UNAVAILABLE");
   if(readiness.data?.ready===true)return true;
   if(shortAccountWriter(db)&&!currentAccountOwner(db))return withAccountMutation(db,()=>ensureShortWriterRecovery(db));
-  const gw=opsGateway(db);
+  const gw=recoveryGateway(db);
   // Observe the venue before touching ambiguous identities; the existing reconciler
   // queries original IDs only and never creates another BUY.
   await gw({action:"v18_open_orders"},5000);

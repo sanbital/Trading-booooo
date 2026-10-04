@@ -8,5 +8,7 @@ test('40 audited lease/transport/ownership/capacity/receipt/reconciliation funct
  // readOpsPair's reviewed latency repair overlaps independent reads. Its new
  // fingerprint is separately pinned; behavioral latency tests preserve fail-closed
  // reads and position-dependent order ownership. All other fingerprints stay.
- for(const [name,hash] of Object.entries(baseline.functions))if(name!=='auth')assert.equal(createHash('sha256').update(functions.get(name)??'MISSING').digest('hex'),name==='readOpsPair'?baseline.latency_read_pair_sha256:hash,name);
+ // Read transport now explicitly opts into stream evidence; writer payloads and
+ // signatures are unchanged. Both reviewed read functions have separate pins.
+ for(const [name,hash] of Object.entries(baseline.functions))if(name!=='auth')assert.equal(createHash('sha256').update(functions.get(name)??'MISSING').digest('hex'),baseline.stream_read_sha256?.[name]??(name==='readOpsPair'?baseline.latency_read_pair_sha256:hash),name);
 });

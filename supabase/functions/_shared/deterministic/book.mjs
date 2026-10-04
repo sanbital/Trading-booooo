@@ -24,8 +24,13 @@ export function normalizeEntryBook(quote, maxAgeMs, now=Date.now()) {
   }
   const asks=side('asks'), bids=side('bids');
   const requested=number(quote?.timing?.requested_at_ms), received=number(quote?.timing?.received_at_ms);
-  const age=stamp(received)?now-received:NaN;
-  if (!stamp(requested) || !stamp(received) || requested>received ||
+  const stream=quote?.timing?.source==='BINANCE_DEPTH_STREAM';
+  const event=number(quote?.timing?.book_captured_at_ms),validated=number(quote?.timing?.validated_at_ms);
+  const age=stamp(received)?(stream?Math.max(now-received,now-event):now-received):NaN;
+  const timeOrder=stream?stamp(event)&&stamp(validated)&&requested<=validated&&received<=validated&&event<=received&&
+    validated<=now&&Number.isSafeInteger(quote?.raw?.book_update_id)&&quote.raw.book_update_id>0&&
+    Number.isSafeInteger(quote?.raw?.book_generation)&&quote.raw.book_generation>0:requested<=received;
+  if (!stamp(requested) || !stamp(received) || !timeOrder ||
       !Number.isSafeInteger(now) || !Number.isFinite(maxAgeMs) || maxAgeMs<0)
     reasons.push('QUOTE_TIME_UNKNOWN');
   else if (age<0) reasons.push('QUOTE_FROM_FUTURE');
@@ -40,7 +45,7 @@ export function normalizeEntryBook(quote, maxAgeMs, now=Date.now()) {
     reasons.push('BOOK_EVIDENCE_INVALID');
   return {asks,bids,health:{bookHealthy:reasons.length===0,bookAgeMs:Number.isFinite(age)?age:null,
     maxBookAgeMs:maxAgeMs,barsFinal:true,resyncComplete:reasons.length===0,
-    basis:'INDEPENDENT_REST_SNAPSHOT',reasons}};
+    basis:stream?'SEQUENCED_STREAM':'INDEPENDENT_REST_SNAPSHOT',reasons}};
 }
 
 

@@ -1,4 +1,7 @@
 import { createInFlightRead } from "./venue-read-flight.mjs";
+import {createVenueReadCache} from './venue-read-cache.mjs';
+import {startAccountStream,conservativeStreamAccount} from './futures-account-stream.mjs';
+import {startExecutionStreams} from './futures-market-stream.mjs';
 import { createBinanceRestBudget } from "./binance-rest-budget.mjs";
 import { createSchedulerOrchestrator } from "./scheduler-orchestrator.mjs";
 import { createScheduledJobRunner, createSchedulerRepository } from "./scheduler-repository.mjs";
@@ -44,7 +47,7 @@ const VERSION = "8.0.3-P10-REGIME-ROUTER-V3-SAFE-EXIT";
  *
  * Bump this on every gateway release.
  */
-const GATEWAY_BUILD = "2026-10-04-rest-budget-1";
+const GATEWAY_BUILD = "2026-10-04-stream-reads-1";
 // Keep exactly one audited previous protocol revision during the rolling cutover. Both the
 // old engine/new gateway and new engine/old gateway therefore remain order-compatible;
 // arbitrary or older revisions stay rejected.
@@ -120,6 +123,73 @@ let lastBinanceTimeSyncAt = 0;
 const futuresLeverageApplied = new Map();
 const futuresRestBudget = createBinanceRestBudget({blockedUntil: Number(env("BINANCE_FUTURES_REST_BLOCK_UNTIL_MS"))});
 let futuresDualPositionSide = null;
+const FUTURES_STREAM_READS=boolEnv('BINANCE_FUTURES_STREAM_READS',false);
+const futuresReadCache=createVenueReadCache();
+let futuresAccountStream=null,futuresMarketStream=null;
+const recoveryRestAfter=new Map();
+function boundedRecoveryRead(key,work){return futuresReadCache.read(key,1000,async()=>{
+ const t=Date.now();if(t<(recoveryRestAfter.get(key)??0))throw Object.assign(Error('ACCOUNT_STREAM_RECOVERY_BACKOFF'),{status:503});
+ recoveryRestAfter.set(key,t+10000);return work();
+});}
+
+async function readFuturesAccountRest(){
+ const requested_at_ms=Date.now(),r=await futuresRequest('GET','/fapi/v2/account',{}, {timeoutMs:2000});
+ return {account:r.data,observation:{id:crypto.randomUUID(),source:'BINANCE_ACCOUNT_REST',requested_at_ms,received_at_ms:Date.now()}};
+}
+async function readFuturesOpenOrdersRest(){
+ const [orders,algos]=await Promise.all([
+  futuresRequest('GET','/fapi/v1/openOrders',{}, {timeoutMs:2000}).then(r=>r.data),
+  futuresRequest('GET','/fapi/v1/openAlgoOrders',{}, {timeoutMs:2000}).then(r=>r.data)]);
+ return {orders,algos,complete:Array.isArray(orders)&&Array.isArray(algos),observed_at_ms:Date.now(),ops_patch:OPS_PATCH};
+}
+async function streamReadOrRecovery(){
+ if(!futuresAccountStream)throw Object.assign(Error('ACCOUNT_STREAM_STARTING'),{status:503});
+ // An in-flight mutation or a concurrent venue change must never be masked by
+ // another account read racing that mutation.
+ if(futuresAccountStream.status().writes)throw Object.assign(Error('ACCOUNT_STREAM_MUTATION_IN_FLIGHT'),{status:503});
+ return futuresAccountStream.read();
+}
+async function accountEvidence(forceRest=false){
+ if(FUTURES_STREAM_READS&&!forceRest){
+  try{const s=await streamReadOrRecovery();return {account:conservativeStreamAccount(s,symbol=>futuresMarketStream?.mark(symbol)),observation:s.observation};}
+  catch(error){
+   if(futuresAccountStream?.status().writes)throw error;
+   // Recovery only: one original snapshot shared across callers for 1s. Its REST
+   // timestamps stay original, and cannot pass the existing 3s age after that.
+   return boundedRecoveryRead('account-recovery',readFuturesAccountRest);
+  }
+ }
+ return readFuturesAccountRest();
+}
+async function openOrderEvidence(forceRest=false){
+ if(FUTURES_STREAM_READS&&!forceRest){
+  try{const s=await streamReadOrRecovery();return {complete:true,orders:s.orders,algos:s.algos,
+   observation:s.observation,observed_at_ms:s.observation.received_at_ms,ops_patch:OPS_PATCH};}
+  catch(error){if(futuresAccountStream?.status().writes)throw error;return boundedRecoveryRead('orders-recovery',readFuturesOpenOrdersRest);}
+ }
+ return readFuturesOpenOrdersRest();
+}
+
+async function futuresListenKey(method){
+ const permit=futuresRestBudget.admit('/fapi/v1/listenKey',{},method),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),5000);
+ try{const r=await fetch(BINANCE_FUTURES_BASE+'/fapi/v1/listenKey',{method,headers:{'X-MBX-APIKEY':BINANCE_API_KEY},signal:controller.signal});
+  futuresRestBudget.observe(r,permit);const {data}=await parseResponse(r,'Binance user stream');
+  if(method==='POST'&&(typeof data?.listenKey!=='string'||!data.listenKey))throw Error('ACCOUNT_STREAM_LISTEN_KEY_UNREADABLE');return data?.listenKey;
+ }catch(error){futuresRestBudget.banFromBody(error);throw error;}finally{clearTimeout(timer);futuresRestBudget.finish(permit);}
+}
+async function futuresWatchSymbols(){
+ const headers={apikey:writerDatabase.key,authorization:'Bearer '+writerDatabase.key},controller=new AbortController(),timer=setTimeout(()=>controller.abort(),2500);
+ try{const [u,p]=await Promise.all([
+  fetch(SUPABASE_URL+'/rest/v1/rpc/deterministic_universe',{method:'POST',headers:{...headers,'content-type':'application/json'},body:'{}',signal:controller.signal}),
+  fetch(SUPABASE_URL+'/rest/v1/v11_long_regime_positions?state=neq.CLOSED&select=symbol&limit=11',{headers,signal:controller.signal})]);
+  if(!u.ok||!p.ok)throw Error('EXECUTION_WATCH_UNAVAILABLE');const universe=await u.json(),positions=await p.json();
+  if(!Array.isArray(positions)||positions.length>10)throw Error('EXECUTION_WATCH_POSITION_OVERFLOW');
+  // Subscription warming is data-only. The existing SQL authority still requires
+  // a current epoch; a brief refresh delay must not reset continuing local books.
+  return [...new Set(['BTCUSDT',...(universe.members??[]).map(m=>m.symbol),
+   ...positions.map(p=>p.symbol),...(futuresAccountStream?.positionSymbols()??[])])];
+ }finally{clearTimeout(timer);}
+}
 
 function env(name, fallback = "") {
   return String(process.env[name] ?? fallback).trim();
@@ -464,7 +534,7 @@ async function binanceRequest(
   method,
   path,
   parameters = {},
-  { timeoutMs = 10_000, retryTimestamp = true, venue = "binance" } = {},
+  { timeoutMs = 10_000, retryTimestamp = true, venue = "binance",beforeSend=null } = {},
 ) {
   if (!BINANCE_API_KEY || !BINANCE_SECRET_KEY) {
     throw Object.assign(new Error("BINANCE_API_KEY/BINANCE_SECRET_KEY are not configured"), {
@@ -484,10 +554,16 @@ async function binanceRequest(
   const signature = createBinanceSignature(payload);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let completeMutation=null;
   try {
     // Sign BEFORE the DB gate: if this process is suspended afterwards the venue's
     // unchanged 5s recvWindow rejects that old signed request on resume.
     await beforeExchangeMutation({ required: ORDER_WRITER_REQUIRED, venue, method, path });
+    beforeSend?.();
+    if(venue==='binance_futures'&&!['GET','HEAD'].includes(method)&&path!=='/fapi/v1/order/test'){
+     completeMutation=futuresAccountStream?.beginMutation()??null;
+     futuresReadCache.invalidate('account-recovery');futuresReadCache.invalidate('orders-recovery');
+    }
     markExchangeMutationAttempt({venue,method,path});
     const response = await fetch(
       `${binanceHost(venue)}${path}?${payload}&signature=${signature}`,
@@ -509,11 +585,13 @@ async function binanceRequest(
           timeoutMs,
           retryTimestamp: false,
           venue,
+          beforeSend,
         });
       }
       throw error;
     }
   } finally {
+    completeMutation?.();
     if (permit) futuresRestBudget.finish(permit);
     clearTimeout(timer);
   }
@@ -1225,7 +1303,7 @@ async function binanceFuturesExchangeInfo(symbol) {
   const market = validateBinanceSymbol(symbol);
   const data = await futuresExchangeInfoFlight(
     "BINANCE_FUTURES_EXCHANGE_INFO",
-    () => publicBinanceFutures("/fapi/v1/exchangeInfo"),
+    () => futuresReadCache.read('exchange-info',15*60000,()=>publicBinanceFutures("/fapi/v1/exchangeInfo")),
   );
   const row = (Array.isArray(data?.symbols) ? data.symbols : []).find((item) =>
     String(item?.symbol).toUpperCase() === market
@@ -1547,7 +1625,7 @@ async function binanceFuturesGetOrder(
     : normalized;
 }
 
-async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverage = null) {
+async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverage = null,accountStream=null) {
   const [info,dual] = await Promise.all([binanceFuturesExchangeInfo(payload.market),futuresPositionSideDual()]);
   const intent = resolveFuturesIntent(payload);
   const openingLeverage = intent.effect === "OPEN"
@@ -1569,6 +1647,10 @@ async function binanceFuturesCreateOrder(payload, waitForFinalMs = 2500, leverag
   try {
     rawAcknowledgement = (await futuresRequest("POST", "/fapi/v1/order", conformed.order, {
       timeoutMs: 12_000,
+      beforeSend:(FUTURES_STREAM_READS&&intent.effect==='OPEN')||accountStream?.required===true?()=>{
+       if(!futuresAccountStream)throw Object.assign(Error('ACCOUNT_STREAM_STARTING'),{status:503,exchangeSubmissionAttempted:false,submissionPhase:'PRE_SEND'});
+       futuresAccountStream.assertSubmission(accountStream.observation);
+      }:null,
     })).data;
   } catch (error) {
     if(error?.submissionPhase==='PRE_SEND'&&error.exchangeSubmissionAttempted===false)throw error;
@@ -1740,6 +1822,11 @@ function buildFuturesPortfolio(account, prices) {
 }
 
 async function binanceFuturesPortfolio() {
+  if(FUTURES_STREAM_READS){const {account,observation}=await accountEvidence();
+   const prices=Object.fromEntries((account.positions??[]).filter(p=>Number(p.positionAmt)!==0).map(p=>
+    [p.symbol,Number(p.entryPrice)+Number(p.unrealizedProfit)/Number(p.positionAmt)]));
+   return {...buildFuturesPortfolio(account,prices),observation,account_scope:'futures',positions_complete:Array.isArray(account.positions)&&Array.isArray(account.assets)};
+  }
   const [account, tickers] = await Promise.all([
     futuresRequest("GET", "/fapi/v2/account").then((row) => row.data),
     publicBinanceFutures("/fapi/v1/ticker/price"),
@@ -1755,7 +1842,7 @@ async function binanceFuturesPortfolio() {
  * proof needs one signed account call; valuation tickers and full equity snapshots remain
  * on the slow scan lane.
  */
-async function p10Portfolio(exchange) {
+async function p10Portfolio(exchange,forceRest=false) {
   if (exchange === "upbit") {
     const accounts = (await upbitRequest("GET", "/v1/accounts", { timeoutMs: 1_500 })).data;
     return {
@@ -1781,13 +1868,7 @@ async function p10Portfolio(exchange) {
       mode: "P10_POSITION_PROOF",
     };
   }
-  const requestedAt = Date.now();
-  const account = (await futuresRequest(
-    "GET",
-    "/fapi/v2/account",
-    {},
-    { timeoutMs: 1_500 },
-  )).data;
+  const {account,observation}=await accountEvidence(forceRest);
   return {
     ...buildFuturesPortfolio(account, {}),
     mode: "P10_POSITION_PROOF",
@@ -1798,18 +1879,15 @@ async function p10Portfolio(exchange) {
         Number.isFinite(Number(p.positionAmt)) && p.symbol &&
         (Number(p.positionAmt) === 0 || String(p.symbol).endsWith("USDT"))
       ),
-    observation: {
-      id: crypto.randomUUID(),
-      source: "BINANCE_ACCOUNT_REST",
-      requested_at_ms: requestedAt,
-      received_at_ms: Date.now(),
-    },
+    observation,
+    capacity_basis:account.capacity_basis??'AUTHENTICATED_REST',
   };
 }
 
 async function binanceFuturesFees(market = null) {
   const symbol = market ? validateBinanceSymbol(market) : "BTCUSDT";
-  const data = (await futuresRequest("GET", "/fapi/v1/commissionRate", { symbol })).data;
+  const data = await futuresReadCache.read('fees:'+symbol,5*60000,async()=>
+   (await futuresRequest("GET", "/fapi/v1/commissionRate", { symbol })).data);
   const maker = Number(data?.makerCommissionRate);
   const taker = Number(data?.takerCommissionRate);
   return {
@@ -2029,9 +2107,13 @@ function normalizeP10QuoteBatch(exchange, markets, payload, requestedAtMs, recei
   });
 }
 
-async function p10Quotes(exchange, markets) {
+async function p10Quotes(exchange, markets,acceptStream=false) {
   const symbols = [...new Set(validateMarkets(exchange, markets))];
   if (symbols.length > 20) throw new Error("P10 quote batch is limited to 20 markets");
+  if(isBinanceFutures(exchange)&&FUTURES_STREAM_READS&&acceptStream)return symbols.map(symbol=>{
+   try{const q=futuresMarketStream?.quote(symbol);if(!q)throw Error('EXECUTION_STREAM_STARTING');const {trades,...result}=q;return {...result,trade_flow:null,trade_flow_available:false};}
+   catch(error){return {exchange,market:symbol,error:error.message,code:'EXECUTION_STREAM_BOOK_UNAVAILABLE'};}
+  });
   const requestedAtMs = Date.now();
   const payload = exchange === "upbit"
     ? await publicUpbit(
@@ -2053,8 +2135,12 @@ async function p10Quotes(exchange, markets) {
   return normalizeP10QuoteBatch(exchange, symbols, payload, requestedAtMs, Date.now());
 }
 
-async function quote(exchange, market) {
+async function quote(exchange, market,acceptStream=false) {
   const symbol = validateMarket(exchange, market);
+  if(isBinanceFutures(exchange)&&FUTURES_STREAM_READS&&acceptStream){
+   if(!futuresMarketStream)throw Object.assign(Error('EXECUTION_STREAM_STARTING'),{status:503});
+   const {trades,...q}=futuresMarketStream.quote(symbol);return {...q,trade_flow:summarizeTradeFlow(trades,Date.now()),trade_flow_available:trades.length>0};
+  }
   // v6.5: the moment this gateway asked the exchange, and the moment it got an answer.
   // Without these the autotrader cannot tell a slow venue from a slow scheduler, and the
   // whole tick-to-order measurement has no anchor on Binance, which publishes no
@@ -2438,19 +2524,7 @@ async function handleCommand(command) {
       return exchange === "upbit" ? upbitPortfolio() : binancePortfolio();
     case "v18_open_orders": {
       if (!futures) throw Error("V18_FUTURES_ONLY");
-      const [orders, algos] = await Promise.all([
-        futuresRequest("GET", "/fapi/v1/openOrders", {}, { timeoutMs: 2000 }).then((r) => r.data),
-        futuresRequest("GET", "/fapi/v1/openAlgoOrders", {}, { timeoutMs: 2000 }).then((r) =>
-          r.data
-        ),
-      ]);
-      return {
-        complete: Array.isArray(orders) && Array.isArray(algos),
-        orders,
-        algos,
-        observed_at_ms: Date.now(),
-        ops_patch: OPS_PATCH,
-      };
+      return openOrderEvidence(command.force_rest===true||command.accept_stream!==true);
     }
     // Read-only proof that a client order id was NEVER ACCEPTED by the exchange.
     //
@@ -2525,20 +2599,20 @@ async function handleCommand(command) {
     }
     case "futures_position_mode":
       if (!futures) throw Error("FUTURES_MODE_FUTURES_ONLY");
-      return readFuturesModeEvidence(async (method, path, params, options) =>
+      return futuresReadCache.read('position-mode',2500,()=>readFuturesModeEvidence(async (method, path, params, options) =>
         (await futuresRequest(method, path, params, options)).data
-      );
+      ));
     case "p10_portfolio":
-      return p10Portfolio(exchange);
+      return p10Portfolio(exchange,command.force_rest===true||command.accept_stream!==true);
     case "accounts":
       if (futures) return (await futuresRequest("GET", "/fapi/v2/account")).data;
       return exchange === "upbit"
         ? (await upbitRequest("GET", "/v1/accounts")).data
         : (await binanceRequest("GET", "/api/v3/account", { omitZeroBalances: "true" })).data;
     case "quote":
-      return quote(exchange, command.market);
+      return quote(exchange, command.market,command.accept_stream===true);
     case "p10_quotes":
-      return p10Quotes(exchange, command.markets);
+      return p10Quotes(exchange, command.markets,command.accept_stream===true);
     case "symbol_info":
       if (futures) return binanceFuturesExchangeInfo(command.market);
       return exchange === "binance"
@@ -2576,6 +2650,7 @@ async function handleCommand(command) {
             command.order || {},
             command.wait_for_final_ms,
             command.leverage ?? (command.order || {}).leverage ?? null,
+            command.account_stream,
           )
           : exchange === "upbit"
           ? upbitCreateOrder(command.order || {}, command.wait_for_final_ms)
@@ -2778,6 +2853,8 @@ export function createServer() {
             active_accounts: orderWriterFence.activeAccounts(),
           },
           futures_rest_budget: futuresRestBudget.snapshot(),
+          futures_stream_reads:{enabled:FUTURES_STREAM_READS,account:futuresAccountStream?.status()??null,
+           market:futuresMarketStream?.status()??null,reference_cache:futuresReadCache.snapshot()},
           scheduler_enabled: SCHEDULER_ENABLED,
           external_scheduler: {
             enabled: EXTERNAL_SCHEDULER_ENABLED,
@@ -2845,6 +2922,15 @@ export async function startServer() {
   await discoverEgressIp();
   if (BINANCE_API_KEY && BINANCE_SECRET_KEY) {
     syncBinanceTime(true).catch((error) => console.warn("Binance time sync failed", error.message));
+  }
+  if(FUTURES_STREAM_READS&&BINANCE_API_KEY&&BINANCE_SECRET_KEY){
+   const {default:WebSocketClient}=await import('ws');
+   futuresMarketStream=startExecutionStreams({WebSocketClient,watch:futuresWatchSymbols,
+    fetchDepth:symbol=>publicBinanceFutures('/fapi/v1/depth',{symbol,limit:1000})});
+   futuresAccountStream=startAccountStream({WebSocketClient,listenKey:futuresListenKey,
+    onConfig:()=>{futuresReadCache.invalidate('position-mode');futuresReadCache.invalidatePrefix('fees:');},
+    readSnapshot:async()=>{const [a,o]=await Promise.all([readFuturesAccountRest(),readFuturesOpenOrdersRest()]);return {account:a.account,orders:o.orders,algos:o.algos};}});
+   server.on('close',()=>{futuresAccountStream?.stop();futuresMarketStream?.stop();});
   }
   if (EXTERNAL_SCHEDULER_ENABLED) {
     const repository = createSchedulerRepository(writerDatabase);

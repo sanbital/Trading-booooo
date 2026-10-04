@@ -27,6 +27,8 @@ export function stageEngine({ from = sharedDir, to = gatewayDir } = {}) {
     copyFileSync(source, join(to, name));
     staged.push({ name, bytes: bytes.length });
   }
+  const bookSource=join(gatewayDir,'..','collectors','doa-capture','core.mjs');
+  if(from===sharedDir){copyFileSync(bookSource,join(to,'capture-book-core.mjs'));staged.push({name:'capture-book-core.mjs',bytes:readFileSync(bookSource).length});}
   return staged;
 }
 

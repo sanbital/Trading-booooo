@@ -26,7 +26,7 @@ function importImage({ omit = null } = {}) {
       assert.ok(match, `Update packaging test for unsupported COPY syntax: ${line}`);
       const [, source, destination] = match;
       if (source === omit) continue;
-      copyFileSync(join(STAGED_ENGINE_FILES.includes(source) ? generated : gatewayDir, source),
+      copyFileSync(join(STAGED_ENGINE_FILES.includes(source)||source==='capture-book-core.mjs' ? generated : gatewayDir, source),
         join(image, destination));
     }
     // Only load modules, never call startServer, a scheduler, a signer, or an

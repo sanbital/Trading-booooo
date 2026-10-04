@@ -1,6 +1,6 @@
 export function cancellationCategory(reason,latest=null){
  if(/WRITER|LEASE|FENCE/.test(reason??''))return 'AUTHORITY_OR_STATE';
- if(/GW_(418|429|5\d\d|408)|BINANCE_(IP_BANNED|RATE_LIMITED|WEIGHT_BUDGET)|LOCAL_RATE_GUARD|UNIVERSE_HTTP_(418|429|5\d\d)|TIMEOUT|timed out|fetch failed/.test(reason??''))return 'DATA_UNAVAILABLE';
+ if(/GW_(418|429|5\d\d|408)|BINANCE_(IP_BANNED|RATE_LIMITED|WEIGHT_BUDGET)|STREAM_|LOCAL_RATE_GUARD|UNIVERSE_HTTP_(418|429|5\d\d)|TIMEOUT|timed out|fetch failed/.test(reason??''))return 'DATA_UNAVAILABLE';
  if(reason==='CURRENT_EXECUTION_COST_INVALID')return 'EXECUTION_COST';
  if(latest?.gates?.data===false||latest?.gates?.technical===false||/DATA|STALE|INCOMPLETE|CAPTURE|CONTEXT_UNAVAILABLE|UNIVERSE_REFRESH|TOP20_REFRESH|TOP20_SNAPSHOT/.test(reason??''))return 'DATA_UNAVAILABLE';
  if(latest?.gates?.execution===false||/BOOK|LIQUIDITY|COST|SPREAD/.test(reason??''))return 'EXECUTION_COST';
@@ -18,6 +18,6 @@ export function entryEvidence(signal,{check=null,quote=null,authority=null,timin
   capture_ref:latest?.capture_end_ms?{symbol:signal.symbol,end_ms:latest.capture_end_ms}:null,
   data_quality:check?.input?.facts?.quality??null,capture_status:check?.input?.capture?.status??null,capture_reason:check?.input?.capture?.reason??null,
   book_validation:check?.input?.execution_book??null,
-  quote:quote?{requested_at_ms:quote.timing?.requested_at_ms??null,received_at_ms:quote.timing?.received_at_ms??null,exchange_at_ms:quote.timing?.exchange_at_ms??quote.exchange_at_ms??null,validated_at_ms:latest?.at??Date.now(),best_bid:quote.best_bid,best_ask:quote.best_ask}:null,
+  quote:quote?{requested_at_ms:quote.timing?.requested_at_ms??null,received_at_ms:quote.timing?.received_at_ms??null,exchange_at_ms:quote.timing?.book_captured_at_ms??quote.timing?.exchange_at_ms??quote.exchange_at_ms??null,validated_at_ms:latest?.at??Date.now(),source:quote.timing?.source??null,book_update_id:quote.raw?.book_update_id??null,book_generation:quote.raw?.book_generation??null,best_bid:quote.best_bid,best_ask:quote.best_ask}:null,
   universe:authority??null,writer,phase,timing:{...timing},reason,category:reason?cancellationCategory(reason,latest):null};
 }

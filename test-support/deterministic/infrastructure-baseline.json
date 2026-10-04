@@ -55,5 +55,9 @@
     "settleNeverPlacedPartialRetry"
   ],
   "latency_read_pair_sha256": "603d6c5703defda10dda86e65d44a1f00874eb583bfddc35fb615e3995ff1bcf",
-  "boundary_revision": "ENTRY_BOUNDARY_EVIDENCE_1"
+  "boundary_revision": "ENTRY_BOUNDARY_EVIDENCE_1",
+  "stream_read_sha256": {
+    "readOpsPair": "cba2b700175f87c19061a8290a285814bbf631784c18ddbee3954a26074c8f41",
+    "gateway": "318bf0ac6e64342560ed2fa4ca409222c15f37fb4a7bf3d3caf1aebf65c7af99"
+  }
 }

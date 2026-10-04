@@ -52,7 +52,7 @@ jobs:
         run: |
           node --input-type=module - <<'JS'
           const r=await fetch('https://trading-booooo.fly.dev/health');const h=await r.json();
-          if(!r.ok||h.deployment_commit!==process.env.GITHUB_SHA||h.build!=='2026-10-04-rest-budget-1'||h.order_writer.required!==true||h.scheduler_enabled!==false||!h.futures_rest_budget)throw Error('PRODUCTION_GATEWAY_MISMATCH');
+          if(!r.ok||h.deployment_commit!==process.env.GITHUB_SHA||h.build!=='2026-10-04-stream-reads-1'||h.order_writer.required!==true||h.scheduler_enabled!==false||!h.futures_rest_budget||h.futures_stream_reads?.enabled!==true)throw Error('PRODUCTION_GATEWAY_MISMATCH');
           JS
       - name: Audit exact orders and current venue evidence without orders
         env:
