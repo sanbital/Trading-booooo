@@ -11,7 +11,7 @@ const finite=Number.isFinite;
 const closedAt=p=>Date.parse(p?.closed_at??'');
 const pnl=p=>Number(p?.realized_pnl_usdt);
 const isLoss=p=>finite(pnl(p))&&pnl(p)<0&&finite(closedAt(p));
-const newest=(history=[])=>[...history].filter(p=>finite(closedAt(p))).sort((a,b)=>closedAt(b)-closedAt(a));
+const newest=(history=[])=>[...(Array.isArray(history)?history:[])].filter(p=>finite(closedAt(p))).sort((a,b)=>closedAt(b)-closedAt(a));
 
 export function evaluateAccountLossCircuit(history,now=Date.now()){
  const rows=newest(history),latest=rows[0],age=latest?now-closedAt(latest):Infinity;
