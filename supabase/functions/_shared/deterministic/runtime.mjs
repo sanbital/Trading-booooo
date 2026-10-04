@@ -1,4 +1,5 @@
 import {ENGINE,classifyMarket,revalidateEntry} from './market-state.mjs';
+import {refreshUniverse} from './universe.mjs';
 import {PROFILE} from './calibration.mjs';
 import {createFeatureCache,normalizeCapture,mergeSnapshot} from './features.mjs';
 import {SLOT_SIZING_CONTRACT} from '../leader-slot-sizing.mjs';
@@ -36,9 +37,11 @@ export async function currentMarket(db,symbol,{positionId=null,return24h=null,ra
  const input={facts:mergeSnapshot(f,capture,{return24h,rank}),capture,profile:PROFILE,at:Date.now(),price:capture.trajectory?.at(-1)?.mid,return24h};
  return quote?overlayExecutableBook(input,quote):input;
 }
-export async function requireEntryAuthority(db,s){
+export async function requireEntryAuthority(db,s,{refresh=false}={}){
  if(s?.features?.deterministic?.version!==ENGINE)throw Error('RETIRED_ENTRY_AUTHORITY');
- const r=await db.rpc('deterministic_entry_authority',{p_signal_id:s.id});if(r.error||r.data?.allowed!==true)throw Error(r.data?.reason??'ENTRY_AUTHORITY_UNAVAILABLE');return r.data;
+ const r=await db.rpc('deterministic_entry_authority',{p_signal_id:s.id});if(r.error)throw Object.assign(Error('ENTRY_AUTHORITY_UNAVAILABLE'),{authority:r.data});
+ if(refresh&&(r.data?.reason==='TOP20_REFRESH_DELAY'||r.data?.allowed===true&&Date.parse(r.data.next_refresh_at)-Date.now()<10000)){await refreshUniverse(db,{force:r.data?.allowed===true});const fresh=await db.rpc('deterministic_entry_authority',{p_signal_id:s.id});if(fresh.error||fresh.data?.allowed!==true)throw Object.assign(Error(fresh.data?.reason??'ENTRY_AUTHORITY_UNAVAILABLE'),{authority:fresh.data});return fresh.data;}
+ if(r.data?.allowed!==true)throw Object.assign(Error(r.data?.reason??'ENTRY_AUTHORITY_UNAVAILABLE'),{authority:r.data});return r.data;
 }
 export const isLeader20=s=>s?.features?.strategy===STRATEGY;
 export function detachAudit(db,row){
@@ -74,6 +77,9 @@ export async function observe(db,{diagnostic=false}={}){
    capture_end_ms:capture?.end_ms??null,technical:facts?.quality?.candles_complete===true,timing:timings});
  }
  return {ok:true,version:ENGINE,authority:ctl.enabled?'LIVE':'ENTRY_PAUSED',members:members.length,observed_at:new Date().toISOString(),results};
+}
+export function validatePreparedOrder(s,input,quote){
+ const current=overlayExecutableBook(input,quote,Date.now());return {...revalidateEntry(s.features.deterministic.decision,current),input:current};
 }
 export async function validateOrder(db,s,quote){
  const seed=s.features?.deterministic,input=await currentMarket(db,s.symbol,{quote,return24h:seed.return24h,rank:seed.rank});

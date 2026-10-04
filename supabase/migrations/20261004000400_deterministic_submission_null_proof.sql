@@ -1,7 +1,7 @@
 -- Exact additive repair. Preserve every BUY/state/capacity/fence deadline.
 do $$ declare definition text; begin
  definition:=pg_get_functiondef('public.deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure);
- if md5(definition)<>'83b00387f9bb1a711fdfde5a51c73566' then raise exception 'EXACT_SUBMIT_NULL_BASELINE_REQUIRED';end if;
+ if md5(definition) not in ('83b00387f9bb1a711fdfde5a51c73566','50bfd0b4738d9fc70e68f1758ee9f564') then raise exception 'EXACT_SUBMIT_NULL_BASELINE_REQUIRED';end if;
  if position('response_payload=response_payload||jsonb_build_object' in definition)=0 then raise exception 'EXACT_SUBMIT_NULL_BASELINE_REQUIRED';end if;
  execute replace(definition,'response_payload=response_payload||jsonb_build_object','response_payload=coalesce(response_payload,''{}''::jsonb)||jsonb_build_object');
 end $$;

@@ -19,7 +19,7 @@ test('IOC acknowledgement is followed by the same order query; terminal partial 
   {db}=mockDb(q=>q.rpc==='deterministic_begin_submit'?{data:{updated:true,order_id:'intent'}}:{data:intent}),h=await evaluateModule();h.ctx.requireEntryAuthority=async()=>{};h.ctx.verifyExecutionLease=async()=>{};
  const calls=[],raw={order:{exchange_order_id:'123',client_order_id:'test-id',market:'TESTUSDT',side:'BUY',reduce_only:false,status:'PARTIALLY_FILLED_CANCELED',raw_status:'EXPIRED',
   executed_volume:2,requested_volume:4.5,average_price:100,raw:{positionSide:'BOTH',status:'EXPIRED',executedQty:'2',origQty:'4.5',avgPrice:'100',updateTime:Date.now()}}};
- const gw=async cmd=>{calls.push(cmd);return raw;};const attempt={},r=await h.ctx.dispatchEntryIocAttempt(db,{id:'signal',symbol:'TESTUSDT'},gw,
+ const gw=async(cmd,timeout,options)=>{await options?.beforeTransport?.();calls.push(cmd);return raw;};const attempt={},r=await h.ctx.dispatchEntryIocAttempt(db,{id:'signal',symbol:'TESTUSDT'},gw,
   {attemptNo:1,quantity:4.5,limitPrice:100,step:.1,payload:{entry_latency:{}},authorize:async()=>({allowed:true}),attempt});
  assert.deepEqual(calls.map(x=>x.action),['create_order','get_order']);assert.equal(calls[1].exchange_order_id,'123');
  assert.equal(r.receipt.quantity,2);assert.ok(r.receipt.quantity<r.receipt.requested);assert.equal(attempt.dispatched,true);
@@ -49,16 +49,16 @@ test('old provider request modes cannot reach the executor run handler',async()=
 test('lost mandatory submit acknowledgement refuses before send and does not create ambiguous exposure',async()=>{
  const {db,writes}=mockDb(q=>q.rpc==='deterministic_begin_submit'?{error:{code:'CONNECTION_RESET'}}:{data:{id:'intent',requested_quantity:4.5,client_order_id:'test-id'}}),h=await evaluateModule();
  h.ctx.requireEntryAuthority=async()=>{};h.ctx.verifyExecutionLease=async()=>{};let sends=0;
- const r=await h.ctx.dispatchEntryIocAttempt(db,{id:'signal',symbol:'TESTUSDT'},async()=>{sends++},{attemptNo:1,quantity:4.5,limitPrice:100,step:.1,payload:{},authorize:async()=>({allowed:true})});
+ const r=await h.ctx.dispatchEntryIocAttempt(db,{id:'signal',symbol:'TESTUSDT'},async(cmd,timeout,options)=>{await options?.beforeTransport?.();sends++},{attemptNo:1,quantity:4.5,limitPrice:100,step:.1,payload:{},authorize:async()=>({allowed:true})});
  assert.equal(r.blocked,true);assert.equal(sends,0);assert.equal(writes.at(-1).patch.state,'REJECTED');assert.equal(writes.at(-1).patch.response_payload.submissionPhase,'PRE_SEND');
 });
 
 test('short account mode keeps analysis outside writer authority and fences the actual gateway command',async()=>{
  let lease=null,fence=0;const {db}=mockDb(q=>{
   if(q.rpc==='v17_acquire_analysis_lease')return {data:{owner:q.args.p_owner,fence:1}};
-  if(q.rpc==='v17_acquire_execution_lease'){if(lease)return {data:false};lease=q.args.p_owner;fence++;return {data:true};}
-  if(q.rpc==='v17_release_execution_lease'){lease=null;return {data:true};}
-  if(q.rpc==='v17_verify_execution_lease')return {data:lease===q.args.p_owner};
+  if(q.rpc==='v17_acquire_gateway_writer'){if(lease)return {data:null};lease=q.args.p_owner;fence++;return {data:{owner:lease,fence}};}
+  if(q.rpc==='v17_release_writer'){lease=null;return {data:true};}
+  if(q.rpc==='v17_verify_writer')return {data:lease===q.args.p_owner};
   if(q.rpc)return {data:true};
   return {data:q.table==='v17_execution_infrastructure_control'?{short_writer_enabled:true}:{owner:lease,fence}};
  }),commands=[],h=await evaluateModule(undefined,{env:{BINANCE_FUTURES_ORDER_GATEWAY_URL:'https://fixture.invalid',BINANCE_FUTURES_GATEWAY_SHARED_SECRET:'fixture'},extra:{fetch:async(url,init)=>{commands.push(JSON.parse(init.body));return new Response(JSON.stringify({ok:true,result:{ack:true}}));}}});

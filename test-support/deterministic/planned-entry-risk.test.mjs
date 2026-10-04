@@ -74,7 +74,7 @@ test('dispatch supplies its inserted identity before the mandatory submit fence 
  }),h=await evaluateModule();h.ctx.requireEntryAuthority=async()=>{};h.ctx.verifyExecutionLease=async()=>{};
  const raw={order:{exchange_order_id:'123',market:'TESTUSDT',side:'BUY',reduce_only:false,
   status:'EXPIRED',executed_volume:0,requested_volume:4.5,average_price:0,raw:{positionSide:'BOTH',status:'EXPIRED',origQty:'4.5',executedQty:'0'}}};
- await h.ctx.dispatchEntryIocAttempt(db,f.context.signal,async cmd=>{events.push(cmd.action);raw.order.client_order_id=cmd.order?.identifier??cmd.identifier;return raw;},
+ await h.ctx.dispatchEntryIocAttempt(db,f.context.signal,async(cmd,timeout,options)=>{await options?.beforeTransport?.();events.push(cmd.action);raw.order.client_order_id=cmd.order?.identifier??cmd.identifier;return raw;},
   {attemptNo:1,quantity:4.5,limitPrice:100,step:.1,payload:{deterministic:{version:ENGINE},entry_ioc:{attempt:1}},
    authorize:async context=>{events.push('fresh-authorize');assert.equal(context.order.id,'intent');assert.equal(context.signal,f.context.signal);
     const pair={...f.pair,orders:[structuredClone(context.order)]};

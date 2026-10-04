@@ -1,3 +1,13 @@
+## 2026-10-04 00:05 UTC — current boundary integrated, repair still pending
+
+Production changed during preparation: executor **v194** (bundle SHA256 `d9d96af7c877458ef571c496863e7c640ed7800428b470b01a1dd25472e495b1`) matches all 34 normalized reachable files of `bdd47f4a8eb12b383ee72e4ec85bf957a7c7612b`. Generator remains **v53**, pinned to `5ccc46fa3ccc88aaeddb41602eb401efbc6f48c4`. Paris gateway health reports `d3f9bffd00153af2fd9a5d9f4cc29f146a2b3f0c`, writer required, scheduler off; Tokyo remains the existing external clock. These concurrent changes were observed, not deployed by this repair runner.
+
+Actual migration rows are `20261003234245` (boundary SHA256 `a7fec82055b01a1d0dbe8f85d72040a9af58dc2d4858804164ea00dfe9e0dcf8`) and `20261003235907` (terminal cleanup SHA256 `8a233f32a8e57e5413cf0d13696297936895b5af722bda83f040d4620d96f66c`). Repository filenames now match actual migration versions; SQL bytes are unchanged. Actual `deterministic_begin_submit` MD5 is `50bfd0b4738d9fc70e68f1758ee9f564` and still writes NULL || proof. The reviewed additive `20261004000400` repair preserves all its deadlines and gates, producing MD5 `ed49383c21644eba06dca0a2e04354d0`. It has **not been applied yet**.
+
+Entries remain paused. OP incident `b28c890b-0191-49d9-a2aa-fe826cf6f708` generation190 remains open; its original order is REJECTED with signed never-placed evidence. Fresh DB shows zero OPEN positions and unresolved orders; this does not replace a new signed exchange reconciliation. `repair-submit-proof` now verifies the exact deployed v194/v53 bundles, gateway and applied migration hashes before DDL. It uses three independent signed observations across at least110 seconds while paused, then attests the already deployed source metadata and runs every resume gate. It performs no service deployment or venue mutation. Any concurrent version, postmaster or account truth change refuses. The superseded v192→v193 latency deploy must not be rerun over current v194.
+
+The 23:47–00:01 log sample measured executor v193 p50 **4680ms**, p95 **5755ms**, max6882ms (n116, HTTP errors0); v194 initial sample p50 **4527ms**, p95/max5715ms (n13, errors0). These paused/flat samples cannot establish filled-order latency or profitability. Before resume require normal protected repair success, full bundle/market/account/capture/authority verification, then normal trading-control resume and natural fill observation. Never create a validation order.
+
 # 2026-10-03 23:34 UTC: latency PR345 merged, submission proof defect reproduced, entries paused
 
 PR345 merged a8e8a7a434c6f3fa034466f12ce00c8f92841477 with seven required CI

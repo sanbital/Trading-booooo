@@ -101,7 +101,7 @@ async function verify({serviceSourceCommit=null,versions=null}={}){
  // Emit only the existing non-secret diagnostic projection before validation:
  // a failed gate needs the exact observed symbol and watermark, not a guess.
  note('PRE_ACTIVATION_EVIDENCE',{source_commit:serviceSourceCommit,release_runner_commit:sha,diagnostic_version:diagnostic.version,diagnostic_members:diagnostic.members,diagnostic_observed_at:diagnostic.observed_at,captures:detail.captures,btc_sensor:{status:detail.marketSensor.status,buckets:detail.marketSensor.buckets,contract:detail.marketSensor.contract,depth_semantics:detail.marketSensor.depth_semantics},provider_calls:detail.providerCalls,phases:diagnostic.results.map(r=>({symbol:r.symbol,phase:r.phase,setup:r.setup,trigger:r.trigger,confirmation:r.confirmation,decision:r.decision,technical:r.technical,capture_end_ms:r.capture_end_ms,reasons:r.reasons,timing:r.timing})),runtime_cycle:after.runtime.last_cycle_completed_at});
- if(['verify-resume','repair-entry','repair-latency'].includes(operation)){assertResume(validation);note('PRE_RESUME_GATES_PASSED',{source_commit:serviceSourceCommit,release_runner_commit:sha,generation:validation.control.generation,entry_paused:validation.settings.pause_new_entries});}
+ if(['verify-resume','repair-entry','repair-submit-proof','repair-latency'].includes(operation)){assertResume(validation);note('PRE_RESUME_GATES_PASSED',{source_commit:serviceSourceCommit,release_runner_commit:sha,generation:validation.control.generation,entry_paused:validation.settings.pause_new_entries});}
  else {assertActivation(validation);note('PRE_ACTIVATION_GATES_PASSED',{source_commit:sourceSha,release_runner_commit:sha});}return validation;
 }
 async function repairEntry(){
@@ -262,23 +262,30 @@ async function repairLatency(){
 }
 async function repairSubmitProof(){
  const repair=request.submit_proof_repair;
- if(!repair||repair.expected_submit_md5!=='83b00387f9bb1a711fdfde5a51c73566'||repair.generation!==190||
+ if(!repair||repair.expected_submit_md5!=='50bfd0b4738d9fc70e68f1758ee9f564'||repair.generation!==190||
  repair.incident_id!=='b28c890b-0191-49d9-a2aa-fe826cf6f708'||repair.order_id!=='ad65e821-1ce1-482e-b8fc-615ebb3d8c7f')throw Error('SUBMIT_PROOF_EXACT_INCIDENT_REQUIRED');
- const before=await value(stateSQL),ctl=await value('select to_jsonb(c) evidence from deterministic_control c where singleton');
- if(!ctl.enabled||ctl.generation!==2||ctl.source_commit!==sourceSha||!before.settings.pause_new_entries||
+ const before=await value(stateSQL),ctl=await value('select to_jsonb(c) evidence from deterministic_control c where singleton'),services=serviceIdentity(request,request.submission_boundary_identity?.source_commit),needsRecovery=before.runtime.circuit_open===true;
+ if(!ctl.enabled||ctl.generation!==2||![sourceSha,services.sourceCommit].includes(ctl.source_commit)||!before.settings.pause_new_entries||
  before.runtime.incident_id!==repair.incident_id||before.runtime.incident_generation!==repair.generation||
- before.runtime.incident_kind!=='KNOWN_ORDER_PENDING_RECONCILIATION'||!before.runtime.circuit_open||before.runtime.protection_health!=='FLAT'||before.orders.length||before.positions.some(p=>p.state==='OPEN')||
+ before.runtime.incident_kind!=='KNOWN_ORDER_PENDING_RECONCILIATION'||(!needsRecovery&&!before.runtime.incident_resolved_at)||before.runtime.protection_health!=='FLAT'||before.orders.length||before.positions.some(p=>p.state==='OPEN')||
  before.gpt.mode!=='OFF'||before.batch.enabled||before.settings.emergency_liquidation||before.settings.manual_intervention_required||before.settings.withdrawal_mode||before.settings.scalp_kill_switch||before.settings.pause_lock_reason)throw Error('SUBMIT_PROOF_PAUSED_FLAT_BASELINE_REQUIRED');
  await signedProof(before);const protectedBefore=JSON.stringify(protectedSettings(before));
  const listed=await functionList(),rows=listed.functions??listed;
- for(const [slug,version] of Object.entries(request.expected_staged_versions)){
+ for(const [slug,version] of Object.entries(services.versions)){
  const f=rows.find(x=>x.slug===slug);if(f?.version!==version||f.status!=='ACTIVE'||f.verify_jwt!==false)throw Error('SUBMIT_PROOF_SERVICE_CHANGED');
  const out=process.env.RUNNER_TEMP+'/submit-proof-'+slug;fs.mkdirSync(out,{recursive:true});run('supabase',['functions','download',slug,'--project-ref',project,'--use-api','--workdir',out]);
- evidence[slug]=JSON.parse(run('node',['ops/gpt-final-review/verify-bundle-parity.mjs',out,serviceSourceRoot(sourceSha),slug]));
+ evidence[slug]=JSON.parse(run('node',['ops/gpt-final-review/verify-bundle-parity.mjs',out,serviceSourceRoot(services.sources[slug]),slug]));
+ note('SUBMIT_PROOF_EXACT_SERVICE_PARITY',{slug,version,source_commit:services.sources[slug],file_count:evidence[slug].fileCount,bundle_digest:evidence[slug].bundleDigest});
  }
+ for(const [version,hash] of Object.entries(request.submission_boundary_identity.migrations)){
+  const applied=await value(`select encode(sha256(convert_to(statements[1],'UTF8')),'hex') evidence from supabase_migrations.schema_migrations where version='${version}'`);
+  if(applied!==hash)throw Error('SUBMIT_PROOF_BOUNDARY_MIGRATION_CHANGED');
+ }
+ const authDefinition=await value("select md5(pg_get_functiondef('public.v17_gateway_authorize_evidence(text,text,uuid,bigint,jsonb)'::regprocedure)) evidence");
+ if(authDefinition!==request.submission_boundary_identity.gateway_authorize_md5)throw Error('SUBMIT_PROOF_GATEWAY_AUTH_CHANGED');
  const identity=await value(`select jsonb_build_object('definition_md5',md5(pg_get_functiondef('public.deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure)),
- 'installed',(select count(*) from supabase_migrations.schema_migrations where version='20261003233500'),
- 'migration_statement',(select statements[1] from supabase_migrations.schema_migrations where version='20261003233500'),
+ 'installed',(select count(*) from supabase_migrations.schema_migrations where version='20261004000400'),
+ 'migration_statement',(select statements[1] from supabase_migrations.schema_migrations where version='20261004000400'),
  'recovery_md5',md5(pg_get_functiondef(to_regprocedure('public.deterministic_paused_never_placed_recovery(uuid,uuid,bigint,uuid,jsonb)'))),
  'order',(select jsonb_build_object('id',id,'symbol',symbol,'client_order_id',client_order_id,'state',state,'exchange_order_id',exchange_order_id,'proof',response_payload->'v18EntryNeverPlaced') from v11_long_regime_orders where id='${repair.order_id}')) evidence`);
  const baseline=identity.installed===0&&identity.definition_md5===repair.expected_submit_md5&&identity.recovery_md5==null;
@@ -287,17 +294,17 @@ async function repairSubmitProof(){
  const config=await venueConfig(),command={action:'v18_entry_never_placed_proof',market:identity.order.symbol,identifier:identity.order.client_order_id};
  const proof=await readVenue({...config,command});evidence.neverPlacedProof=proof;save();
  if(proof.proven!==true||proof.found!==false||proof.lookup_code!==-2013||proof.position_quantity!==0||proof.recent_trade_count!==0||!proof.position_read_ok||!proof.trade_read_ok)throw Error('SUBMIT_PROOF_SIGNED_NEVER_PLACED_REQUIRED');
- const migration=fs.readFileSync('supabase/migrations/20261003233500_deterministic_submission_null_proof.sql','utf8');
+ const migration=fs.readFileSync('supabase/migrations/20261004000400_deterministic_submission_null_proof.sql','utf8');
  if(createHash('sha256').update(migration).digest('hex')!==repair.migration_sha256)throw Error('SUBMIT_PROOF_MIGRATION_HASH_CHANGED');
- const path=process.env.RUNNER_TEMP+'/deterministic-submit-proof.sql';fs.writeFileSync(path,`set local lock_timeout='750ms';set local statement_timeout='20000ms';\n${migration}\ninsert into supabase_migrations.schema_migrations(version,name,statements) values('20261003233500','deterministic_submission_null_proof',ARRAY['reviewed sha256 ${repair.migration_sha256}']);`);
+ const path=process.env.RUNNER_TEMP+'/deterministic-submit-proof.sql';fs.writeFileSync(path,`set local lock_timeout='750ms';set local statement_timeout='20000ms';\n${migration}\ninsert into supabase_migrations.schema_migrations(version,name,statements) values('20261004000400','deterministic_submission_null_proof',ARRAY['reviewed sha256 ${repair.migration_sha256}']);`);
  const check=await value(stateSQL);if(check.postmaster!==before.postmaster||!check.settings.pause_new_entries||JSON.stringify(protectedSettings(check))!==protectedBefore||check.orders.length||check.runtime.incident_id!==repair.incident_id)throw Error('SUBMIT_PROOF_TRUTH_CHANGED');
  if(baseline)run('psql',[process.env.SUPABASE_DB_URL,'-X','--set=ON_ERROR_STOP=1','--single-transaction','-f',path]);
  const patched=await value("select jsonb_build_object('definition_md5',md5(pg_get_functiondef('public.deterministic_begin_submit(uuid,uuid,jsonb)'::regprocedure)),'recovery_md5',md5(pg_get_functiondef('public.deterministic_paused_never_placed_recovery(uuid,uuid,bigint,uuid,jsonb)'::regprocedure))) evidence");
  if(patched.definition_md5!==repair.expected_repaired_submit_md5||patched.recovery_md5!==repair.expected_paused_recovery_md5)throw Error('SUBMIT_PROOF_DEFINITION_UNPROVEN');
- note(baseline?'SUBMIT_NULL_PROOF_MIGRATION_APPLIED_ENTRIES_PAUSED':'SUBMIT_NULL_PROOF_MIGRATION_ALREADY_VERIFIED_ENTRIES_PAUSED',{version:'20261003233500',migration_sha256:repair.migration_sha256,definition_md5:patched.definition_md5,services_unchanged:true});
+ note(baseline?'SUBMIT_NULL_PROOF_MIGRATION_APPLIED_ENTRIES_PAUSED':'SUBMIT_NULL_PROOF_MIGRATION_ALREADY_VERIFIED_ENTRIES_PAUSED',{version:'20261004000400',migration_sha256:repair.migration_sha256,definition_md5:patched.definition_md5,services_unchanged:true});
  const literal=x=>"'"+JSON.stringify(x).replaceAll("'","''")+"'::jsonb";
- let resolved=false;
- for(let observation=0;observation<4;observation++){
+ let resolved=!needsRecovery;
+ for(let observation=0;needsRecovery&&observation<4;observation++){
   if(observation)await new Promise(r=>setTimeout(r,56000));
   const current=await value(stateSQL);
   if(current.postmaster!==before.postmaster||!current.settings.pause_new_entries||JSON.stringify(protectedSettings(current))!==protectedBefore||current.orders.length||current.positions.some(p=>p.state==='OPEN'))throw Error('PAUSED_RECOVERY_TRUTH_CHANGED');
@@ -315,7 +322,27 @@ async function repairSubmitProof(){
  }
  if(!resolved)throw Error('PAUSED_RECOVERY_OBSERVATIONS_INCOMPLETE');
  const after=await value(stateSQL);if(after.postmaster!==before.postmaster||!after.settings.pause_new_entries||JSON.stringify(protectedSettings(after))!==protectedBefore||after.runtime.circuit_open)throw Error('SUBMIT_PROOF_PROTECTED_STATE_CHANGED');
- await signedProof(after);note('SUBMIT_PROOF_REPAIR_COMPLETED_ENTRIES_PAUSED',{source_commit:sourceSha,release_runner_commit:sha,incident_id:repair.incident_id,generation:repair.generation,service_deployments:0,order_commands:0});
+ await signedProof(after);
+ // Attest already-deployed bytes only after clean signed truth. Never redeploy a
+ // concurrent version or advance entry generation to hide a boundary failure.
+ const finalList=await functionList(),finalRows=finalList.functions??finalList;
+ for(const [slug,version] of Object.entries(services.versions))if(finalRows.find(x=>x.slug===slug)?.version!==version)throw Error('SUBMIT_PROOF_CONCURRENT_SERVICE_DEPLOY');
+ await query(`begin;set local lock_timeout='750ms';
+ lock table deterministic_control,trading_settings,v11_long_regime_runtime,v18_ops_incidents,v11_long_regime_positions,v11_long_regime_orders in share row exclusive mode;
+ do $$ begin
+ if not exists(select 1 from deterministic_control where singleton and enabled and generation=2 and source_commit in ('${sourceSha}','${services.sourceCommit}'))
+ or not exists(select 1 from trading_settings where id=1 and pause_new_entries and not manual_intervention_required and not emergency_liquidation)
+ or not exists(select 1 from v11_long_regime_runtime where singleton and not circuit_open and protection_health='FLAT' and incident_id='${repair.incident_id}' and incident_generation=${repair.generation} and incident_resolved_at is not null)
+ or exists(select 1 from v18_ops_incidents where exchange='binance_futures' and account_scope='futures' and resolved_at is null and status in ('OPEN','VERIFYING'))
+ or exists(select 1 from v11_long_regime_positions where state='OPEN')
+ or exists(select 1 from v11_long_regime_orders where state in ('PLANNED','DISPATCHED','SUBMITTING','PARTIALLY_FILLED','UNKNOWN','RECONCILIATION_PENDING','RECONCILIATION_FAILED'))
+ or pg_postmaster_start_time()<>'${before.postmaster}'::timestamptz then raise exception 'SUBMIT_PROOF_SOURCE_CAS_FAILED';end if;
+ end $$;
+ update deterministic_control set source_commit='${services.sourceCommit}',updated_at=clock_timestamp() where singleton;
+ commit;`);
+ note('SUBMIT_PROOF_ALREADY_DEPLOYED_SOURCE_ATTESTED',{source_commit:services.sourceCommit,generation:2,expected_versions:services.versions,entries_paused:true,service_deployments:0});
+ await verify();
+ note('SUBMIT_PROOF_REPAIR_COMPLETED_ENTRIES_PAUSED',{source_commit:services.sourceCommit,release_runner_commit:sha,incident_id:repair.incident_id,generation:repair.generation,service_deployments:0,order_commands:0});
 }
 try{save();if(operation==='stage')await stage();else if(operation==='repair-capture')await repairCapture();else if(operation==='repair-entry')await repairEntry();else if(operation==='repair-submit-proof')await repairSubmitProof();else if(operation==='repair-latency')await repairLatency();else{const v=await verify();if(operation==='activate')await activate(v);}note('OPERATION_COMPLETED',{operation});}
 catch(e){evidence.error=/^[A-Z0-9_]+$/.test(e.message)?e.message:'RELEASE_FAILED';save();

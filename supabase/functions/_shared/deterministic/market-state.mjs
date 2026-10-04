@@ -145,18 +145,12 @@ export function evaluateEntryRescue(initial,input,latest,drift){
  return {allowed:true,reason:'STRONG_CONTINUATION_RESCUE',age_ms:age,strength_score:score,strengths};
 }
 export function revalidateEntry(initial,input){
- const rawLatest=classifyMarket(input),price=input.price??input.capture?.trajectory?.at(-1)?.mid,drift=price/initial.reference_price-1;
- let failure=rawLatest.decision!=='BUY'?'CURRENT_THESIS_INVALID':!finite(drift)?'PRICE_UNKNOWN':
+ const latest=classifyMarket(input),price=input.price??input.capture?.trajectory?.at(-1)?.mid,drift=price/initial.reference_price-1;
+ const failure=latest.decision!=='BUY'?(latest.gates.data===false||latest.gates.technical===false?'CURRENT_DATA_INCOMPLETE_OR_STALE':latest.gates.execution===false?'CURRENT_EXECUTION_COST_INVALID':latest.phase==='FAILED_BREAKOUT'?'CURRENT_BREAKOUT_FAILED':'CURRENT_MARKET_THESIS_CANCELLED'):!finite(drift)?'PRICE_UNKNOWN':
   drift>Math.min(input.profile.bands.entry_drift.block,initial.atr_normalized)?'LATE_EXECUTION':
   price<initial.trigger_reference&&initial.trigger==='BREAKOUT'?'FAILED_BREAKOUT':
-  rawLatest.capture_end_ms<initial.capture_end_ms?'CAPTURE_REGRESSED':null,rescue=null;
- if(failure==='CURRENT_THESIS_INVALID'){
-  rescue=evaluateEntryRescue(initial,input,rawLatest,drift);
-  if(rescue.allowed)failure=null;
- }
- const latest=rescue?.allowed?{...rawLatest,entry_rescue:rescue}:rawLatest;
- return {allowed:failure===null,action:failure?'CANCEL_ENTRY':rescue?.allowed?'EXECUTE_RESCUE':'EXECUTE',reason:failure,
-  decision_age_ms:input.at-initial.at,drift,latest,rescue};
+  latest.capture_end_ms<initial.capture_end_ms?'CAPTURE_REGRESSED':null;
+ return {allowed:failure===null,action:failure?'CANCEL_ENTRY':'EXECUTE',reason:failure,decision_age_ms:input.at-initial.at,drift,latest};
 }
 export function decidePosition({position,facts,capture,profile,at,bid,previous=null}){
  const entry=Number(position.entry_price),recordedPeak=Number(position.peak_price),peak=Math.max(Number.isFinite(recordedPeak)?recordedPeak:entry,bid,entry),mfe=peak/entry-1,pnl=bid/entry-1,drawdown=bid/peak-1;
