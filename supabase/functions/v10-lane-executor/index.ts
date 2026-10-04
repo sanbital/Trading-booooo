@@ -27,6 +27,7 @@ import {ENTRY_CONTROL_VERSION,CONTROL_SCOPE,evaluateEntryDecision,symbolRecovery
 import {IOC_RETRY_POLICY,planAggressiveIocRetry} from './entry-ioc-retry.mjs';
 import {RETRY_RECONCILIATION_VERSION,retryProofCandidate,parentTradeStart,proveUnplacedPartialRetry} from './entry-retry-reconciliation.mjs';
 import {entryCapacity,slotCostUsdt,ledgerEntry} from '../_shared/deterministic/capacity.mjs';
+import {LOSS_LOOP_POLICY,evaluateAccountLossCircuit,evaluateSymbolReentry} from '../_shared/deterministic/loss-loop-guard.mjs';
 const REVISION='V11-LONG-REGIME-1.0.1',PATCH=ENGINE,OBSERVER_REVISION='MARKET-REGIME-OBSERVER-v2-C01-HYSTERESIS-v1-FULLMARKET',PROTOCOL='8.0.0-P10-DONCHIAN-SLOW4R';
 const MARGIN=SLOT_SIZING_CONTRACT.targetMarginUsdt,LEV=SLOT_SIZING_CONTRACT.leverage,NOTIONAL=MARGIN*LEV;
 const SLOT_BOUNDS=slotSizingBounds(SLOT_SIZING_CONTRACT),MAX_ORDER_MARGIN_USDT=SLOT_BOUNDS.maxOrderMarginUsdt;
@@ -1138,14 +1139,31 @@ async function openBull(db,s,openPositions,manual=null,attempt={},managementFail
   await withAccountMutation(db,()=>db.from('leader20_entry_reservations').update({state:position?'FILLED':attempt.dispatched?'ORDER_PENDING':'RELEASED',updated_at:new Date().toISOString()}).eq('id',reservationId).in('state',['RESERVED','ORDER_PENDING']));
  }
 }
+async function readLossLoopHistory(db,now=Date.now()){
+ const since=new Date(now-LOSS_LOOP_POLICY.historyWindowMs).toISOString();
+ const r=await db.from('v11_long_regime_positions')
+  .select('symbol,state,closed_at,exit_reason,realized_pnl_usdt,entry_price,peak_price,metadata')
+  .eq('state','CLOSED').gte('closed_at',since).order('closed_at',{ascending:false}).limit(80);
+ if(r.error)throw Error('LOSS_LOOP_HISTORY_UNAVAILABLE');
+ return r.data??[];
+}
 async function runEntryQueue(db,pair,manual,blockedSymbols=new Set(),backlogComplete=true){
  const ctl=await control(db);if(!ctl.enabled)return {entered:false,reason:'DETERMINISTIC_ENTRY_PAUSED'};
  if(!backlogComplete)return {entered:false,reason:'CLOSED_PROTECTION_BACKLOG_INCOMPLETE'};
+ const lossHistory=await readLossLoopHistory(db),accountLossGuard=evaluateAccountLossCircuit(lossHistory);
+ if(!accountLossGuard.allowed)return {entered:false,reason:accountLossGuard.reason,lossLoopGuard:accountLossGuard};
  await withAccountMutation(db,()=>db.rpc('deterministic_recover_claims')).then(r=>{if(r.error)throw Error('CLAIM_RECOVERY_UNAVAILABLE');});
  const rows=await db.from('v11_long_regime_signals').select('*').eq('status','NEW').eq('features->deterministic->>version',ENGINE).order('created_at',{ascending:false}).limit(30);
  if(rows.error)throw Error('CANDIDATE_QUEUE_UNAVAILABLE');let cap=admissionCapacity(capacityInputs(pair,null),[]),ledger=[],entries=[];const seen=new Set();
  for(const row of rows.data??[]){
   if(cap.capacity<1||cycleBudgets.get(db).remaining()<24000)break;if(seen.has(row.symbol)||blockedSymbols.has(row.symbol))continue;seen.add(row.symbol);
+  const reentryGuard=evaluateSymbolReentry(row,lossHistory);
+  if(!reentryGuard.allowed){
+   const reason=reentryGuard.reason??'REENTRY_LOSS_LOOP_GUARD';
+   const retired=await withAccountMutation(db,()=>db.from('v11_long_regime_signals').update({status:'REJECTED',reject_reason:reason,features:{...row.features,lossLoopGuard:reentryGuard},updated_at:new Date().toISOString()}).eq('id',row.id).eq('status','NEW'));
+   if(retired.error)throw Error('REENTRY_GUARD_TERMINAL_WRITE');
+   entries.push({entered:false,symbol:row.symbol,reason,lossLoopGuard:reentryGuard});continue;
+  }
  const result=await (async()=>{
  const claimContext={analysis_owner:currentExecutionContext(db)?.owner,claimed_at_ms:Date.now()};
  const claim=await withAccountMutation(db,()=>db.from('v11_long_regime_signals').update({status:'CLAIMED',features:{...row.features,executionClaim:claimContext},updated_at:new Date().toISOString()}).eq('id',row.id).eq('status','NEW').select('*').maybeSingle());if(claim.error)throw Error('SIGNAL_CLAIM_FAILED');if(!claim.data)return null;
