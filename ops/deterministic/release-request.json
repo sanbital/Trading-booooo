@@ -186,6 +186,18 @@
     "target_margin_usdt": 150,
     "minimum_funded_slot_usdt": 152.121375
   },
+  "production_submission_proof_nullsafe_repair": {
+    "source_commit": "bdd7bd62140c9a09bd8f842a8e82d36906df026c",
+    "migration": "supabase/migrations/20261004101400_deterministic_submit_proof_nullsafe.sql",
+    "migration_sha256": "ed9f2e20aa538d157698b2d5904c09975833e1371548378001698f9dc1cf0f7b",
+    "applied_at_utc": "2026-10-04T10:15:18Z",
+    "deterministic_begin_submit_md5": "d099c89b0dce086c65c3534d81d28a1f",
+    "deterministic_tests_passed": 80,
+    "gateway_tests_passed": 159,
+    "strategy_contract_unchanged": true,
+    "writer_owner_generation_hash_and_freshness_guards_unchanged": true,
+    "automated_fill_verified": false
+  },
   "production_execution_quote_bridge_repair": {
     "gateway_source_commit": "c56db61e33f8498465bef399772ddbe970934b57",
     "gateway_workflow_run": 37194107916,

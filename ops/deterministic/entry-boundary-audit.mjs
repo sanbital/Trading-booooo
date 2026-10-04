@@ -12,6 +12,12 @@ const snap=await sql("select now() observed_at,public.v17_account_recovery_state
 const oldIds=[['ATHUSDT','tb-v11e-96aa6af9cdc5483e9b2fe4d0'],['WLDUSDT','tb-v11e-758216c88025465d9c4f56a1'],['BERAUSDT','tb-v11e-c5befe98981045b8897ba288'],['OPUSDT','tb-v11e-139458733f1b4b95ab5dbd0e']];
 const venue=[];for(const [market,identifier] of oldIds)venue.push({market,identifier,proof:await gateway({action:'v18_entry_never_placed_proof',market,identifier})});
 const [portfolio,openOrders]=await Promise.all([gateway({action:'p10_portfolio'}),gateway({action:'v18_open_orders'})]);
+// Confirm a recent bot entry against the venue by its recorded identity. This
+// read never submits/replays an intent or attributes an external manual fill.
+const [recentBotEntry]=await sql("select id,signal_id,position_id,symbol,state,client_order_id,exchange_order_id,created_at from public.v11_long_regime_orders where intent='OPEN_LONG' and exchange_order_id is not null and client_order_id like 'tb-%' and created_at>clock_timestamp()-interval '2 hours' order by created_at desc limit 1;");
+const botEntryVenue=recentBotEntry?await gateway({action:'get_order',market:recentBotEntry.symbol,identifier:recentBotEntry.client_order_id,exchange_order_id:recentBotEntry.exchange_order_id}):null;
+const botEntryProtection=recentBotEntry?.position_id?await sql(`select id,symbol,state,remaining_quantity,entry_price,hard_stop_price,metadata->'exitProtection' protection from public.v11_long_regime_positions where id='${recentBotEntry.position_id}'::uuid;`):[];
+console.log(JSON.stringify({bot_entry:recentBotEntry??null,bot_entry_venue:botEntryVenue?{http_status:botEntryVenue.http_status,ok:botEntryVenue.ok,exchange_order_id:botEntryVenue.result?.exchange_order_id,client_order_id:botEntryVenue.result?.client_order_id,status:botEntryVenue.result?.status,raw_status:botEntryVenue.result?.raw_status,executed_volume:botEntryVenue.result?.executed_volume,average_price:botEntryVenue.result?.average_price,trades_count:botEntryVenue.result?.trades?.length}:null,bot_entry_protection:botEntryProtection}));
 const gtcOrder=await gateway({action:'get_order',market:'GTCUSDT',identifier:'tb-manual-read-4634347872',exchange_order_id:'4634347872'});
 console.log(JSON.stringify({gtc_order_http_status:gtcOrder.http_status,gtc_order:gtcOrder.result,
  current_positions:(portfolio.result?.positions??[]).map(p=>({market:p.market,side:p.side,quantity:p.quantity,entry_price:p.average_entry_price??p.entry_price,leverage:p.leverage}))}));
@@ -40,7 +46,7 @@ const readinessResponse=await fetch(`https://${project}.supabase.co/functions/v1
  body:JSON.stringify({mode:'ops-readiness'}),signal:AbortSignal.timeout(25000)});
 const readiness={http_status:readinessResponse.status,...await readinessResponse.json()};
 console.log(JSON.stringify({readiness_http_status:readiness.http_status,readiness_ok:readiness.ok,readiness_error:readiness.error??null}));
-const report={observed_at:new Date().toISOString(),commit:process.env.GITHUB_SHA,snap,signals,orders,venue,portfolio,openOrders,readiness,watchReads,watchQuotes,gtcOrder};
+const report={observed_at:new Date().toISOString(),commit:process.env.GITHUB_SHA,snap,signals,orders,venue,portfolio,openOrders,readiness,watchReads,watchQuotes,gtcOrder,recentBotEntry,botEntryVenue,botEntryProtection};
 fs.writeFileSync(`${out}/audit.json`,JSON.stringify(report,null,2));
 console.log(JSON.stringify({observed_at:report.observed_at,orders:orders.length,signals:signals.length,venue:venue.map(x=>({symbol:x.market,http_status:x.proof.http_status,proven:x.proof.result?.proven})),portfolio_ok:portfolio.ok,open_orders_ok:openOrders.ok,
  readiness_ok:readiness.ok,native_stop_enabled:readiness.native_stop_enabled,hard_stop_pct:readiness.hard_stop_pct,maxSlots:readiness.maxSlots,targetMarginUsdt:readiness.sizingContract?.targetMarginUsdt,leverage:readiness.sizingContract?.leverage}));
