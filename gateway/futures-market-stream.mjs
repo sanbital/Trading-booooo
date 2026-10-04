@@ -3,7 +3,7 @@ import {Book,BOOK_STATE,normalizeSymbol,transportFresh} from './capture-book-cor
 const failure=reason=>Object.assign(Error(reason),{code:reason,status:503});
 
 export function createExecutionMarkets({fetchDepth,now=Date.now}={}){
- const states=new Map();let recoveries=0,quoteReads=0,activeRecoveries=0;const snapshotTimes=[],routineTimes=[];
+ const states=new Map();let recoveries=0,quoteReads=0,activeRecoveries=0,lastQuoteUnavailable=null;const snapshotTimes=[],routineTimes=[];
  function state(symbol){const s=states.get(symbol);if(!s)throw failure('EXECUTION_STREAM_NOT_WATCHED');return s;}
  return {
   setSymbols(symbols){const wanted=new Set(symbols.map(normalizeSymbol).filter(Boolean));
@@ -53,7 +53,11 @@ export function createExecutionMarkets({fetchDepth,now=Date.now}={}){
   quote(symbol){const s=state(symbol),t=now(),m=s.book.metrics(t);
    // Enforce the executor's existing 1.5s book boundary here too. Do not stamp an
    // old depth as a freshly received quote or fall back to REST on every candidate.
-   if(!m.book_complete||t-s.book.received>1500||t-s.book.at>1500)throw failure('EXECUTION_STREAM_BOOK_UNAVAILABLE');
+   if(!m.book_complete||t-s.book.received>1500||t-s.book.at>1500){
+    lastQuoteUnavailable={symbol,at_ms:t,reason:m.reason??'EXECUTION_FRESHNESS_BOUNDARY',state:s.book.state,
+     event_age_ms:t-s.book.at,received_age_ms:t-s.book.received,recovery_in_flight:!!s.flight};
+    throw failure('EXECUTION_STREAM_BOOK_UNAVAILABLE');
+   }
    const bids=[...s.book.bids].sort((a,b)=>b[0]-a[0]).map(([price,size])=>({price,size}));
    const asks=[...s.book.asks].sort((a,b)=>a[0]-b[0]).map(([price,size])=>({price,size}));
    quoteReads++;return {exchange:'binance_futures',market:symbol,current:m.mid,best_ask:m.best_ask,best_bid:m.best_bid,bids,asks,
@@ -62,9 +66,9 @@ export function createExecutionMarkets({fetchDepth,now=Date.now}={}){
      gateway_elapsed_ms:0,source:'BINANCE_DEPTH_STREAM',mode:'SEQUENCED_LOCAL_BOOK'}};
   },
   status(){return {watched:states.size,synced:[...states.values()].filter(s=>s.book.state===BOOK_STATE.SYNCED).length,
-   fresh:[...states.values()].filter(s=>s.book.ready&&now()-s.book.received<=1500&&now()-s.book.at<=1500).length,
+   fresh:[...states.values()].filter(s=>s.book.ready&&now()-s.book.received>=0&&now()-s.book.received<=1500&&now()-s.book.at>=0&&now()-s.book.at<=1500).length,
    mark_fresh:[...states.values()].filter(s=>s.mark&&now()-s.mark.received_at_ms<=2500).length,recoveries,quote_reads:quoteReads,
-   recovery_in_flight:activeRecoveries,recovery_requests_last_minute:snapshotTimes.filter(t=>t>now()-60000).length,
+   recovery_in_flight:activeRecoveries,recovery_requests_last_minute:snapshotTimes.filter(t=>t>now()-60000).length,last_quote_unavailable:lastQuoteUnavailable,
    unsynced:[...states.values()].filter(s=>!s.book.ready).map(s=>({symbol:s.symbol,state:s.book.state,generation:s.generation,
     reason:s.snapshotError??s.book.lastIncident?.reason,last_recovery_at_ms:s.lastRecoveryAt,retry_at_ms:s.retryAt,buffered_events:s.book.buffer.length})).slice(0,32)};},
  };
@@ -72,6 +76,7 @@ export function createExecutionMarkets({fetchDepth,now=Date.now}={}){
 
 export function startExecutionStreams({WebSocketClient,fetchDepth,watch,now=Date.now,watchIntervalMs=5000}){
  const markets=createExecutionMarkets({fetchDepth,now}),sockets=new Map(),timers=new Set();let stopped=false,nextId=1,watchFlight=null;
+ const quoteReadiness={waits:0,ready_after_wait:0,unavailable_after_wait:0};
  const watchState={last_attempt_at_ms:null,last_success_at_ms:null,error:null,failures:0};
  const schedule=(work,ms)=>{const timer=setTimeout(()=>{timers.delete(timer);if(!stopped)work();},ms);timers.add(timer);timer.unref?.();};
  const streams=(kind,symbols)=>symbols.flatMap(s=>kind==='book'?[s.toLowerCase()+'@depth@100ms']:
@@ -118,13 +123,26 @@ export function startExecutionStreams({WebSocketClient,fetchDepth,watch,now=Date
    // One bounded recovery shares the existing budget and sequence checks. A late
    // member is warmed before the executor starts spending its approval lifetime.
    if(sockets.get('book')?.ws.readyState===1)await markets.recover(symbol);
-   return markets.quote(symbol);
+   // A snapshot can finish before the next 100ms depth event bridges it. A
+   // slightly future event also remains unusable until its actual event time.
+   // Wait at most 250ms for the original quote gate; do not renew timestamps,
+   // issue another snapshot, or relax freshness/sequence/membership checks.
+   try{return markets.quote(symbol);}catch(pending){
+    if(pending.code!=='EXECUTION_STREAM_BOOK_UNAVAILABLE')throw pending;
+   }
+   quoteReadiness.waits++;
+   for(let attempt=0;attempt<10&&!stopped;attempt++){
+    await new Promise(resolve=>setTimeout(resolve,25));
+    try{const quote=markets.quote(symbol);quoteReadiness.ready_after_wait++;return quote;}
+    catch(pending){if(pending.code!=='EXECUTION_STREAM_BOOK_UNAVAILABLE')throw pending;}
+   }
+   quoteReadiness.unavailable_after_wait++;return markets.quote(symbol);
   }
  }
  refresh();const watchTimer=setInterval(refresh,watchIntervalMs),recoveryTimer=setInterval(()=>{
   if(sockets.get('book')?.ws.readyState===1)for(const symbol of markets.recoverySymbols())markets.recover(symbol);
  },1000);watchTimer.unref?.();recoveryTimer.unref?.();
- return {...markets,refresh,quoteReady,status(){return {...markets.status(),watched_symbols:markets.symbols(),watch:{...watchState,in_flight:watchFlight!==null},
+ return {...markets,refresh,quoteReady,status(){return {...markets.status(),quote_readiness:{...quoteReadiness},watched_symbols:markets.symbols(),watch:{...watchState,in_flight:watchFlight!==null},
   sockets:Object.fromEntries([...sockets].map(([kind,e])=>[kind,{connected:e.ws.readyState===1,subscriptions:e.subscribed.size,last_pong_at_ms:e.lastPong}]))};},stop(){stopped=true;clearInterval(watchTimer);clearInterval(recoveryTimer);for(const t of timers)clearTimeout(t);
   for(const e of sockets.values()){clearInterval(e.ping);e.ws.terminate();}sockets.clear();}};
 }

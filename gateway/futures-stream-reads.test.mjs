@@ -116,6 +116,41 @@ test('failed watch refresh is observable and does not erase an existing book; co
   await assert.rejects(stream.quoteReady('IOTAUSDT'),/NOT_WATCHED/);
  }finally{stream.stop();}
 });
+test('a completed snapshot waits for the real next depth bridge without a second REST read',async()=>{
+ MarketSocket.instances=[];let reads=0;
+ const stream=startExecutionStreams({WebSocketClient:MarketSocket,watch:async()=>['BTCUSDT'],
+  fetchDepth:async()=>{reads++;return {lastUpdateId:10,bids:[['99','10']],asks:[['101','10']]};}});
+ try{
+  await stream.refresh();for(const ws of MarketSocket.instances)ws.open();await stream.recover('BTCUSDT');
+  const ready=stream.quoteReady('BTCUSDT');
+  setTimeout(()=>stream.event({...event(),E:Date.now()}),40);
+  const quote=await ready;assert.equal(quote.raw.book_update_id,10);assert.equal(reads,1);
+  assert.equal(stream.status().quote_readiness.ready_after_wait,1);
+ }finally{stream.stop();}
+});
+test('bounded readiness rejects a missing or wrong bridge and never stamps a REST snapshot as fresh',async()=>{
+ MarketSocket.instances=[];let reads=0;
+ const stream=startExecutionStreams({WebSocketClient:MarketSocket,watch:async()=>['BTCUSDT'],
+  fetchDepth:async()=>{reads++;return {lastUpdateId:10,bids:[['99','10']],asks:[['101','10']]};}});
+ try{
+  await stream.refresh();for(const ws of MarketSocket.instances)ws.open();await stream.recover('BTCUSDT');
+  const ready=stream.quoteReady('BTCUSDT');
+  setTimeout(()=>stream.event({...event(12,11),U:12,E:Date.now()}),40);
+  await assert.rejects(ready,/BOOK_UNAVAILABLE/);assert.equal(reads,1);
+  assert.equal(stream.status().quote_readiness.unavailable_after_wait,1);
+ }finally{stream.stop();}
+});
+test('a slightly future depth event becomes eligible only at its unchanged exchange timestamp',async()=>{
+ MarketSocket.instances=[];let stream,eventAt;
+ stream=startExecutionStreams({WebSocketClient:MarketSocket,watch:async()=>['BTCUSDT'],
+  fetchDepth:async()=>{eventAt=Date.now()+80;stream.event({...event(),E:eventAt});return {lastUpdateId:10,bids:[['99','10']],asks:[['101','10']]};}});
+ try{
+  await stream.refresh();for(const ws of MarketSocket.instances)ws.open();await stream.recover('BTCUSDT');
+  assert.equal(stream.status().fresh,0);const quote=await stream.quoteReady('BTCUSDT');
+  assert.ok(Date.now()>=eventAt);assert.equal(quote.timing.book_captured_at_ms,eventAt);
+  assert.equal(stream.status().quote_readiness.ready_after_wait,1);
+ }finally{stream.stop();}
+});
 test('sequenced full book supplies unchanged fresh-book gate with zero per-quote REST; continuous Top20 member retains book',async()=>{
  const c=market();c.m.event(event());await c.m.recover('BTCUSDT');c.time(T+100);
  c.m.setSymbols(['BTCUSDT','ETHUSDT']);const q=c.m.quote('BTCUSDT');assert.equal(q.timing.received_at_ms,T);
