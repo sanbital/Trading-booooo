@@ -6,7 +6,7 @@
   },
   "gateway_commit": "1bd5e3bf76bfb55f9df749818e325f91b5c6ab02",
   "gateway_commits": {
-    "trading-booooo": "b8bdd912f63e038181dc6df6e9072491fd45d0c2",
+    "trading-booooo": "79165cd39f9c8a4dbfeef7bd24e6db27b859c441",
     "trading-booooo-sanbital-gateway": "1bd5e3bf76bfb55f9df749818e325f91b5c6ab02"
   },
   "runtime_region": "ap-northeast-1",
@@ -138,5 +138,26 @@
     "sql_definitions_unchanged": true,
     "gateway_workflow_run": 37171611614,
     "executor_deployed_at_kst": "2026-10-04T11:30:37.514000+09:00"
+  },
+  "production_execution_watch_repair": {
+    "gateway_source_commit": "79165cd39f9c8a4dbfeef7bd24e6db27b859c441",
+    "gateway_workflow_run": 37191412515,
+    "deployed_at_utc": "2026-10-04T09:13:46Z",
+    "verified_quote_symbols": [
+      "AKTUSDT",
+      "BEAMXUSDT",
+      "IOTAUSDT",
+      "NOMUSDT",
+      "AINUSDT"
+    ],
+    "verified_quote_http_status": 200,
+    "watched_books": 21,
+    "synced_books": 21,
+    "fresh_books": 21,
+    "deterministic_tests_passed": 71,
+    "gateway_tests_passed": 156,
+    "observed_executor_version": 201,
+    "strategy_contract_unchanged": true,
+    "sql_definitions_unchanged": true
   }
 }
