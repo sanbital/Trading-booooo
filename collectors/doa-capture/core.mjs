@@ -1,4 +1,4 @@
-export const VERSION = 'DOA-CAPTURE-10-BOOK-INTEGRITY';
+export const VERSION = 'DOA-CAPTURE-11-DERIVATIVES-SQUEEZE';
 export const BOOK_STATE=Object.freeze({SYNCED:'SYNCED',UNSYNCED:'UNSYNCED',RESYNCING:'RESYNCING'});
 export function symbolSingleFlight(target,work){
   if(target.resyncPromise)return target.resyncPromise;
@@ -27,7 +27,7 @@ export const iso = n => new Date(n).toISOString();
 export function streamURLs(symbol){
   const s=symbol.toLowerCase();
   return {book:'wss://fstream.binance.com/public/stream?streams='+s+'@depth@100ms',
-    market:'wss://fstream.binance.com/market/stream?streams='+['aggTrade','kline_1m','forceOrder'].map(x=>s+'@'+x).join('/')};
+    market:'wss://fstream.binance.com/market/stream?streams='+['aggTrade','kline_1m','forceOrder','markPrice@1s'].map(x=>s+'@'+x).join('/')};
 }
 export class Book {
   constructor() { this.reset(); }
