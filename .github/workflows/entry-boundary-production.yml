@@ -8,7 +8,7 @@ on:
       operation:
         type: choice
         required: true
-        options: [audit, deploy-gateway, stream-audit]
+        options: [audit, deploy-gateway, stream-audit, attribute-manual-gtc]
 permissions:
   contents: read
 concurrency:
@@ -55,11 +55,18 @@ jobs:
           if(!r.ok||h.deployment_commit!==process.env.GITHUB_SHA||h.build!=='2026-10-04-stream-reads-2'||h.order_writer.required!==true||h.scheduler_enabled!==false||!h.futures_rest_budget||h.futures_stream_reads?.enabled!==true)throw Error('PRODUCTION_GATEWAY_MISMATCH');
           JS
       - name: Audit exact orders and current venue evidence without orders
-        if: inputs.operation != 'stream-audit'
+        if: inputs.operation == 'audit' || inputs.operation == 'deploy-gateway'
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
         run: node ops/deterministic/entry-boundary-audit.mjs
+      - name: Attribute exact user-confirmed external GTC holding and safely resume
+        if: inputs.operation == 'attribute-manual-gtc'
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          LEARNING_ACCESS_TOKEN: ${{ secrets.LEARNING_ACCESS_TOKEN }}
+        run: node ops/execution-infra/attribute-manual-gtc.mjs
       - name: Observe production streams and request weight without trading mutations
         if: inputs.operation == 'stream-audit'
         env:

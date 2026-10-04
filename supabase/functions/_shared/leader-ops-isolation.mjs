@@ -124,14 +124,33 @@ export function recoveryEvidence({runtime,classification,orders,control,settings
     observation:classification.snapshot,checkedAt:now,
     positions:classification.safe.map(p=>({id:p.id,updated_at:p.updated_at,quantity:p.remaining_quantity}))};
 }
-export function confirmedLiveProtection(live,positions,now=Date.now()) {
+export function confirmedManualProtectiveOrder(order,manual,exchangePositions,ownedPositions=[]) {
+  const market=symbol(order),allows=manual.filter(a=>a.symbol===market);
+  const held=exchangePositions.filter(p=>symbol(p)===market);
+  if(allows.length!==1||held.length!==1||ownedPositions.some(p=>symbol(p)===market))return false;
+  const allowance=allows[0],holding=held[0],q=amount(holding);
+  if(!['LONG','SHORT'].includes(allowance.side)||side(holding)!==allowance.side||
+    !(q>0)||!Number.isFinite(q)||!Number.isFinite(allowance.maxQuantity)||q>allowance.maxQuantity)return false;
+  if(order.side!==(allowance.side==='LONG'?'SELL':'BUY')||
+    !['BOTH',allowance.side].includes(order.positionSide)||
+    !['STOP_MARKET','TAKE_PROFIT_MARKET'].includes(order.orderType??order.type)||
+    !['NEW','ACTIVE'].includes(order.algoStatus)||!order.algoId||!order.clientAlgoId||
+    /^tb-/.test(order.clientAlgoId)||!(Number(order.triggerPrice)>0))return false;
+  const closeAll=String(order.closePosition)==='true';
+  if(!closeAll&&String(order.reduceOnly)!=='true')return false;
+  const orderQuantity=Number(order.quantity);
+  return closeAll&&(order.quantity==null||orderQuantity===0)||
+    Number.isFinite(orderQuantity)&&orderQuantity>0&&orderQuantity<=q;
+}
+export function confirmedLiveProtection(live,positions,now=Date.now(),{manual=[],exchangePositions=[]}={}) {
   if(live?.complete!==true||!Array.isArray(live.orders)||live.orders.length||!Array.isArray(live.algos)||
     !Number.isFinite(live.observed_at_ms)||now-live.observed_at_ms>5000||live.observed_at_ms>now+1000)return false;
   const expected=positions.flatMap(p=>(p.metadata?.exitProtection?.orders??[])
     .filter(o=>!o.terminal&&o.status==='ACTIVE').map(o=>({p,o})));
-  if(live.algos.length!==expected.length)return false;
+  const botAlgos=live.algos.filter(o=>!confirmedManualProtectiveOrder(o,manual,exchangePositions,positions));
+  if(botAlgos.length!==expected.length)return false;
   const ids=new Set();
-  for(const ack of live.algos){
+  for(const ack of botAlgos){
     const e=expected.find(x=>x.o.clientId===ack.clientAlgoId),s=e?.o.spec?.params;
     if(!e||ids.has(ack.clientAlgoId)||ack.symbol!==e.p.symbol||ack.side!=='SELL'||ack.positionSide!=='BOTH'||
       String(ack.reduceOnly)!=='true'||(ack.orderType??ack.type)!=='STOP_MARKET'||

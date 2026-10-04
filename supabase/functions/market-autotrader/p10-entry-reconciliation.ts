@@ -328,10 +328,15 @@ export function p10PendingReservationExpired(input: P10PendingReservationClock):
 }
 
 export type FuturesExposure = { market: unknown; side: unknown; quantity: unknown };
+export type ManualFuturesLock = {
+  exchange: unknown; asset: unknown; state: unknown;
+  metadata?: { v17ManualPosition?: unknown; side?: unknown; maxQuantity?: unknown };
+};
 
 export function untrackedFuturesExposures(
   exchangePositions: readonly FuturesExposure[],
   trackedPositions: readonly FuturesExposure[],
+  manualLocks: readonly ManualFuturesLock[] = [],
 ): Array<{
   market: string;
   side: string;
@@ -354,6 +359,18 @@ export function untrackedFuturesExposures(
     .flatMap((row) => {
       if (!row.market || !(row.quantity > 0)) return [];
       const trackedQuantity = tracked.get(`${row.market}:${row.side}`) || 0;
+      // A confirmed manual allowance is separate from bot inventory. Never add it
+      // to tracked quantity: overlap, increased size and side changes stay unknown.
+      const manual = manualLocks.filter((lock) =>
+        lock.exchange === "binance_futures" && lock.state === "LOCKED" &&
+        lock.metadata?.v17ManualPosition === true &&
+        `${String(lock.asset || "").toUpperCase()}USDT` === row.market
+      );
+      const limit = Number(manual[0]?.metadata?.maxQuantity);
+      if (trackedQuantity === 0 && manual.length === 1 &&
+        String(manual[0].metadata?.side || "").toUpperCase() === row.side &&
+        ["LONG", "SHORT"].includes(row.side) && Number.isFinite(limit) && limit > 0 &&
+        row.quantity <= limit) return [];
       const unmatchedQuantity = Math.max(0, row.quantity - trackedQuantity);
       if (!(unmatchedQuantity > 1e-12)) return [];
       return [{

@@ -4742,7 +4742,7 @@ async function reconcilePersistedAssetLocks(
   cycleId: string,
 ) {
   const locks = await db(
-    `trading_asset_locks?exchange=eq.${exchange}&state=eq.LOCKED&select=asset,reason,clean_checks`,
+    `trading_asset_locks?exchange=eq.${exchange}&state=eq.LOCKED&select=asset,reason,clean_checks,metadata`,
   ).catch(() => []) as any[];
   if (!locks.length) return;
   const activeAssets = new Set(
@@ -4768,7 +4768,16 @@ async function reconcilePersistedAssetLocks(
   }
   for (const lock of locks) {
     const asset = String(lock.asset || "").toUpperCase();
-    if (orderAssets === null) {
+    const manualFutures = exchange === "binance_futures" &&
+      lock.metadata?.v17ManualPosition === true;
+    const manualHeld = manualFutures && Array.isArray(portfolio?.positions)
+      ? portfolio.positions.some((row: any) =>
+        String(row.market || row.symbol || "").toUpperCase() === `${asset}USDT` &&
+        (!Number.isFinite(Number(row.quantity)) || Math.abs(Number(row.quantity)) > 0)
+      )
+      : false;
+    if (orderAssets === null || manualFutures &&
+      (portfolio?.positions_complete !== true || !Array.isArray(portfolio.positions))) {
       await rpc("record_asset_lock_check_v610", {
         p_exchange: exchange,
         p_asset: asset,
@@ -4781,7 +4790,7 @@ async function reconcilePersistedAssetLocks(
     const accountQty = balances.get(asset) || 0;
     const residualQty = residual.get(asset) || 0;
     const quantityTolerance = Math.max(1e-12, residualQty * 0.005);
-    const clean = !activeAssets.has(asset) && !orderAssets.has(asset) &&
+    const clean = !manualHeld && !activeAssets.has(asset) && !orderAssets.has(asset) &&
       accountQty <= residualQty + quantityTolerance;
     await rpc("record_asset_lock_check_v610", {
       p_exchange: exchange,
@@ -10227,6 +10236,9 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
   ) as Array<
     { symbol: string; side: string; original_quantity: number; remaining_quantity: number }
   >;
+  const manualFuturesLocks = await db(
+    "trading_asset_locks?exchange=eq.binance_futures&state=eq.LOCKED&select=exchange,asset,state,metadata",
+  ) as any[];
   if (futuresObservationError) {
     const safetyReason = "P10_FUTURES_EXPOSURE_OBSERVATION_FAILED";
     const newlyLatched = await latchP10EntrySafety(safetyReason);
@@ -10278,6 +10290,7 @@ async function p10ScanCycle(cycleId: string, settings: TradingSettings & JsonRec
           ),
         })),
       ],
+      manualFuturesLocks,
     )
     : [];
   if (untrackedFutures.length) {
@@ -12920,6 +12933,12 @@ Deno.serve(async (request: Request) => {
       const v10ActiveAfterReconcile = await db(
         "v10_lane_positions?state=in.(OPEN,CLOSE_SUBMITTED,RECONCILIATION_FAILED)&select=symbol,side,quantity,remaining_quantity",
       ) as Array<{ symbol: string; side: string; quantity: number; remaining_quantity: number }>;
+      const v17ActiveAfterReconcile = await db(
+        "v11_long_regime_positions?state=neq.CLOSED&select=symbol,side,original_quantity,remaining_quantity",
+      ) as any[];
+      const manualFuturesLocks = await db(
+        "trading_asset_locks?exchange=eq.binance_futures&state=eq.LOCKED&select=exchange,asset,state,metadata",
+      ) as any[];
       const unresolvedEntryRows = activeAfterReconcile.filter((row) =>
         [
           "ENTRY_PENDING",
@@ -12959,7 +12978,13 @@ Deno.serve(async (request: Request) => {
               side: row.side,
               quantity: Math.max(finite(row.remaining_quantity), finite(row.quantity)),
             })),
+            ...v17ActiveAfterReconcile.map((row) => ({
+              market: row.symbol,
+              side: row.side,
+              quantity: Math.max(finite(row.remaining_quantity), finite(row.original_quantity)),
+            })),
           ],
+          manualFuturesLocks,
         );
         futuresQuantityMismatches = activeAfterReconcile
           .filter((row) => row.exchange === "binance_futures" && !row.is_paper)

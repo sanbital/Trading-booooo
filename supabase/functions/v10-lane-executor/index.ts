@@ -297,7 +297,7 @@ async function attemptOpsRecovery(db,pair,protectedIds) {
   // The gateway independently fetches all ordinary AND algo orders; ACTIVE owned stops
   // are allowed. Unknown entry/close/algo orders are not a clean recovery observation.
   const live=await recoveryGateway(db)({action:"v18_open_orders"},5000);
-  if(!confirmedLiveProtection(live,pair.positions))return {resolved:false,reason:"LIVE_ORDER_RISK"};
+  if(!confirmedLiveProtection(live,pair.positions,Date.now(),{manual:pair.manual,exchangePositions:pair.pf.positions}))return {resolved:false,reason:"LIVE_ORDER_RISK"};
   // Changes during the read invalidate the proof. SQL validates this exact DB manifest
   // and locks the same incident generation + operator rows before the CAS.
   const after=await readOpsPair(db,recoveryGateway(db)),again=await opsControls(db);
@@ -1267,7 +1267,7 @@ async function ensureShortWriterRecovery(db){
       {gateway:gw,recoveryOnly:true,evaluateQv3:false,exchangeQuantity:new Map([[p.symbol,Number(p.remaining_quantity)]]),manualSymbols:pair.manual.map(x=>x.symbol)});
   }
   pair=await readOpsPair(db,gw);const live=await gw({action:"v18_open_orders"},5000);
-  if(!pair.match.ok||riskOrders(pair.orders).length||!confirmedLiveProtection(live,pair.positions))return false;
+  if(!pair.match.ok||riskOrders(pair.orders).length||!confirmedLiveProtection(live,pair.positions,Date.now(),{manual:pair.manual,exchangePositions:pair.pf.positions}))return false;
   const recovered=await db.rpc("v17_record_account_recovery",{p_owner:leaseOwners.get(db),
     p_postmaster:readiness.data.postmaster_at,p_positions:pair.positions.map(p=>({id:p.id,updated_at:p.updated_at,quantity:p.remaining_quantity})),
     p_observed_at:new Date(live.observed_at_ms).toISOString()});
