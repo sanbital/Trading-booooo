@@ -21,15 +21,19 @@ export function overlayExecutableBook(input,quote,at=Date.now()){
   for(const [p,q] of xs){const used=Math.min(remaining,Number(p)*Number(q));quantity+=used/Number(p);remaining-=used;if(remaining<=1e-8)break;}
   return remaining<=1e-8&&quantity>0?notional/quantity:null;};
  const buy=walk(asks),sell=walk(bids),original=input.capture;
- if(original?.status!=='AVAILABLE'||!normalized.health.bookHealthy||!(bd>0&&ad>0&&buy>0&&sell>0))
-  return {...input,capture:{status:'UNAVAILABLE',reason:'CURRENT_EXECUTABLE_BOOK_INCOMPLETE'},at,price:ask};
+ const execution_book={original_capture_status:original?.status??null,original_capture_reason:original?.reason??null,
+  original_capture_end_ms:original?.end_ms??null,book_healthy:normalized.health.bookHealthy,book_reasons:normalized.health.reasons,
+  book_age_ms:normalized.health.bookAgeMs,required_notional:notional,bid_depth_25_usdt:bd,ask_depth_25_usdt:ad,buy_vwap:buy,sell_vwap:sell};
+ if(original?.status!=='AVAILABLE')return {...input,capture:original,execution_book,at,price:ask};
+ if(!normalized.health.bookHealthy)return {...input,capture:{status:'UNAVAILABLE',reason:'CURRENT_EXECUTABLE_BOOK_INCOMPLETE'},execution_book,at,price:ask};
+ if(!(bd>0&&ad>0&&buy>0&&sell>0))return {...input,capture:{status:'UNAVAILABLE',reason:'CURRENT_EXECUTABLE_DEPTH_INSUFFICIENT'},execution_book,at,price:ask};
  const point=original.trajectory.at(-1),spread=(ask-bid)/mid*10000,imbalance=(bd-ad)/(bd+ad),buyImpact=(buy/mid-1)*10000,sellImpact=(1-sell/mid)*10000;
  const horizons=Object.fromEntries(Object.entries(original.dynamics.horizons).map(([key,h])=>[key,{...h,spread,bid_depth:bd,ask_depth:ad,imbalance,
   buy_impact_450_bps:buyImpact,sell_impact_450_bps:sellImpact,
   bid_liquidity_change:(1+h.bid_liquidity_change)*bd/point.bid_depth_25_usdt-1,
   ask_liquidity_change:(1+h.ask_liquidity_change)*ad/point.ask_depth_25_usdt-1,
   imbalance_trend:imbalance-point.imbalance+h.imbalance_trend}]));
- return {...input,capture:{...original,dynamics:{...original.dynamics,horizons}},facts:{...input.facts,values:{...input.facts.values,spread_bps:spread,
+ return {...input,execution_book,capture:{...original,dynamics:{...original.dynamics,horizons}},facts:{...input.facts,values:{...input.facts.values,spread_bps:spread,
   book_imbalance_25bps:imbalance,expected_entry_vwap:buy,expected_exit_vwap:sell,expected_execution_cost_bps:buyImpact+sellImpact+10}},at,price:ask};
 }
 export async function currentMarket(db,symbol,{positionId=null,return24h=null,rank=null,quote=null}={}){

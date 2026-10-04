@@ -79,6 +79,15 @@ test('fresh book VWAP changes cost and insufficient depth fails closed without m
  assert.equal(JSON.stringify(input.capture),original);assert.ok(updated.facts.values.expected_entry_vwap>updated.facts.values.expected_exit_vwap);
  assert.equal(overlayExecutableBook(input,executableQuote({depth:100}),AT).capture.status,'UNAVAILABLE');
 });
+test('original capture failure and healthy but insufficient book depth retain distinct causes',()=>{
+ const input=scenario(),seed=classifyMarket(input),missing={...input,capture:{status:'UNAVAILABLE',reason:'MISSING_BUCKET_120S'}};
+ const preserved=overlayExecutableBook(missing,executableQuote(),AT);
+ assert.equal(preserved.capture.reason,'MISSING_BUCKET_120S');assert.equal(preserved.execution_book.book_healthy,true);
+ assert.equal(revalidateEntry(seed,preserved).reason,'CURRENT_DATA_INCOMPLETE_OR_STALE');
+ const shallow=overlayExecutableBook(input,executableQuote({depth:100}),AT),check=revalidateEntry(seed,shallow);
+ assert.equal(shallow.execution_book.book_healthy,true);assert.equal(shallow.execution_book.sell_vwap,null);
+ assert.equal(shallow.execution_book.required_notional,450);assert.equal(check.allowed,false);assert.equal(check.reason,'CURRENT_EXECUTION_COST_INVALID');
+});
 test('a retired signal can never become automatic BUY when its API authority disappears',async()=>{
  await assert.rejects(()=>requireEntryAuthority({rpc(){throw Error('must not read database');}},{features:{}}),/RETIRED_ENTRY_AUTHORITY/);
 });

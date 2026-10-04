@@ -146,7 +146,7 @@ export function evaluateEntryRescue(initial,input,latest,drift){
 }
 export function revalidateEntry(initial,input){
  const latest=classifyMarket(input),price=input.price??input.capture?.trajectory?.at(-1)?.mid,drift=price/initial.reference_price-1;
- const failure=latest.decision!=='BUY'?(latest.gates.data===false||latest.gates.technical===false?'CURRENT_DATA_INCOMPLETE_OR_STALE':latest.gates.execution===false?'CURRENT_EXECUTION_COST_INVALID':latest.phase==='FAILED_BREAKOUT'?'CURRENT_BREAKOUT_FAILED':'CURRENT_MARKET_THESIS_CANCELLED'):!finite(drift)?'PRICE_UNKNOWN':
+ const failure=latest.decision!=='BUY'?(input.capture?.reason==='CURRENT_EXECUTABLE_DEPTH_INSUFFICIENT'?'CURRENT_EXECUTION_COST_INVALID':latest.gates.data===false||latest.gates.technical===false?'CURRENT_DATA_INCOMPLETE_OR_STALE':latest.gates.execution===false?'CURRENT_EXECUTION_COST_INVALID':latest.phase==='FAILED_BREAKOUT'?'CURRENT_BREAKOUT_FAILED':'CURRENT_MARKET_THESIS_CANCELLED'):!finite(drift)?'PRICE_UNKNOWN':
   drift>Math.min(input.profile.bands.entry_drift.block,initial.atr_normalized)?'LATE_EXECUTION':
   price<initial.trigger_reference&&initial.trigger==='BREAKOUT'?'FAILED_BREAKOUT':
   latest.capture_end_ms<initial.capture_end_ms?'CAPTURE_REGRESSED':null;
