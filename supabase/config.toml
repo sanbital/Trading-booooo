@@ -28,3 +28,8 @@ verify_jwt = false
 
 [functions.deepseek-temporal-shadow]
 verify_jwt = false
+
+# Invoked only by pg_cron with a dedicated internal token. The function has no
+# Binance private endpoint or production order capability.
+[functions.shadow-trader-v1]
+verify_jwt = false
