@@ -1,0 +1,38 @@
+name: Shadow Trader V1
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/functions/shadow-trader-v1/**'
+      - 'supabase/migrations/*shadow_trader_v1*.sql'
+      - 'supabase/config.toml'
+      - '.github/workflows/shadow-trader-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/shadow-trader-v1/**'
+      - 'supabase/migrations/*shadow_trader_v1*.sql'
+      - 'supabase/config.toml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --prefix "$RUNNER_TEMP/pglite" --ignore-scripts --no-audit --no-fund @electric-sql/pglite@0.3.14
+      - name: Verify pure strategy and SQL lifecycle
+        env:
+          PGLITE_MODULE: ${{ runner.temp }}/pglite/node_modules/@electric-sql/pglite/dist/index.js
+        run: node --test supabase/functions/shadow-trader-v1/*.test.mjs
+      - name: Verify source boundaries
+        run: |
+          node --check supabase/functions/shadow-trader-v1/engine.mjs
+          node --check supabase/functions/shadow-trader-v1/handler.mjs
+          git diff --check HEAD^
