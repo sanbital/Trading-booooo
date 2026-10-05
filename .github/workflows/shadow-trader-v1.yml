@@ -35,4 +35,9 @@ jobs:
         run: |
           node --check supabase/functions/shadow-trader-v1/engine.mjs
           node --check supabase/functions/shadow-trader-v1/handler.mjs
-          git show --check --format= HEAD
+          git show --check --format= HEAD -- \
+            .github/workflows/shadow-trader-v1.yml \
+            supabase/config.toml \
+            supabase/functions/shadow-trader-v1 \
+            supabase/migrations/20261005122137_shadow_trader_v1.sql \
+            supabase/migrations/20261005122339_shadow_trader_v1_hardening.sql
