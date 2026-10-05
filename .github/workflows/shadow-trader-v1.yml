@@ -35,4 +35,4 @@ jobs:
         run: |
           node --check supabase/functions/shadow-trader-v1/engine.mjs
           node --check supabase/functions/shadow-trader-v1/handler.mjs
-          git diff --check HEAD^
+          git show --check --format= HEAD
