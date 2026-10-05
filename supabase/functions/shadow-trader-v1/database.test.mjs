@@ -35,9 +35,9 @@ async function setup(t) {
       mfe_pct numeric,mae_pct numeric,profit_giveback_pct numeric
     );
   `);
-  const migration = await readFile(new URL('../../migrations/20261005120324_shadow_trader_v1.sql', import.meta.url), 'utf8');
+  const migration = await readFile(new URL('../../migrations/20261005122137_shadow_trader_v1.sql', import.meta.url), 'utf8');
   await db.exec(migration);
-  const hardening = await readFile(new URL('../../migrations/20261005122247_shadow_trader_v1_hardening.sql', import.meta.url), 'utf8');
+  const hardening = await readFile(new URL('../../migrations/20261005122339_shadow_trader_v1_hardening.sql', import.meta.url), 'utf8');
   await db.exec(hardening);
   return db;
 }
