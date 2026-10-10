@@ -2503,18 +2503,23 @@ if (V17_SHADOW_ENABLED) {
   })();
 }
 
-async function handleCommand(command) {
-  const readOnlyActions = new Set([
+const READ_ONLY_ACTIONS = new Set([
     "portfolio", "v18_open_orders", "v18_entry_never_placed_proof",
     "futures_position_mode", "p10_portfolio", "accounts", "quote",
     "p10_quotes", "symbol_info", "get_order", "order_history",
     "trade_history", "open_orders", "fees", "v17_shadow_status",
-  ]);
-  if (!readOnlyActions.has(String(command?.action || ""))) {
+]);
+
+function assertReadOnlyAction(command) {
+  if (!READ_ONLY_ACTIONS.has(String(command?.action || ""))) {
     throw Object.assign(new Error("Trading Boo API is read only"), {
       status: 403, code: "AUTOMATED_TRADING_DISABLED",
     });
   }
+}
+
+async function handleCommand(command) {
+  assertReadOnlyAction(command);
   const exchange = validateExchange(command?.exchange);
   const futures = isBinanceFutures(exchange);
   if (command?.action === "v17_shadow_positions") {
@@ -2914,6 +2919,7 @@ export function createServer() {
         return sendJson(res, verification.status, { error: verification.error });
       }
       const command = raw ? JSON.parse(raw) : {};
+      assertReadOnlyAction(command);
       const result = await orderWriterFence.run(command, () => handleCommand(command));
       return sendJson(res, 200, { ok: true, result, version: VERSION });
     } catch (error) {
