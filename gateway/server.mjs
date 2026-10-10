@@ -72,9 +72,9 @@ const orderWriterFence = createOrderWriterFence({
   authorize: createGatewayAuthorizer(writerDatabase),
   acquireLegacy: createGatewayLegacyLease(writerDatabase),
 });
-const EXTERNAL_SCHEDULER_ENABLED = boolEnv("EXTERNAL_SCHEDULER_ENABLED", false);
+const EXTERNAL_SCHEDULER_ENABLED = false;
 let externalScheduler = null;
-const SCHEDULER_ENABLED = boolEnv("SCHEDULER_ENABLED", true);
+const SCHEDULER_ENABLED = false;
 const SCAN_INTERVAL_MS = integerEnv("AUTO_SCAN_INTERVAL_SECONDS", 12, 8, 3600) * 1000;
 const COLD_START_SCAN_MS = integerEnv("LOB_COLD_START_SCAN_SECONDS", 3, 1, 120) * 1000;
 const MONITOR_INTERVAL_MS = integerEnv("AUTO_MONITOR_INTERVAL_SECONDS", 2, 1, 300) * 1000;
@@ -2504,6 +2504,17 @@ if (V17_SHADOW_ENABLED) {
 }
 
 async function handleCommand(command) {
+  const readOnlyActions = new Set([
+    "portfolio", "v18_open_orders", "v18_entry_never_placed_proof",
+    "futures_position_mode", "p10_portfolio", "accounts", "quote",
+    "p10_quotes", "symbol_info", "get_order", "order_history",
+    "trade_history", "open_orders", "fees", "v17_shadow_status",
+  ]);
+  if (!readOnlyActions.has(String(command?.action || ""))) {
+    throw Object.assign(new Error("Trading Boo API is read only"), {
+      status: 403, code: "AUTOMATED_TRADING_DISABLED",
+    });
+  }
   const exchange = validateExchange(command?.exchange);
   const futures = isBinanceFutures(exchange);
   if (command?.action === "v17_shadow_positions") {
