@@ -17,8 +17,13 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$FLY_API_TOKEN"
-          for app in trading-booooo trading-booooo-sanbital-gateway "$BINANCE_APP" sanbital-doa-capture-20260925; do
+          for app in trading-booooo trading-booooo-sanbital-gateway "$BINANCE_APP"; do
             test -n "$app"
             flyctl scale count 0 --app "$app" --yes
             echo "Stopped $app"
+          done
+          capture_app=sanbital-doa-capture-20260925
+          flyctl machine list --app "$capture_app" --json | jq -r '.[].id' | while read -r machine_id; do
+            flyctl machine stop "$machine_id" --app "$capture_app"
+            echo "Stopped capture machine $machine_id"
           done
