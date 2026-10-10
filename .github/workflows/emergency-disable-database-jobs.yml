@@ -6,8 +6,19 @@ permissions:
 jobs:
   disable:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
+      - name: Restart unavailable Trading Boo project database
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          curl --fail-with-body --silent --show-error --max-time 30 \
+            -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/etaajwpernzrcdrifdnw/restart"
       - name: Disable every pg_cron job in the dedicated Trading Boo project
         shell: bash
         env:
@@ -16,6 +27,13 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$SUPABASE_DB_URL"
+          for attempt in $(seq 1 36); do
+            if psql -X -At -v ON_ERROR_STOP=1 "$SUPABASE_DB_URL" -c 'select 1' >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 36 ]; then echo "Database remained unavailable"; exit 1; fi
+            sleep 10
+          done
           psql -X -v ON_ERROR_STOP=1 "$SUPABASE_DB_URL" <<'SQL'
           begin;
           set local statement_timeout = '60s';
