@@ -1,0 +1,32 @@
+name: Emergency disable Trading Boo database jobs
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  disable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Disable every pg_cron job in the dedicated Trading Boo project
+        shell: bash
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PGCONNECT_TIMEOUT: '10'
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_DB_URL"
+          psql -X -v ON_ERROR_STOP=1 "$SUPABASE_DB_URL" <<'SQL'
+          begin;
+          set local statement_timeout = '60s';
+          do $block$
+          declare job record;
+          begin
+            for job in select jobid from cron.job where active loop
+              perform cron.alter_job(job.jobid, active := false);
+            end loop;
+          end
+          $block$;
+          commit;
+          select count(*) as active_jobs_remaining from cron.job where active;
+          SQL
